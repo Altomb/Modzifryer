@@ -29,7 +29,7 @@
 /* #undef CEGCC_COMPILE */
 
 /* NLS datadirname. */
-/* #define DATADIRNAME "" */
+#define DATADIRNAME "/data/data/com.ssb.droidsound"
 
 /* Enable debugging code */
 /* #undef DEBUG */
@@ -676,8 +676,13 @@
 /* Enable NextStep 3.x support */
 /* #undef NEXTSTEP_COMPILE */
 
-/* NLS local directory. */
-#define NLS_LOCALEDIR PREFIX"/"DATADIRNAME"/locale"
+/* NLS local directory.
+   Written as a single literal: the original
+       PREFIX"/"DATADIRNAME"/locale"
+   lexes as a string literal followed by an identifier (a user-defined-literal
+   suffix), which clang rejects in C++11 and later even though ENABLE_NLS is
+   never defined for Android. */
+#define NLS_LOCALEDIR DATADIRNAME"/locale"
 
 /* Enable SCO Openserver 5.x support */
 /* #undef OPENSERVER5_COMPILE */
@@ -715,7 +720,7 @@
 /* #undef POWERSDL_AMIGA_INLINE */
 
 /* Where do we want to install the executable? */
-/* #define PREFIX "/usr/local" */
+#define PREFIX ""
 
 /* Define as the return type of signal handlers (`int' or `void'). */
 #define RETSIGTYPE void
