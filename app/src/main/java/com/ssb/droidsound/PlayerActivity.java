@@ -30,13 +30,16 @@ import android.database.Cursor;
 import android.database.CursorWrapper;
 import android.media.AudioManager;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Message;
-import android.preference.PreferenceManager;
+import android.provider.Settings;
+import androidx.preference.PreferenceManager;
 import android.speech.tts.TextToSpeech;
-import android.support.v4.view.ViewPager;
+import androidx.core.content.ContextCompat;
+import androidx.viewpager.widget.ViewPager;
 import android.text.InputType;
 import android.util.SparseArray;
 import android.util.TypedValue;
@@ -75,11 +78,16 @@ import com.ssb.droidsound.utils.NativeZipFile;
 import com.ssb.droidsound.utils.Unzipper;
 import com.ssb.droidsound.utils.Utils;
 import com.viewpagerindicator.TitlePageIndicator;
+import com.ssb.droidsound.utils.Storage;
+import com.ssb.droidsound.utils.SystemBars;
 //import android.os.PowerManager;
 
 @SuppressWarnings("deprecation") // No fragment support 
 public class PlayerActivity extends Activity  {
 	private static final String TAG = "PlayerActivity";
+	private static final int REQUEST_POST_NOTIFICATIONS = 1;
+	private static final int REQUEST_FILESYSTEM_ACCESS = 2;
+	private static final int REQUEST_READ_EXTERNAL_STORAGE = 3;
 	public static final int VERSION = 18;
 
 	private static class Config {
@@ -242,8 +250,54 @@ public class PlayerActivity extends Activity  {
 			updateSearch();
 		}
 
+}
+
+	/**
+	 * Checks we may read shared external storage, and if not, drives the user
+	 * through the platform flow to grant it. Returns true when browsing may
+	 * proceed right away.
+	 */
+	private boolean ensureFilesystemAccess() {
+		if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+			if (Environment.isExternalStorageManager()) {
+				return true;
+			}
+			// Full filesystem browsing on API 30+ needs the special
+			// "All files access" grant, requested from system settings.
+			try {
+				Intent intent = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION);
+				intent.setData(Uri.parse("package:" + getPackageName()));
+				startActivity(intent);
+			} catch (Exception e) {
+				try {
+					startActivity(new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION));
+				} catch (Exception e2) {
+				}
+			}
+			return false;
+		}
+		if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+			return true;
+		}
+		if (checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE)
+				== android.content.pm.PackageManager.PERMISSION_GRANTED) {
+			return true;
+		}
+		requestPermissions(
+				new String [] { android.Manifest.permission.READ_EXTERNAL_STORAGE },
+				REQUEST_READ_EXTERNAL_STORAGE);
+		return false;
 	}
-	
+
+	@Override
+	public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+		super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+		if (requestCode == REQUEST_READ_EXTERNAL_STORAGE) {
+			// Nothing to act on; the user simply taps the Filesystem entry
+			// again once the permission is in place.
+		}
+	}
+
 	private void updateFileView() {
 		String p2 = playListView.getPath();
 		Cursor cursor = songDatabase.getFilesInPath(p2, state.sortOrderPlayList);
@@ -494,6 +548,17 @@ public class PlayerActivity extends Activity  {
 
 		DroidSoundPlugin.setContext(getApplicationContext());
 
+		// API 33+ requires an explicit runtime grant, otherwise the playback
+		// foreground notification is never shown.
+		if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+			if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
+					!= android.content.pm.PackageManager.PERMISSION_GRANTED) {
+				requestPermissions(
+						new String [] { android.Manifest.permission.POST_NOTIFICATIONS },
+						REQUEST_POST_NOTIFICATIONS);
+			}
+		}
+
 		Intent intent = getIntent();
 		Log.d(TAG, "Intent %s / %s", intent.getAction(), intent.getDataString());
 		if(Intent.ACTION_VIEW.equals(intent.getAction())) {
@@ -549,7 +614,7 @@ public class PlayerActivity extends Activity  {
 		final ThemeManager tm = ThemeManager.getInstance();
 		tm.init();
 
-		File themeDir = new File(Environment.getExternalStorageDirectory(), "droidsound/theme");
+		File themeDir = Storage.getDroidsoundSubDir("theme");
 		if(!themeDir.exists())
 			themeDir.mkdir();
 
@@ -559,6 +624,9 @@ public class PlayerActivity extends Activity  {
 		playScreen = new PlayScreen(state, player, this);
 
 		setContentView(R.layout.player);
+		// The title strip sits at the very top and the transport controls at the
+		// very bottom, so both are hidden behind the system bars without this.
+		SystemBars.padForSystemBars(findViewById(R.id.player_root));
 		setupNormal();
 		
 		playListView.init();
@@ -702,7 +770,11 @@ public class PlayerActivity extends Activity  {
 		filter.addAction("com.sddb.droidsound.SCAN_DONE");
 		filter.addAction("com.sddb.droidsound.SCAN_UPDATE");
 		// filter.addAction("com.sddb.droidsound.DOWNLOAD_DONE");
-		registerReceiver(state.receiver, filter);
+		// App-internal broadcasts from SongDatabase. ContextCompat picks the
+		// right overload: the exported/not-exported flag only exists from
+		// API 33, so the plain two-arg call is still required below that.
+		ContextCompat.registerReceiver(this, state.receiver, filter,
+				ContextCompat.RECEIVER_NOT_EXPORTED);
 
 
 		boolean created = false;
@@ -781,6 +853,11 @@ public class PlayerActivity extends Activity  {
 				if(fi != null) {
 
 					if(fi.type == SongDatabase.TYPE_DIR || fi.type == SongDatabase.TYPE_ARCHIVE || fi.type == SongDatabase.TYPE_PLIST) {
+						if((fi.type == SongDatabase.TYPE_ARCHIVE) && (fi.getPath().contains(FileSystemSource.NAME))) {
+							if(!ensureFilesystemAccess()) {
+								return;
+							}
+						}
 						setDirectory(fi.getPath(), plv);
 						plv.setScrollPosition(null);
 						if(plv == searchListView) {
@@ -921,7 +998,7 @@ public class PlayerActivity extends Activity  {
 		MediaSource ms = new MediaSource(this);
 		songDatabase.registerDataSource(MediaSource.NAME, ms);
 		
-		FileSystemSource.BasePath = "";
+		FileSystemSource.BasePath = Environment.getExternalStorageDirectory().getPath();
 		
 		FileSystemSource fss = new FileSystemSource();
 		songDatabase.registerDataSource(FileSystemSource.NAME, fss);
@@ -951,15 +1028,7 @@ public class PlayerActivity extends Activity  {
 		String md = prefs.getString("modsDir", null);
 		
 		if(md == null) {
-			File extFile = Environment.getExternalStorageDirectory();
-			String state = Environment.getExternalStorageState();
-
-			if(extFile != null) {
-				modsDir = new File(extFile, "MODS");
-			} else {
-				showDialog(R.string.sdcard_not_found);
-				dialogShowing = true;
-			}
+			modsDir = Storage.getDefaultModsDir();
 		} else {
 			modsDir = new File(md);
 		}
@@ -1658,28 +1727,25 @@ public class PlayerActivity extends Activity  {
 
 	@Override
 	public boolean onOptionsItemSelected(MenuItem item) {
+		// Resource ids are no longer compile-time constants (AGP 8+ generates
+		// non-final R fields), so these dispatches cannot use `case R.id.x:`.
 		int choice = item.getItemId();
-		switch(choice) {
-		case R.id.settings:
+		if(choice == R.id.settings) {
 			startActivity(new Intent(this, SettingsActivity.class));
-			break;
-		case R.id.quit:
+		} else if(choice == R.id.quit) {
 			player.stop();
 			NativeZipFile.closeCached();
 			songDatabase.quit();
 			songDatabase = null;
 			finish();
-			break;
-		case R.id.new_:
+		} else if(choice == R.id.new_) {
 			//if(songDatabase.getCurrentPlaylist() != null) {
 			//	currentPlaylistView.setEditMode(true);
 			//} else {
 				showDialog(R.string.new_);
 			//}
-			break;
-		case R.id.search:
+		} else if(choice == R.id.search) {
 			onSearchRequested();
-			break;
 		}
 		return true;
 	}
@@ -1689,18 +1755,14 @@ public class PlayerActivity extends Activity  {
 		super.onPrepareDialog(id, dialog);
 		AlertDialog ad;
 
-		switch(id) {
-		case R.string.do_del_dir:
-		case R.string.do_del_file:
-		case R.string.do_del_plist:
-		case R.string.do_remove_all:
+		if(id == R.string.do_del_dir || id == R.string.do_del_file
+				|| id == R.string.do_del_plist || id == R.string.do_remove_all) {
 			ad = ((AlertDialog) dialog);
 			if(state.operationSong == null) {
 				ad.cancel();
 				return;
 			}
-			break;
-		case R.string.add_to_plist:
+		} else if(id == R.string.add_to_plist) {
 			ad = ((AlertDialog) dialog);
 			if(state.songTitle == null || state.operationSong == null) {
 				ad.cancel();
@@ -1724,7 +1786,6 @@ public class PlayerActivity extends Activity  {
 			} else {
 				ad.setTitle(id);
 			}
-			break;
 		}
 	}
 
@@ -1752,16 +1813,13 @@ public class PlayerActivity extends Activity  {
 			return builder.create();
 		}
 
-		switch(id) {
-		case R.string.make_wav:
-		{
+		if(id == R.string.make_wav) {
 			if(ringToneCreator == null)
 				ringToneCreator = new RingToneCreator(this);
 			ringToneCreator.onCreateWav(new RingToneCreator.Callback() {
 				@Override
 				public void createWav(RingToneCreator.RingTone rt) {
-					File droidDir = new File(Environment.getExternalStorageDirectory(), "droidsound");
-					File file = new File(droidDir, "ringtones");
+					File file = Storage.getDroidsoundSubDir("ringtones");
 					file.mkdir();
 					file = new File(file, rt.name + ".wav"); 
 					int flags = 0;
@@ -1770,9 +1828,8 @@ public class PlayerActivity extends Activity  {
 					player.dumpWav(state.operationSong.getPath(), file.getPath(), currentRingTone.seconds * 1000, flags);
 				}
 			});
-			return ringToneCreator.createDialog();		
-		}	
-		case R.string.new_:
+			return ringToneCreator.createDialog();
+		} else if(id == R.string.new_) {
 			builder.setTitle(id);
 			builder.setSingleChoiceItems(R.array.new_opts, -1, new DialogInterface.OnClickListener() {
 				@Override
@@ -1798,8 +1855,7 @@ public class PlayerActivity extends Activity  {
 					dialog.cancel();
 				}
 			});
-			break;
-		case R.string.name_playlist:
+		} else if(id == R.string.name_playlist) {
 			final EditText input = new EditText(this);
 			input.setInputType(InputType.TYPE_CLASS_TEXT);
 			// builder.setTitle(id);
@@ -1823,8 +1879,7 @@ public class PlayerActivity extends Activity  {
 					dialog.cancel();
 				}
 			});
-			break;
-		case R.string.name_link:
+		} else if(id == R.string.name_link) {
 			final EditText input3 = new EditText(this);
 			input3.setHint("http://");
 			input3.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
@@ -1856,8 +1911,7 @@ public class PlayerActivity extends Activity  {
 					dialog.cancel();
 				}
 			});
-			break;
-		case R.string.name_folder:
+		} else if(id == R.string.name_folder) {
 			final EditText input2 = new EditText(this);
 			input2.setInputType(InputType.TYPE_CLASS_TEXT);
 			builder.setView(input2);
@@ -1879,9 +1933,7 @@ public class PlayerActivity extends Activity  {
 					dialog.cancel();
 				}
 			});
-			break;
-		case R.string.add_to_plist:
-
+		} else if(id == R.string.add_to_plist) {
 			builder.setTitle(id);
 
 			builder.setSingleChoiceItems(R.array.fav_opts, -1, new DialogInterface.OnClickListener() {
@@ -1953,15 +2005,13 @@ public class PlayerActivity extends Activity  {
 					checkProgressDialog();
 				}
 			});
-			break;
-		default:
+		} else {
 			builder.setMessage(id);
 			builder.setPositiveButton(android.R.string.ok, new DialogInterface.OnClickListener() {
 				public void onClick(DialogInterface dialog, int id) {
 					dialog.cancel();
 				}
 			});
-			break;
 		}
 
 		AlertDialog alert = builder.create();
@@ -2058,51 +2108,42 @@ public class PlayerActivity extends Activity  {
 		}
 
 
-		switch(item.getItemId()) {
-		case R.id.go_dir:
+		if(item.getItemId() == R.id.go_dir) {
 			setDirectory(state.operationSong.getParent(), playListView);
 			currentPlaylistView.setScrollPosition(file.getPath());
 			// flipper.setDisplayedChild(0);
 			updateFileView();
 			if(flipper != null)
 				flipper.flipTo(FILE_VIEW);
-			break;
-		case R.id.set_plist:
+		} else if(item.getItemId() == R.id.set_plist) {
 			songDatabase.setActivePlaylist(file);
-			break;
-		case R.id.add_to_plist:
+		} else if(item.getItemId() == R.id.add_to_plist) {
 			if(al != null) {
 				if(!currentPath.equals(al.getFile().getPath())) {
 					// al.add(file);
 					songDatabase.addToPlaylist(al, state.operationSong);
 				}
 			}
-			break;
 		// case R.id.favorite:
 		// songDatabase.addFavorite(file);
-		// break;
-		case R.id.cut:
+		//
+		} else if(item.getItemId() == R.id.cut) {
 			if(pl != null) {
 				//pl.remove(file);
 				pl.remove(info.position);
 				state.clipBoardFile = song;
 				setDirectory(null);
 			}
-			break;
-		case R.id.paste:
+		} else if(item.getItemId() == R.id.paste) {
 			if(pl != null && state.clipBoardFile != null) {
 				//pl.remove(file);
 				pl.insert(info.position, state.clipBoardFile);
 				state.clipBoardFile = null;
 				setDirectory(null);
 			}
-			break;
-			
-
-		case R.id.scan_dir:
+		} else if(item.getItemId() == R.id.scan_dir) {
 			songDatabase.scanDir(file.getPath());
-			break;
-		case R.id.del_dir:
+		} else if(item.getItemId() == R.id.del_dir) {
 			//operationFile = file;
 			state.operationSong = new SongFile(file);
 			runConfirmable(R.string.do_del_dir, new Runnable() {
@@ -2114,9 +2155,7 @@ public class PlayerActivity extends Activity  {
 					}
 				}
 			});
-			break;
-
-		case R.id.del_file:
+		} else if(item.getItemId() == R.id.del_file) {
 			//operationFile = file;
 			state.operationSong = new SongFile(file);
 			runConfirmable(R.string.do_del_file, new Runnable() {
@@ -2128,18 +2167,12 @@ public class PlayerActivity extends Activity  {
 					}
 				}
 			});
-			break;
-
-		case R.id.make_wav:
-			showDialog(R.string.make_wav);			
-			break;
-
-		case R.id.del_plist:
+		} else if(item.getItemId() == R.id.make_wav) {
+			showDialog(R.string.make_wav);
+		} else if(item.getItemId() == R.id.del_plist) {
 			//operationFile = file;
 			state.operationSong = new SongFile(file);
-			if(state.operationSong.getName().equals("Favorites.plist")) {
-				break;
-			}
+			if(!state.operationSong.getName().equals("Favorites.plist")) {
 			runConfirmable(R.string.do_del_plist, new Runnable() {
 				@Override
 				public void run() {
@@ -2154,9 +2187,8 @@ public class PlayerActivity extends Activity  {
 					}
 				}
 			});
-			break;
-
-		case R.id.remove_all:
+			}
+		} else if(item.getItemId() == R.id.remove_all) {
 			if(pl != null) {
 				//operationFile = pl.getFile();
 				state.operationSong = new SongFile(pl.getFile());
@@ -2169,9 +2201,7 @@ public class PlayerActivity extends Activity  {
 					}
 				});
 			}
-
-			break;
-		default:
+		} else {
 			return super.onContextItemSelected(item);
 		}
 		return true;
