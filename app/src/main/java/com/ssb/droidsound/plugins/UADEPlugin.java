@@ -16,6 +16,7 @@ import android.os.Environment;
 import com.ssb.droidsound.file.FileSource;
 import com.ssb.droidsound.utils.Log;
 import com.ssb.droidsound.utils.Unzipper;
+import com.ssb.droidsound.utils.Storage;
 
 public class UADEPlugin extends DroidSoundPlugin {
 	private static final String TAG = UADEPlugin.class.getSimpleName();
@@ -44,7 +45,7 @@ public class UADEPlugin extends DroidSoundPlugin {
 	
 	public static void extractFiles() {
 		
-		File droidDir = new File(Environment.getExternalStorageDirectory(), "droidsound");
+		File droidDir = Storage.getDroidsoundDir();
 		File eagleDir = new File(droidDir, "players");
 		File confFile = new File(droidDir, "eagleplayer.conf");
 		
@@ -92,7 +93,7 @@ public class UADEPlugin extends DroidSoundPlugin {
 				extensions.add("CUSTOM");
 				extensions.add("DM");
 				extensions.add("TFX");
-				File droidDir = new File(Environment.getExternalStorageDirectory(), "droidsound");
+				File droidDir = Storage.getDroidsoundDir();
 				File confFile = new File(droidDir, "eagleplayer.conf");
 
 				BufferedReader reader;
@@ -263,7 +264,7 @@ public class UADEPlugin extends DroidSoundPlugin {
 	private void init() {
 		if(!inited) {			
 			//Context context = getContext();
-			File droidDir = new File(Environment.getExternalStorageDirectory(), "droidsound");
+			File droidDir = Storage.getDroidsoundDir();
 
 			if(!libLoaded) {
 				Log.d(TAG, "Loading library");
