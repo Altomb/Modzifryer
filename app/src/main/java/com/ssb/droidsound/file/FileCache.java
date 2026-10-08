@@ -10,6 +10,7 @@ import java.util.List;
 import android.os.Environment;
 
 import com.ssb.droidsound.utils.Log;
+import com.ssb.droidsound.utils.Storage;
 
 
 public class FileCache {
@@ -53,7 +54,7 @@ public class FileCache {
 	public FileCache() {
 		fileList = new ArrayList<CacheEntry>();
 		newFiles = new ArrayList<File>();
-		exDir = Environment.getExternalStorageDirectory().getPath();
+		exDir = Storage.getWritableRoot().getPath();
 		cacheDir = new File(exDir + "/droidsound/fileCache");
 		Log.d(TAG, "Created dir '%s'", cacheDir.getPath());
 		cacheDir.mkdirs();
