@@ -9,6 +9,7 @@ import android.os.Environment;
 import com.ssb.droidsound.file.FileSource;
 import com.ssb.droidsound.utils.Log;
 import com.ssb.droidsound.utils.Unzipper;
+import com.ssb.droidsound.utils.Storage;
 
 public class VICEPlugin extends DroidSoundPlugin {
 	private static final String TAG = VICEPlugin.class.getSimpleName();
@@ -71,7 +72,7 @@ public class VICEPlugin extends DroidSoundPlugin {
 	public VICEPlugin() {
 		if (! initialized) {
 			/* Store basic, kernal & chargen for C++ code to find. */
-			dataDir = new File(Environment.getExternalStorageDirectory(), "droidsound");
+			dataDir = Storage.getDroidsoundDir();
 			if (!dataDir.exists()) {
 				dataDir.mkdir();
 			}
