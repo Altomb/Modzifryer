@@ -12,12 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
+#include $(call all-subdir-makefiles) 
 
 X := $(call my-dir)
 
-# Per-ABI tuning used to be set here; modern NDKs select this automatically.
-MY_CFLAGS :=
-MY_CPPFLAGS :=
+ifeq ($(TARGET_ARCH_ABI),armeabi-v7a) 
+MY_CFLAGS := -mtune=cortex-a8
+else
+MY_CFLAGS := 
+endif
 
 include $(X)/ModPlugin/Android.mk
 include $(X)/GMEPlugin/Android.mk
