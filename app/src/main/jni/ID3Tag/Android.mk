@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
- 
+
 LOCAL_PATH := $(call my-dir)
 
 include $(CLEAR_VARS)
@@ -24,7 +24,10 @@ LOCAL_SRC_FILES := ID3Tag.cpp
 MY_SOURCES := $(wildcard $(LOCAL_PATH)/libid3tag/*.c)
 LOCAL_SRC_FILES += $(MY_SOURCES:$(LOCAL_PATH)/%=%)
 
-LOCAL_CFLAGS := -I$(LOCAL_PATH)/libid3tag
+# libid3tag gates its <unistd.h> include (dup/dup2/close) on HAVE_UNISTD_H,
+# which its bundled config.h declares but which the old Ant build never put on
+# the command line.
+LOCAL_CFLAGS := -I$(LOCAL_PATH)/libid3tag -DHAVE_CONFIG_H $(MY_CFLAGS)
 LOCAL_LDLIBS := -llog -lz
 
 include $(BUILD_SHARED_LIBRARY)
