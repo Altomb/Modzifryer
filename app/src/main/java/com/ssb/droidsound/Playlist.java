@@ -188,10 +188,13 @@ public class Playlist {
 			
 			String path = currentSong.getPath();
 			int slash = path.lastIndexOf('/');
-			String fname = path.substring(slash+1);
-			if(slash < 0) path = "";
+			String fname = slash < 0 ? path : path.substring(slash+1);
+			// Strip the trailing component to get the directory. Must happen
+			// before path is reused below.
+			if(slash >= 0)
+				path = path.substring(0, slash);
 			else
-			path = path.substring(0, slash);
+				path = "";
 			
 			currentRow[COL_FILENAME] = fname;
 			currentRow[COL_PATH] = path;
@@ -373,11 +376,21 @@ public class Playlist {
 	
 	synchronized public void add(Cursor c, int subtune, String tuneTitle) {
 		
+		// getColumnIndex returns -1 for a column the cursor does not carry, and
+		// getString(-1) throws. Resolve the indices once, up front.
+		int titleColumn = c.getColumnIndex("TITLE");
+		int composerColumn = c.getColumnIndex("COMPOSER");
+		int filenameColumn = c.getColumnIndex("FILENAME");
+		int pathColumn = c.getColumnIndex("PATH");
+
+		if(filenameColumn < 0 || pathColumn < 0)
+			return;
+
 		while(true) {		
-			String title = c.getString(c.getColumnIndex("TITLE"));
-			String composer = c.getString(c.getColumnIndex("COMPOSER"));
-			String filename = c.getString(c.getColumnIndex("FILENAME"));
-			String path = c.getString(c.getColumnIndex("PATH"));
+			String title = titleColumn >= 0 ? c.getString(titleColumn) : null;
+			String composer = composerColumn >= 0 ? c.getString(composerColumn) : null;
+			String filename = c.getString(filenameColumn);
+			String path = c.getString(pathColumn);
 	
 			File f = new File(path, filename);
 			String line = f.getPath();
