@@ -11,7 +11,10 @@ import java.util.Map;
 import java.util.Map.Entry;
 
 import android.annotation.TargetApi;
+import android.Manifest;
 import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
 import android.content.BroadcastReceiver;
@@ -20,16 +23,19 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
+import android.content.pm.ServiceInfo;
 import android.media.AudioManager;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Message;
 import android.os.RemoteException;
 import android.speech.tts.TextToSpeech;
-import android.support.v4.app.NotificationCompat;
-import android.support.v4.app.NotificationCompat.Builder;
+import androidx.core.app.ActivityCompat;
+import androidx.core.app.NotificationCompat;
+import androidx.core.app.NotificationCompat.Builder;
 import android.telephony.PhoneStateListener;
 import android.telephony.TelephonyManager;
 
@@ -42,6 +48,7 @@ import com.ssb.droidsound.utils.Log;
 
 public class PlayerService extends Service implements PlayerInterface {
 	private static final String TAG = PlayerService.class.getSimpleName();
+	private static final String NOTIFICATION_CHANNEL_ID = "droidsound_playback";
 	
 	// Information
 	
@@ -539,8 +546,7 @@ public class PlayerService extends Service implements PlayerInterface {
 			}
 		};
 		
-		TelephonyManager tm = (TelephonyManager)getSystemService(TELEPHONY_SERVICE);
-		tm.listen(phoneStateListener, PhoneStateListener.LISTEN_CALL_STATE);
+		registerPhoneStateListener();
 
         mediaReceiver = new BroadcastReceiver() {        	
 			private long unpluggedTime = -1;
@@ -576,7 +582,13 @@ public class PlayerService extends Service implements PlayerInterface {
 				
 		IntentFilter filter = new IntentFilter();
 		filter.addAction(Intent.ACTION_HEADSET_PLUG);
-		registerReceiver(mediaReceiver, filter);
+		// API 33+ requires the exported/not-exported flag for context-registered
+		// receivers. This one listens for the system headset-plug broadcast.
+		if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+			registerReceiver(mediaReceiver, filter, Context.RECEIVER_EXPORTED);
+		} else {
+			registerReceiver(mediaReceiver, filter);
+		}
 
 		ComponentName myEventReceiver = new ComponentName(getPackageName(), RemoteControlReceiver.class.getName());
 		getPackageManager().setComponentEnabledSetting(myEventReceiver, PackageManager.COMPONENT_ENABLED_STATE_ENABLED, PackageManager.DONT_KILL_APP); 		
@@ -592,10 +604,30 @@ public class PlayerService extends Service implements PlayerInterface {
 		if(hasAudioFocus)
 			afWrapper = new AudioFocusWrapper(this, player);
 
-		notificationBuilder = new NotificationCompat.Builder(this).setSmallIcon(R.drawable.note36).setContentTitle("Droidsound").setContentText("");
+		// From API 26 a NotificationChannel must exist before the foreground
+		// notification is posted, otherwise it is silently dropped.
+		if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+			NotificationChannel channel = new NotificationChannel(
+					NOTIFICATION_CHANNEL_ID,
+					getString(R.string.notification),
+					NotificationManager.IMPORTANCE_LOW);
+			channel.setShowBadge(false);
+			channel.setSound(null, null);
+			((NotificationManager) getSystemService(NOTIFICATION_SERVICE))
+					.createNotificationChannel(channel);
+		}
 
-		Intent notificationIntent = new Intent(this, PlayerActivity.class);		
-		contentIntent = PendingIntent.getActivity(getApplicationContext(), 0, notificationIntent, 0);
+		notificationBuilder = new NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+				.setSmallIcon(R.drawable.note36)
+				.setContentTitle("Droidsound")
+				.setContentText("")
+				.setPriority(NotificationCompat.PRIORITY_LOW);
+
+		Intent notificationIntent = new Intent(this, PlayerActivity.class);
+		// API 31+ throws IllegalArgumentException for a PendingIntent with no
+		// mutability flag.
+		contentIntent = PendingIntent.getActivity(getApplicationContext(), 0, notificationIntent,
+				PendingIntent.FLAG_IMMUTABLE);
 		notificationBuilder.setContentIntent(contentIntent);		
 
 	    playerInterface = this;
@@ -606,7 +638,12 @@ public class PlayerService extends Service implements PlayerInterface {
 
 		notificationBuilder.setContentText(name);
 		Notification notification = notificationBuilder.build();		
-		startForeground(R.string.notification, notification);
+		if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+			startForeground(R.string.notification, notification,
+					ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK);
+		} else {
+			startForeground(R.string.notification, notification);
+		}
 
 		//AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
 		//am.requestAudioFocus(this, AudioManager.STREAM_MUSIC,  AudioManager.AUDIOFOCUS_GAIN);
@@ -634,8 +671,9 @@ public class PlayerService extends Service implements PlayerInterface {
 		if(intent != null) {
 			Log.d(TAG, "Intent: %s", intent.toString());
 			String action = intent.getAction();
-			if(action != null)
+			if(action != null) {
 				Log.d(TAG, "Intent %s / %s", action, intent.getDataString());
+			}
 	        if(intent.getAction() != null && intent.getAction().contentEquals(Intent.ACTION_VIEW)) {
 				Uri uri = intent.getData();
 				if(uri == null) {
@@ -682,6 +720,45 @@ public class PlayerService extends Service implements PlayerInterface {
         return Service.START_STICKY_COMPATIBILITY;
 	}
 	
+	/**
+	 * TelephonyManager.listen() throws SecurityException unless READ_PHONE_STATE
+	 * has been granted at runtime. That permission is only used to pause playback
+	 * during a call, and AudioFocusWrapper already handles that case via
+	 * AUDIOFOCUS_LOSS_TRANSIENT, so the listener is optional: when the permission
+	 * is absent the service must still come up.
+	 */
+	private void registerPhoneStateListener() {
+		if (ActivityCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE)
+				!= PackageManager.PERMISSION_GRANTED) {
+			Log.d(TAG, "READ_PHONE_STATE not granted; skipping call-state pause");
+			phoneStateListener = null;
+			return;
+		}
+
+		TelephonyManager tm = (TelephonyManager) getSystemService(TELEPHONY_SERVICE);
+		if (tm == null)
+			return;
+
+		try {
+			tm.listen(phoneStateListener, PhoneStateListener.LISTEN_CALL_STATE);
+		} catch (SecurityException e) {
+			// Permission revoked between the check and the call.
+			Log.d(TAG, "Could not register call-state listener: %s", e.getMessage());
+			phoneStateListener = null;
+		}
+	}
+
+	private void unregisterPhoneStateListener() {
+		TelephonyManager tm = (TelephonyManager) getSystemService(TELEPHONY_SERVICE);
+		if (tm == null)
+			return;
+		try {
+			tm.listen(phoneStateListener, 0);
+		} catch (SecurityException e) {
+			Log.d(TAG, "Could not unregister call-state listener: %s", e.getMessage());
+		}
+	}
+
 	@Override
 	public void onDestroy() {
 		
@@ -689,8 +766,9 @@ public class PlayerService extends Service implements PlayerInterface {
 		
 		//wakeLock.release();
 		
-		TelephonyManager tm = (TelephonyManager)getSystemService(TELEPHONY_SERVICE);
-		tm.listen(phoneStateListener, 0);
+		if(phoneStateListener != null) {
+			unregisterPhoneStateListener();
+		}
 		
 		unregisterReceiver(mediaReceiver);
 		
