@@ -9,6 +9,7 @@ import android.os.Environment;
 import com.ssb.droidsound.file.FileSource;
 import com.ssb.droidsound.utils.Log;
 import com.ssb.droidsound.utils.Unzipper;
+import com.ssb.droidsound.utils.Storage;
 
 public class SC68Plugin extends DroidSoundPlugin {
 	private static final String TAG = SC68Plugin.class.getSimpleName();
@@ -19,6 +20,7 @@ public class SC68Plugin extends DroidSoundPlugin {
 	private static Object lock = new Object();
 	private static boolean inited = false;
 	
+	private File droidDir;
 	private File sc68Dir;
 	private long pluginRef;
 
@@ -30,7 +32,7 @@ public class SC68Plugin extends DroidSoundPlugin {
 
 	public SC68Plugin() {
 
-		File droidDir = new File(Environment.getExternalStorageDirectory(), "droidsound");
+		droidDir = Storage.getDroidsoundDir();
 		sc68Dir = new File(droidDir, "sc68data");
 		synchronized (lock) {					
 			if(!sc68Dir.exists()) {
