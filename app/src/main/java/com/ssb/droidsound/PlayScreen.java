@@ -36,6 +36,7 @@ import com.ssb.droidsound.service.PlayerService;
 import com.ssb.droidsound.service.SongMeta;
 import com.ssb.droidsound.utils.Log;
 import com.ssb.droidsound.utils.Utils;
+import com.ssb.droidsound.utils.Storage;
 
 @SuppressLint("SetJavaScriptEnabled")
 public class PlayScreen {
@@ -135,10 +136,12 @@ public class PlayScreen {
 			listenMap = new HashMap<String, String>();
 		}
 		
+		@android.webkit.JavascriptInterface
 		public String getString(String what) {
 			return (String) map.get(what);
 		}
 		
+		@android.webkit.JavascriptInterface
 		public int listenTo(String what, String function) {
 			listenMap.put(what, function);
 			return 0;
@@ -213,9 +216,9 @@ public class PlayScreen {
 		defTemplate = Utils.readAsset(activity, "templates/def.html");
 		streamTemplate = Utils.readAsset(activity, "templates/stream.html");
 		
-		themeDir = new File(Environment.getExternalStorageDirectory(), "droidsound/theme");
+		themeDir = Storage.getDroidsoundSubDir("theme");
 		templateDir = new File(themeDir, "templates");
-		tempDir = new File(Environment.getExternalStorageDirectory(), "droidsound/tmp");
+		tempDir = Storage.getDroidsoundSubDir("tmp");
 		tempDir.mkdir();
 		//dataDir = new File(htmlDir, "data");
 		/*if(!htmlDir.exists())
