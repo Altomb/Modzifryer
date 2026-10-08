@@ -7,6 +7,8 @@ import android.app.Activity;
 import android.os.Bundle;
 import android.webkit.WebView;
 
+import com.ssb.droidsound.utils.SystemBars;
+
 public class HelpActivity extends Activity {
 
 	private WebView webView;
@@ -26,6 +28,7 @@ public class HelpActivity extends Activity {
 	        String html = new String(data, "ISO8859_1");
 	        webView.loadData(html, "text/html", "utf-8");
 	        setContentView(webView);
+	        SystemBars.padForSystemBars(webView);
 		} catch (IOException e) {
 			e.printStackTrace();
 		}        
