@@ -21,8 +21,7 @@ LOCAL_MODULE    := hively
 
 LOCAL_SRC_FILES :=  HivelyPlugin.cpp hvl_replay.c
 
-# MY_SOURCES := $(wildcard $(LOCAL_PATH)/gme/*.cpp)
-# LOCAL_SRC_FILES += $(MY_SOURCES:$(LOCAL_PATH)%=%)
+LOCAL_CPPFLAGS := $(MY_CPPFLAGS)
 LOCAL_LDLIBS := -llog
 # -lz
 
