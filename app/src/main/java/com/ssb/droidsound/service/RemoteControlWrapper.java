@@ -35,7 +35,8 @@ public class RemoteControlWrapper {
 
 		Intent mediaButtonIntent = new Intent(Intent.ACTION_MEDIA_BUTTON);
 		mediaButtonIntent.setComponent(myEventReceiver);
-		PendingIntent mediaPendingIntent = PendingIntent.getBroadcast(ctx.getApplicationContext(), 0, mediaButtonIntent, 0);
+		PendingIntent mediaPendingIntent = PendingIntent.getBroadcast(ctx.getApplicationContext(), 0,
+				mediaButtonIntent, PendingIntent.FLAG_IMMUTABLE);
 		
 		 myRemoteControlClient = new RemoteControlClient(mediaPendingIntent);
 		 
