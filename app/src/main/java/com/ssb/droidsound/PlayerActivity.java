@@ -921,6 +921,16 @@ public class PlayerActivity extends Activity  {
 			}
 		});
 
+		ImageButton settingsButton = (ImageButton) findViewById(R.id.settings_button);
+		if(settingsButton != null) {
+			settingsButton.setOnClickListener(new OnClickListener() {
+				@Override
+				public void onClick(View v) {
+					startActivity(new Intent(PlayerActivity.this, SettingsActivity.class));
+				}
+			});
+		}
+
 
 		player.setOption(PlayerService.OPTION_PLAYBACK_ORDER, state.shuffleSongs ? "R" : "S");
 
