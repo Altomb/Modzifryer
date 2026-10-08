@@ -25,6 +25,7 @@ import android.os.Environment;
 
 import com.ssb.droidsound.FileIdentifier;
 import com.ssb.droidsound.utils.Log;
+import com.ssb.droidsound.utils.Storage;
 
 public class HttpSongSource {
 	private static final String TAG = HttpSongSource.class.getSimpleName();
@@ -63,8 +64,7 @@ public class HttpSongSource {
 	    try {
 	        long httpCacheSize = 10 * 1024 * 1024; // 10 MiB
 	        
-	        File droidDir = new File(Environment.getExternalStorageDirectory(), "droidsound");
-			File tempDir = new File(droidDir, "httpCache");
+        File tempDir = Storage.getDroidsoundSubDir("httpCache");
 	        
 	        File httpCacheDir = new File(tempDir, "http");
 	        Class.forName("android.net.http.HttpResponseCache")
@@ -297,6 +297,7 @@ public class HttpSongSource {
 			 }
 			 
 			Intent intent = new Intent("com.sddb.droidsound.REQUERY");
+			intent.setPackage(context.getPackageName());
 			context.sendBroadcast(intent);
 		}
 		
