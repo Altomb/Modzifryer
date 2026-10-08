@@ -24,11 +24,8 @@ import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.os.Parcel;
 import android.os.Parcelable;
-import android.support.v4.view.MotionEventCompat;
-import android.support.v4.view.ViewConfigurationCompat;
-import android.support.v4.view.ViewPager;
+import androidx.viewpager.widget.ViewPager;
 import android.util.AttributeSet;
-import android.util.FloatMath;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
@@ -90,7 +87,7 @@ public class LinePageIndicator extends View implements PageIndicator {
         a.recycle();
 
         final ViewConfiguration configuration = ViewConfiguration.get(context);
-        mTouchSlop = ViewConfigurationCompat.getScaledPagingTouchSlop(configuration);
+        mTouchSlop = configuration.getScaledPagingTouchSlop();
     }
 
 
@@ -196,15 +193,15 @@ public class LinePageIndicator extends View implements PageIndicator {
 
         final int action = ev.getAction();
 
-        switch (action & MotionEventCompat.ACTION_MASK) {
+        switch (action & MotionEvent.ACTION_MASK) {
             case MotionEvent.ACTION_DOWN:
-                mActivePointerId = MotionEventCompat.getPointerId(ev, 0);
+                mActivePointerId = ev.getPointerId(0);
                 mLastMotionX = ev.getX();
                 break;
 
             case MotionEvent.ACTION_MOVE: {
-                final int activePointerIndex = MotionEventCompat.findPointerIndex(ev, mActivePointerId);
-                final float x = MotionEventCompat.getX(ev, activePointerIndex);
+                final int activePointerIndex = ev.findPointerIndex(mActivePointerId);
+                final float x = ev.getX(activePointerIndex);
                 final float deltaX = x - mLastMotionX;
 
                 if (!mIsDragging) {
@@ -245,22 +242,22 @@ public class LinePageIndicator extends View implements PageIndicator {
                 if (mViewPager.isFakeDragging()) mViewPager.endFakeDrag();
                 break;
 
-            case MotionEventCompat.ACTION_POINTER_DOWN: {
-                final int index = MotionEventCompat.getActionIndex(ev);
-                final float x = MotionEventCompat.getX(ev, index);
+            case MotionEvent.ACTION_POINTER_DOWN: {
+                final int index = ev.getActionIndex();
+                final float x = ev.getX(index);
                 mLastMotionX = x;
-                mActivePointerId = MotionEventCompat.getPointerId(ev, index);
+                mActivePointerId = ev.getPointerId(index);
                 break;
             }
 
-            case MotionEventCompat.ACTION_POINTER_UP:
-                final int pointerIndex = MotionEventCompat.getActionIndex(ev);
-                final int pointerId = MotionEventCompat.getPointerId(ev, pointerIndex);
+            case MotionEvent.ACTION_POINTER_UP:
+                final int pointerIndex = ev.getActionIndex();
+                final int pointerId = ev.getPointerId(pointerIndex);
                 if (pointerId == mActivePointerId) {
                     final int newPointerIndex = pointerIndex == 0 ? 1 : 0;
-                    mActivePointerId = MotionEventCompat.getPointerId(ev, newPointerIndex);
+                    mActivePointerId = ev.getPointerId(newPointerIndex);
                 }
-                mLastMotionX = MotionEventCompat.getX(ev, MotionEventCompat.findPointerIndex(ev, mActivePointerId));
+                mLastMotionX = ev.getX(ev.findPointerIndex(mActivePointerId));
                 break;
         }
 
@@ -363,7 +360,7 @@ public class LinePageIndicator extends View implements PageIndicator {
                 result = Math.min(result, specSize);
             }
         }
-        return (int)FloatMath.ceil(result);
+        return (int)Math.ceil(result);
     }
 
     /**
@@ -389,7 +386,7 @@ public class LinePageIndicator extends View implements PageIndicator {
                 result = Math.min(result, specSize);
             }
         }
-        return (int)FloatMath.ceil(result);
+        return (int)Math.ceil(result);
     }
 
     @Override
