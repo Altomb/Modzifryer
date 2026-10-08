@@ -19,7 +19,10 @@ public abstract class DroidSoundPlugin {
 	private static final String TAG = DroidSoundPlugin.class.getSimpleName();
 	
 	static {
-		System.loadLibrary("stlport_shared");
+		// stlport_shared was dropped from the NDK years ago. The plugin cores
+		// are now built with APP_STL := c++_static, so each one carries its own
+		// copy of the C++ runtime and there is nothing extra to preload here.
+		// Individual plugins still call System.loadLibrary for their own .so.
 	}
 	
 	public static final int INFO_TITLE = 0;
