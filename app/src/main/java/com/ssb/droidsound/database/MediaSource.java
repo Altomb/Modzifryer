@@ -88,10 +88,12 @@ public class MediaSource implements DataSource  {
 						String.format("%s = ?", MediaStore.Audio.Media.ALBUM_ID), new String[] { parts[0] }, 
 						sortOrder[sorting]);
 				
-				cursor.moveToFirst();
 				displayTitle = "";
-				if(cursor.getCount() > 0) {
-					displayTitle = cursor.getString(cursor.getColumnIndex(MediaStore.Audio.Media.ALBUM));
+				if(cursor.getCount() > 0 && cursor.moveToFirst()) {
+					int albumColumn = cursor.getColumnIndex(MediaStore.Audio.Media.ALBUM);
+					if(albumColumn >= 0) {
+						displayTitle = cursor.getString(albumColumn);
+					}
 				}
 				cursor.moveToPosition(-1);
 				
