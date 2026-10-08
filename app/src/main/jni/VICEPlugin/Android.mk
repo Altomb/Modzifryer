@@ -1,7 +1,6 @@
 LOCAL_PATH := $(call my-dir)
 include $(CLEAR_VARS)
 LOCAL_MODULE := resid
-LOCAL_ARM_MODE := arm
 LOCAL_CFLAGS := $(MY_CFLAGS) -ffast-math -fno-exceptions
 
 MY_RESID_FILES = $(wildcard $(LOCAL_PATH)/vice/resid/*.cpp)
@@ -10,7 +9,6 @@ include $(BUILD_STATIC_LIBRARY)
 
 include $(CLEAR_VARS)
 LOCAL_MODULE := vice
-LOCAL_ARM_MODE := arm
 #LOCAL_CFLAGS := -O3
 LOCAL_LDLIBS := -llog -lz
 LOCAL_SRC_FILES := \
