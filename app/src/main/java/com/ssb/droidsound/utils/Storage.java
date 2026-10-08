@@ -1,91 +1,85 @@
-package com.ssb.droidsound.service;
+package com.ssb.droidsound.utils;
 
-import android.annotation.TargetApi;
-import android.app.PendingIntent;
-import android.content.ComponentName;
+import java.io.File;
+
 import android.content.Context;
-import android.content.Intent;
-import android.media.AudioManager;
-import android.media.MediaMetadataRetriever;
-import android.media.RemoteControlClient;
-import android.media.RemoteControlClient.MetadataEditor;
+import android.os.Build;
+import android.os.Environment;
 
-@TargetApi(14)
-public class RemoteControlWrapper {
+/**
+ * Central placement of all storage locations. Needs a Context; call
+ * {@link #init(Context)} once from DroidSoundApplication.onCreate(),
+ * everything else derives paths from it.
+ */
+public class Storage {
 
-	
-	public static final int PLAYING = 0;
-	public static final int STOPPED = 1;
-	public static final int PAUSED = 2;
-	
-	private RemoteControlClient myRemoteControlClient;
-	
-	static {
-		try {
-			Class.forName("android.media.RemoteControlClient");
-		} catch (Exception ex) {
-			throw new RuntimeException(ex);
+	private static Context appContext;
+
+	private Storage() {
+	}
+
+	/** Called from {@code DroidSoundApplication.onCreate()}. */
+	public static void init(Context context) {
+		appContext = context.getApplicationContext();
+	}
+
+	private static Context requireContext() {
+		if (appContext == null) {
+			throw new IllegalStateException("Storage.init() was not called; DroidSoundApplication must run first");
 		}
-	}
-	 
-	public static void checkAvailable() {}
-
-	public RemoteControlWrapper(Context ctx, ComponentName myEventReceiver) {
-		
-
-		Intent mediaButtonIntent = new Intent(Intent.ACTION_MEDIA_BUTTON);
-		mediaButtonIntent.setComponent(myEventReceiver);
-		PendingIntent mediaPendingIntent = PendingIntent.getBroadcast(ctx.getApplicationContext(), 0,
-				mediaButtonIntent, PendingIntent.FLAG_IMMUTABLE);
-		
-		 myRemoteControlClient = new RemoteControlClient(mediaPendingIntent);
-		 
-		 AudioManager myAudioManager = (AudioManager) ctx.getSystemService(Context.AUDIO_SERVICE);
-		 
-		 myAudioManager.registerRemoteControlClient(myRemoteControlClient);
-		 myRemoteControlClient.setTransportControlFlags( 
-				     RemoteControlClient.FLAG_KEY_MEDIA_PLAY_PAUSE | 
-				     RemoteControlClient.FLAG_KEY_MEDIA_NEXT | 
-				     RemoteControlClient.FLAG_KEY_MEDIA_PREVIOUS /*| 
-				     RemoteControlClient.FLAG_KEY_MEDIA_FAST_FORWARD | 
-				     RemoteControlClient.FLAG_KEY_MEDIA_REWIND */); 
-
+		return appContext;
 	}
 
-	public void setMetaData(String author, String title) {
-		
-		MetadataEditor editor = myRemoteControlClient.editMetadata(true);
-		//editor.String(MediaMetadataRetriever.METADATA_KEY_HAS_AUDIO, "true");
-		if(author != null) {
-			editor.putString(MediaMetadataRetriever.METADATA_KEY_ARTIST,  author);
-			editor.putString(MediaMetadataRetriever.METADATA_KEY_ALBUMARTIST,  author);
+	/**
+	 * True when the app may write to the shared root of external storage. Only
+	 * the case before scoped storage, i.e. API 28 and below.
+	 */
+	public static boolean hasSharedStorageAccess() {
+		return Build.VERSION.SDK_INT < Build.VERSION_CODES.Q;
+	}
+
+	/**
+	 * Root the app may write to: shared external storage when allowed,
+	 * app-specific external storage otherwise.
+	 */
+	public static File getWritableRoot() {
+		if (hasSharedStorageAccess()) {
+			return Environment.getExternalStorageDirectory();
 		}
-		editor.putString(MediaMetadataRetriever.METADATA_KEY_COMPOSER,  (String) "composer");
-		if(title != null)
-			editor.putString(MediaMetadataRetriever.METADATA_KEY_TITLE, (String) title);
-		else
-			editor.putString(MediaMetadataRetriever.METADATA_KEY_TITLE, "UNKNOWN");
-		editor.apply();
-		myRemoteControlClient.setPlaybackState(RemoteControlClient.PLAYSTATE_PLAYING);
+		File dir = requireContext().getExternalFilesDir(null);
+		if (dir == null) {
+			// No external volume mounted. Internal storage always works.
+			return requireContext().getFilesDir();
+		}
+		return dir;
 	}
 
-	public void setState(int state) {
-		int s = -1;
-		switch(state) {
-		case PLAYING:
-			s = RemoteControlClient.PLAYSTATE_PLAYING;
-			break;
-		case PAUSED:
-			s = RemoteControlClient.PLAYSTATE_PAUSED;
-			break;
-		case STOPPED:
-			s = RemoteControlClient.PLAYSTATE_STOPPED;
-			break;
-		}
-		if(s >= 0)
-			myRemoteControlClient.setPlaybackState(s);
-			
-		
+	/**
+	 * The {@code droidsound} working directory: song database, playlists,
+	 * themes, plugin data, caches.
+	 */
+	public static File getDroidsoundDir() {
+		return ensure(new File(getWritableRoot(), "droidsound"));
 	}
-	
+
+	/**
+	 * Default location searched for chip music, {@code MODS} under the
+	 * writable root. PlayerActivity lets the user override this via prefs.
+	 */
+	public static File getDefaultModsDir() {
+		return ensure(new File(getWritableRoot(), "MODS"));
+	}
+
+	/** A named sub-directory of the droidsound working directory. */
+	public static File getDroidsoundSubDir(String name) {
+		return ensure(new File(getDroidsoundDir(), name));
+	}
+
+	/** Creates the directory if needed and returns it. */
+	public static File ensure(File dir) {
+		if (!dir.exists())
+			dir.mkdirs();
+		return dir;
+	}
+
 }
