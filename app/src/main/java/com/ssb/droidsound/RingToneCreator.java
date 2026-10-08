@@ -20,6 +20,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import com.ssb.droidsound.utils.Log;
+import com.ssb.droidsound.utils.Storage;
 
 public class RingToneCreator {
 	private static final String TAG = RingToneCreator.class.getSimpleName();
@@ -118,8 +119,7 @@ public class RingToneCreator {
 		builder.setPositiveButton(android.R.string.ok, new DialogInterface.OnClickListener() {
 			@Override
 			public void onClick(DialogInterface dialog, int which) {
-				File droidDir = new File(Environment.getExternalStorageDirectory(), "droidsound");
-				File file = new File(droidDir, "ringtones");
+				File file = Storage.getDroidsoundSubDir("ringtones");
 				file.mkdir();
 				int tl = toneLength;
 				if(tl == 3) tl = 6;
