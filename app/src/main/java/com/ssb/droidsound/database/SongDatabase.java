@@ -44,6 +44,7 @@ import com.ssb.droidsound.file.FileSource;
 import com.ssb.droidsound.utils.Archive;
 import com.ssb.droidsound.utils.Log;
 import com.ssb.droidsound.utils.Unpacker;
+import com.ssb.droidsound.utils.Storage;
 
 /**
  * 
@@ -138,10 +139,12 @@ public class SongDatabase implements Runnable {
 				
 				if(percent >= 0) {
 					intent = new Intent("com.sddb.droidsound.SCAN_UPDATE");
+					intent.setPackage(context.getPackageName());
 					intent.putExtra("PATH", path);
 					intent.putExtra("PERCENT", percent);
 				} else {
 					intent = new Intent("com.sddb.droidsound.SCAN_DONE");
+					intent.setPackage(context.getPackageName());
 				}
 				context.sendBroadcast(intent);				
 			}
@@ -221,6 +224,7 @@ public class SongDatabase implements Runnable {
 		doOpen(false);
 
 		Intent intent = new Intent("com.sddb.droidsound.OPEN_DONE");
+		intent.setPackage(context.getPackageName());
 		context.sendBroadcast(intent);
 		
 		//UADEPlugin.extractFiles();
@@ -233,7 +237,7 @@ public class SongDatabase implements Runnable {
 	private void doOpen(boolean drop) {	
 
 		if(dbFile == null) {
-			File droidDir = new File(Environment.getExternalStorageDirectory(), "droidsound");
+			File droidDir = Storage.getDroidsoundDir();
 	
 			droidDir.mkdir();
 			
@@ -1396,7 +1400,8 @@ public class SongDatabase implements Runnable {
 			//Log.d(TAG, "Got %d results from query", cursor.getCount());
 			
 			if(cursor != null && cursor.moveToFirst()) {
-				int type = cursor.getInt(cursor.getColumnIndex("TYPE"));
+				int typeColumn = cursor.getColumnIndex("TYPE");
+				int type = typeColumn >= 0 ? cursor.getInt(typeColumn) : SongDatabase.TYPE_FILE;
 				if(type == SongDatabase.TYPE_DIR) {
 					cursor.close();
 					cursor = rdb.query("FILES", new String[] { "_id", "TITLE", "COMPOSER", "FILENAME", "PATH", "TYPE" }, "PATH=?", new String[] { songFile.getPath() }, null, null, "TITLE");
