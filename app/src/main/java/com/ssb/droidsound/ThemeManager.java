@@ -13,6 +13,7 @@ import java.util.Map.Entry;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.ColorDrawable;
@@ -249,7 +250,7 @@ public class ThemeManager {
 		public Drawable getBackgroundDrawable() {
 			Drawable drawable = getDrawable();			
 			StateListDrawable sld = new StateListDrawable();			
-			ColorDrawable t = new ColorDrawable(android.R.color.transparent);			
+			ColorDrawable t = new ColorDrawable(Color.TRANSPARENT);			
 			sld.addState(new int [] { android.R.attr.state_focused }, t );
 			sld.addState(new int [] { android.R.attr.state_pressed }, t);
 			sld.addState(StateSet.WILD_CARD, drawable);
