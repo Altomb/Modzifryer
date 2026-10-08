@@ -131,6 +131,8 @@ public class SettingsActivity extends FragmentActivity {
 		public void onCreatePreferences(Bundle savedInstanceState, String rootKey) {
 			setPreferencesFromResource(R.xml.preferences, rootKey);
 
+			prefs = PreferenceManager.getDefaultSharedPreferences(requireContext());
+
 			String s = prefs.getString("SidPlugin.sidengine", null);
 			Preference p = findPreference("SidPlugin.resampling");
 			if (s != null && p != null) {
