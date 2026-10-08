@@ -1,12 +1,21 @@
-bin
-gen
-obj
+# Gradle / AGP
+.gradle/
+build/
+app/build/
 local.properties
+
+# Native build artefacts (ndk-build)
+app/src/main/jni/obj/
+app/src/main/jni/libs/
+app/src/main/jni/.externalToolBuilders
+# Staged for packaging by the :app:buildNative task
+app/src/main/jniLibs/
+
+# Legacy Eclipse / Ant leftovers
+bin/
+gen/
+obj/
 .project
 .cproject
-libs/x86
-libs/mips
-libs/armeabi
-libs/armeabi-v7a
-jni/.externalToolBuilders
+.classpath
 .pydevproject
