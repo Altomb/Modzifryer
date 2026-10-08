@@ -1,30 +1,184 @@
+import javax.inject.Inject
+import org.gradle.process.ExecOperations
+
 apply plugin: 'com.android.application'
 
-android {
-    compileSdkVersion 16
-    buildToolsVersion '22.0.1'
+def ndkSourceDir = layout.projectDirectory.dir('src/main/jni')
+def nativeOutDir = layout.buildDirectory.dir('native')
+// ndk-build is pointed at build/native/libs, whose immediate children are the
+// ABI directories. That is exactly the shape the jniLibs source set expects.
+def nativeLibsDir = nativeOutDir.map { it.dir('libs') }
 
-    sourceSets.main.jni.srcDirs = []
+android {
+    namespace 'com.ssb.droidsound'
+    compileSdk 37
+    compileSdkMinor 0
+    ndkVersion '29.0.13113456'
 
     defaultConfig {
-        applicationId "com.ssb.droidsound"
-        minSdkVersion 7
-        targetSdkVersion 7
+        applicationId 'com.ssb.droidsound'
+        // Raised from the original 7. NDK r27+ has a hard floor of API 21, and
+        // androidx.core 1.19 (which provides the NotificationCompat and
+        // MotionEventCompat replacements the app already relies on) declares
+        // minSdk 23.
+        minSdk 23
+        targetSdk 36
 
-        testApplicationId "com.ssb.droidsound.test"
-        testInstrumentationRunner "android.test.InstrumentationTestRunner"
+        ndk {
+            // Kept in sync with APP_ABI in Application.mk.
+            abiFilters 'arm64-v8a', 'x86_64'
+        }
     }
 
     buildTypes {
         release {
             minifyEnabled false
-            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.txt'
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.txt'
+            // Signed with the bundled debug key: this is a preservation effort for
+            // a 2013 app, not a release pipeline.
+            signingConfig signingConfigs.debug
+        }
+    }
+
+    // The legacy tree carries a lot of pre-lint code (deprecated APIs, hardcoded
+    // strings, missing translations). Lint stays advisory so it cannot block the
+    // migration, but the report is still generated for follow-up work.
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+        // AppCompatCustomView: the app deliberately uses the platform
+        // @android:style/Theme.NoTitleBar rather than an AppCompat theme, so
+        // FontTextView and the vendored TabPageIndicator must extend the
+        // platform TextView.
+        // GestureBackNavigation: PlayerActivity is opted out of predictive
+        // back via android:enableOnBackInvokedCallback="false" in the manifest
+        // because its whole navigation model is built on onKeyDown/onKeyUp for
+        // KEYCODE_BACK (long-press = up one level). Lint does not evaluate
+        // per-activity opt-out.
+        disable += ['AppCompatCustomView', 'GestureBackNavigation']
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    // The player service exposes a bound AIDL interface; AIDL is opt-in from AGP 8 on.
+    buildFeatures {
+        aidl true
+    }
+
+    packaging {
+        resources {
+            excludes += ['META-INF/LICENSE*', 'META-INF/NOTICE*']
+        }
+    }
+
+    sourceSets {
+        main {
+            jniLibs.srcDirs += nativeLibsDir
         }
     }
 }
 
+// ---------------------------------------------------------------------------
+// Native build
+//
+// The emulator cores predate the NDK's CMake-first workflow and carry
+// hand-written Android.mk files, so they are still built with ndk-build.
+// This task drives ndk-build and points the jniLibs source set straight at
+// its output directory, so Gradle tracks the dependency without a staging copy.
+// ---------------------------------------------------------------------------
+
+abstract class BuildNative extends DefaultTask {
+
+    @Inject
+    abstract ExecOperations getExecOperations()
+
+    @Input
+    abstract Property<String> getNdkVersion()
+
+    @Input
+    abstract ListProperty<String> getAbis()
+
+    @InputDirectory
+    @PathSensitive(PathSensitivity.RELATIVE)
+    abstract DirectoryProperty getSourceDir()
+
+    @OutputDirectory
+    abstract DirectoryProperty getOutputDir()
+
+    @TaskAction
+    void run() {
+        def abiList = abis.get()
+
+        def env = System.getenv()
+
+        def sdkDir = env['ANDROID_HOME'] ?: env['ANDROID_SDK_ROOT']
+
+        def ndkDir = env['ANDROID_NDK_HOME'] ?: env['ANDROID_NDK_ROOT']
+
+        if (!ndkDir && sdkDir) {
+            ndkDir = new File(sdkDir, "ndk/${ndkVersion.get()}").absolutePath
+        }
+        if (!ndkDir) {
+            throw new GradleException(
+                    'NDK location not found. Set ANDROID_NDK_HOME or ANDROID_HOME.')
+        }
+
+        def ndkBuild = new File(ndkDir, 'ndk-build')
+        if (!ndkBuild.exists()) {
+            throw new GradleException("ndk-build not found at ${ndkBuild}")
+        }
+
+        def outDir = outputDir.get().asFile
+
+        execOperations.exec {
+            workingDir project.projectDir
+            commandLine ndkBuild.absolutePath,
+                    "APP_ABI=${abiList.join(' ')}",
+                    "APP_BUILD_SCRIPT=${sourceDir.get().file('Android.mk').asFile.absolutePath}",
+                    "NDK_APPLICATION_MK=${sourceDir.get().file('Application.mk').asFile.absolutePath}",
+                    "NDK_APP_OUT=${new File(outDir, 'obj').absolutePath}",
+                    "NDK_LIBS_OUT=${new File(outDir, 'libs').absolutePath}"
+            environment 'NDK_PROJECT_PATH', project.projectDir.absolutePath
+            environment 'NDK_DEBUG', '0'
+        }
+
+        abiList.each { abi ->
+            if (!new File(outDir, "libs/${abi}").directory) {
+                throw new GradleException("ndk-build produced no output for ABI ${abi}")
+            }
+        }
+    }
+}
+
+def buildNative = tasks.register('buildNative', BuildNative) {
+    description = 'Builds the bundled emulator cores with ndk-build.'
+    group = 'build'
+    ndkVersion = android.ndkVersion
+    abis = (project.findProperty('nativeAbis') ?: 'arm64-v8a,x86_64').toString().split(',') as List
+    sourceDir = ndkSourceDir
+    outputDir = nativeOutDir
+}
+
+tasks.register('cleanNative', Delete) {
+    delete ndkSourceDir.dir('obj'), ndkSourceDir.dir('libs'),
+            ndkSourceDir.dir('.cxx'), nativeOutDir
+}
+
+// Any task that merges the jniLibs folders needs the cores to exist first.
+tasks.configureEach { task ->
+    if (task.name ==~ /(merge|package).*JniLibFolders/ || task.name ==~ /^(package|assemble|bundle|install)/) {
+        task.dependsOn buildNative
+    }
+}
+
 dependencies {
-    compile 'com.android.support:support-v4:22.2.0'
-    compile files('libs/htmlcleaner-2.2.jar')
-    compile files('libs/jmte-2.2.jar')
+    implementation 'androidx.core:core:1.19.0'
+    implementation 'androidx.viewpager:viewpager:1.0.0'
+    implementation 'androidx.preference:preference:1.2.1'
+
+    implementation files('libs/htmlcleaner-2.2.jar')
+    implementation files('libs/jmte-2.2.jar')
 }
