@@ -10,6 +10,7 @@ import java.util.Locale;
 
 import com.ssb.droidsound.utils.DataFileSource;
 import com.ssb.droidsound.utils.Log;
+import com.ssb.droidsound.utils.Storage;
 
 public abstract class FileSource {
 	private static final String TAG = FileSource.class.getSimpleName();
@@ -205,7 +206,7 @@ public abstract class FileSource {
 	/*
 	private void createParentDir() {
 
-		String exDir = Environment.getExternalStorageDirectory().getPath();
+		String exDir = Storage.getWritableRoot().getPath();
 		
 		String path = reference;
 		if(path.indexOf("http://") == 0) {
