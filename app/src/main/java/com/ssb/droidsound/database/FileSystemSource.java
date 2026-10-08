@@ -31,21 +31,24 @@ public class FileSystemSource implements DataSource {
 		
 		String fs = file.getPath();
 		int pos = fs.indexOf(NAME);
-		
-		String fsPath = fs.substring(0, pos);
+		if(pos < 0)
+			return null;
 		
 		String dirPath = BasePath + "/" + fs.substring(pos + NAME.length());
 		
 		file = new File(dirPath);
-		if(!file.exists())
+		if(!file.isDirectory())
+			return null;
+
+		File[] files = file.listFiles();
+		if(files == null)
 			return null;
 
 		MatrixCursor mc = new MatrixCursor(new String[] { "TITLE", "TYPE", "PATH", "FILENAME" });
 		
-		for(File f : file.listFiles()) {
+		for(File f : files) {
 			
 			String name = f.getName();
-			String path = f.getParent();
 			name = name.substring(name.lastIndexOf('/') + 1);
 			
 			if(f.isDirectory()) {
