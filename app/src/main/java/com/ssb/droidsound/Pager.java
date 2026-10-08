@@ -6,9 +6,9 @@ import java.util.List;
 import com.ssb.droidsound.utils.Log;
 import com.viewpagerindicator.PageIndicator;
 
-import android.support.v4.view.PagerAdapter;
-import android.support.v4.view.ViewPager;
-import android.support.v4.view.ViewPager.OnPageChangeListener;
+import androidx.viewpager.widget.PagerAdapter;
+import androidx.viewpager.widget.ViewPager;
+import androidx.viewpager.widget.ViewPager.OnPageChangeListener;
 import android.view.View;
 import android.view.ViewGroup;
 
