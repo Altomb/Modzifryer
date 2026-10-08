@@ -68,7 +68,7 @@ public class SettingsActivity extends FragmentActivity {
 	/**
 	 * Inflates the preference tree and wires the plugin option listeners.
 	 */
-	static class SettingsFragment extends PreferenceFragmentCompat {
+	public static class SettingsFragment extends PreferenceFragmentCompat {
 
 		private SongDatabase songDatabase;
 		private boolean doFullScan;
