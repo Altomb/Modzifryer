@@ -1,4 +1,6 @@
 #ifndef DS_MISC_H
+#include <stdlib.h>
+#include <string.h>
 #define DS_MISC_H
 
 #define INFO_TITLE 0
