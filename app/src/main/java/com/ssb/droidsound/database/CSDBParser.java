@@ -18,6 +18,7 @@ import android.provider.BaseColumns;
 import android.util.SparseArray;
 
 import com.ssb.droidsound.utils.Log;
+import com.ssb.droidsound.utils.Storage;
 
 
 public class CSDBParser implements DataSource {
