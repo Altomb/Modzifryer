@@ -3,12 +3,12 @@ package com.ssb.droidsound.file;
 import java.io.File;
 
 import android.os.Environment;
+import com.ssb.droidsound.utils.Storage;
 
 public class FileUtils {
 	
 	public static File getTempDir() {
-		File droidDir = new File(Environment.getExternalStorageDirectory(), "droidsound");
-		File tempDir = new File(droidDir, "tempmusic");
+		File tempDir = Storage.getDroidsoundSubDir("tempmusic");
 		File dir = new File(tempDir, "music" + Long.toString(System.nanoTime()));
 		dir.mkdirs();
 		return dir;
