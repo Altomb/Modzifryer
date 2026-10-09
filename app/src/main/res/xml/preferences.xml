@@ -105,16 +105,6 @@
 		android:summary="Scan sdcard for changes and update database."
 	/>
 
-    <Preference
-    	android:key="download_link"
-		android:title="Download"
-		android:summary="Go to web page for quick downloading of music and databases."
-   	/>
-
-    <Preference
-		android:key="help_pref"
-		android:title="Droidsound Help"
-		/>
     <PreferenceScreen
 		android:key="about_prefs"
 		android:title="About Droidsound" />
