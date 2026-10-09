@@ -219,7 +219,7 @@ public class SettingsActivity extends FragmentActivity implements
 
 				p = new Preference(requireContext());
 				p.setTitle("Application");
-				p.setSummary(String.format("%s v%s\n(C) 2010-2012 by Jonas Minnberg (Sasq)",
+				p.setSummary(String.format("%s v%s\nA fork for Droidsound\n(C) 2010-2012 by Jonas Minnberg (Sasq)",
 						appName, pinfo.versionName));
 				abScreen.addPreference(p);
 
