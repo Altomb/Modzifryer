@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-<string name="app_name">Droidsound</string>
+<string name="app_name">Modzifryer</string>
 <string name="create_moddir_failed">Could not create MODS directory on sdcard!</string>
 <string name="sdcard_not_found">Could not access sdcard!</string>
 <string name="search_hint">Search title</string>
