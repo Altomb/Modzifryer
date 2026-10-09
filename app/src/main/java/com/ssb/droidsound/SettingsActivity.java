@@ -6,11 +6,9 @@ import android.app.AlertDialog;
 import android.app.Dialog;
 import android.content.DialogInterface;
 import android.content.DialogInterface.OnMultiChoiceClickListener;
-import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager.NameNotFoundException;
-import android.net.Uri;
 import android.os.Bundle;
 
 import androidx.fragment.app.FragmentActivity;
@@ -35,7 +33,8 @@ import com.ssb.droidsound.utils.SystemBars;
  * preference tree now lives in a {@link PreferenceFragmentCompat} instead of being inflated
  * directly by a {@code PreferenceActivity}.
  */
-public class SettingsActivity extends FragmentActivity {
+public class SettingsActivity extends FragmentActivity implements
+		PreferenceFragmentCompat.OnPreferenceStartScreenCallback {
 
 	protected static final String TAG = SettingsActivity.class.getSimpleName();
 	private SongDatabase songDatabase;
@@ -63,6 +62,25 @@ public class SettingsActivity extends FragmentActivity {
 		// Edge-to-edge is enforced at this targetSdk, so the preference list needs
 		// padding to keep the first and last rows clear of the system bars.
 		SystemBars.padForSystemBars(findViewById(android.R.id.content));
+	}
+
+	/**
+	 * Opens a nested {@link PreferenceScreen} (Audio, About) by swapping in a
+	 * fresh fragment rooted at that screen. androidx.preference will not navigate
+	 * to a sub-screen on its own; the host has to drive the switch.
+	 */
+	@Override
+	public boolean onPreferenceStartScreen(PreferenceFragmentCompat caller, PreferenceScreen preference) {
+		SettingsFragment fragment = new SettingsFragment();
+		Bundle args = new Bundle();
+		args.putString(PreferenceFragmentCompat.ARG_PREFERENCE_ROOT, preference.getKey());
+		fragment.setArguments(args);
+		getSupportFragmentManager()
+				.beginTransaction()
+				.replace(android.R.id.content, fragment)
+				.addToBackStack("settings")
+				.commit();
+		return true;
 	}
 
 	/**
@@ -139,35 +157,18 @@ public class SettingsActivity extends FragmentActivity {
 				p.setEnabled(!s.startsWith("Sidplay"));
 			}
 
+			// rescan_pref only exists on the top-level screen.
 			Preference pref = findPreference("rescan_pref");
-			pref.setOnPreferenceClickListener(new Preference.OnPreferenceClickListener() {
-				@Override
-				public boolean onPreferenceClick(Preference preference) {
-					Log.d(TAG, "Rescan database");
-					getActivity().showDialog(R.string.scan_db);
-					return true;
-				}
-			});
-
-			pref = findPreference("help_pref");
-			pref.setOnPreferenceClickListener(new Preference.OnPreferenceClickListener() {
-				@Override
-				public boolean onPreferenceClick(Preference preference) {
-					startActivity(new Intent(getActivity(), HelpActivity.class));
-					return true;
-				}
-			});
-
-			pref = findPreference("download_link");
-			pref.setOnPreferenceClickListener(new Preference.OnPreferenceClickListener() {
-				@Override
-				public boolean onPreferenceClick(Preference preference) {
-					Intent intent = new Intent(Intent.ACTION_VIEW,
-							Uri.parse("http://swimsuitboys.com/droidsound/dl/"));
-					startActivity(intent);
-					return true;
-				}
-			});
+			if (pref != null) {
+				pref.setOnPreferenceClickListener(new Preference.OnPreferenceClickListener() {
+					@Override
+					public boolean onPreferenceClick(Preference preference) {
+						Log.d(TAG, "Rescan database");
+						getActivity().showDialog(R.string.scan_db);
+						return true;
+					}
+				});
+			}
 
 			PackageInfo pinfo = null;
 			try {
@@ -181,7 +182,7 @@ public class SettingsActivity extends FragmentActivity {
 
 			PreferenceScreen aScreen = (PreferenceScreen) findPreference("audio_prefs");
 
-			for (int i = 0; i < aScreen.getPreferenceCount(); i++) {
+			for (int i = 0; aScreen != null && i < aScreen.getPreferenceCount(); i++) {
 				p = aScreen.getPreference(i);
 				Log.d(TAG, "Pref '%s'", p.getKey());
 				if (p instanceof PreferenceGroup) {
