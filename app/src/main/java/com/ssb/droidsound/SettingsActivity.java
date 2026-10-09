@@ -214,7 +214,7 @@ public class SettingsActivity extends FragmentActivity implements
 
 			if (abScreen != null) {
 				PreferenceCategory pc = new PreferenceCategory(requireContext());
-				pc.setTitle("Droidsound");
+				pc.setTitle("Modzifryer");
 				abScreen.addPreference(pc);
 
 				p = new Preference(requireContext());
