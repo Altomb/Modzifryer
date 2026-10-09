@@ -107,6 +107,6 @@
 
     <PreferenceScreen
 		android:key="about_prefs"
-		android:title="About Droidsound" />
+		android:title="About Modzifryer" />
 
 </PreferenceScreen>
