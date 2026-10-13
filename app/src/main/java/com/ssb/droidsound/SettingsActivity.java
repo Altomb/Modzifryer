@@ -11,7 +11,7 @@ import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager.NameNotFoundException;
 import android.os.Bundle;
 
-import androidx.fragment.app.FragmentActivity;
+import androidx.appcompat.app.AppCompatActivity;
 import androidx.preference.Preference;
 import androidx.preference.PreferenceCategory;
 import androidx.preference.PreferenceFragmentCompat;
@@ -33,7 +33,7 @@ import com.ssb.droidsound.utils.SystemBars;
  * preference tree now lives in a {@link PreferenceFragmentCompat} instead of being inflated
  * directly by a {@code PreferenceActivity}.
  */
-public class SettingsActivity extends FragmentActivity implements
+public class SettingsActivity extends AppCompatActivity implements
 		PreferenceFragmentCompat.OnPreferenceStartScreenCallback {
 
 	protected static final String TAG = SettingsActivity.class.getSimpleName();
