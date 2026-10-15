@@ -1,4 +1,4 @@
-// Game_Music_Emu 0.5.5. http://www.slack.net/~ant/
+// Game_Music_Emu https://bitbucket.org/mpyne/game-music-emu/
 
 #include "Classic_Emu.h"
 
@@ -23,11 +23,11 @@ Classic_Emu::Classic_Emu()
 	buf           = 0;
 	stereo_buffer = 0;
 	voice_types   = 0;
-	
+
 	// avoid inconsistency in our duplicated constants
-	assert( (int) wave_type  == (int) Multi_Buffer::wave_type );
-	assert( (int) noise_type == (int) Multi_Buffer::noise_type );
-	assert( (int) mixed_type == (int) Multi_Buffer::mixed_type );
+	blaarg_static_assert( (int) wave_type  == (int) Multi_Buffer::wave_type, "wave_type inconsistent across two classes using it" );
+	blaarg_static_assert( (int) noise_type == (int) Multi_Buffer::noise_type, "noise_type inconsistent across two classes using it"  );
+	blaarg_static_assert( (int) mixed_type == (int) Multi_Buffer::mixed_type, "mixed_type inconsistent across two classes using it"  );
 }
 
 Classic_Emu::~Classic_Emu()
@@ -42,7 +42,7 @@ void Classic_Emu::set_equalizer_( equalizer_t const& eq )
 	if ( buf )
 		buf->bass_freq( (int) equalizer().bass );
 }
-	
+
 blargg_err_t Classic_Emu::set_sample_rate_( long rate )
 {
 	if ( !buf )
@@ -52,6 +52,12 @@ blargg_err_t Classic_Emu::set_sample_rate_( long rate )
 		buf = stereo_buffer;
 	}
 	return buf->set_sample_rate( rate, 1000 / 20 );
+}
+
+blargg_err_t Classic_Emu::set_multi_channel ( bool is_enabled )
+{
+        RETURN_ERR( Music_Emu::set_multi_channel_( is_enabled ) );
+        return 0;
 }
 
 void Classic_Emu::mute_voices_( int mask )
@@ -73,13 +79,13 @@ void Classic_Emu::mute_voices_( int mask )
 	}
 }
 
-void Classic_Emu::change_clock_rate( long rate )
+void Classic_Emu::change_clock_rate( uint32_t rate )
 {
 	clock_rate_ = rate;
 	buf->clock_rate( rate );
 }
 
-blargg_err_t Classic_Emu::setup_buffer( long rate )
+blargg_err_t Classic_Emu::setup_buffer( uint32_t rate )
 {
 	change_clock_rate( rate );
 	RETURN_ERR( buf->set_channel_count( voice_count() ) );
@@ -109,7 +115,7 @@ blargg_err_t Classic_Emu::play_( long count, sample_t* out )
 				remute_voices();
 			}
 			int msec = buf->length();
-			blip_time_t clocks_emulated = (blargg_long) msec * clock_rate_ / 1000;
+			blip_time_t clocks_emulated = (int32_t) msec * clock_rate_ / 1000;
 			RETURN_ERR( run_clocks( clocks_emulated, msec ) );
 			assert( clocks_emulated );
 			buf->end_frame( clocks_emulated );
@@ -124,12 +130,12 @@ blargg_err_t Rom_Data_::load_rom_data_( Data_Reader& in,
 		int header_size, void* header_out, int fill, long pad_size )
 {
 	long file_offset = pad_size - header_size;
-	
+
 	rom_addr = 0;
 	mask     = 0;
 	size_    = 0;
 	rom.clear();
-	
+
 	file_size_ = in.remain();
 	if ( file_size_ <= header_size ) // <= because there must be data after header
 		return gme_wrong_file_type;
@@ -141,20 +147,20 @@ blargg_err_t Rom_Data_::load_rom_data_( Data_Reader& in,
 		rom.clear();
 		return err;
 	}
-	
+
 	file_size_ -= header_size;
 	memcpy( header_out, &rom [file_offset], header_size );
-	
+
 	memset( rom.begin()         , fill, pad_size );
 	memset( rom.end() - pad_size, fill, pad_size );
-	
+
 	return 0;
 }
 
 void Rom_Data_::set_addr_( long addr, int unit )
 {
 	rom_addr = addr - unit - pad_extra;
-	
+
 	long rounded = (addr + file_size_ + unit - 1) / unit * unit;
 	if ( rounded <= 0 )
 	{
@@ -168,7 +174,7 @@ void Rom_Data_::set_addr_( long addr, int unit )
 			shift++;
 		mask = (1L << shift) - 1;
 	}
-	
+
 	if ( addr < 0 )
 		addr = 0;
 	size_ = rounded;
@@ -176,9 +182,9 @@ void Rom_Data_::set_addr_( long addr, int unit )
 
 	if ( 0 )
 	{
-		debug_printf( "addr: %X\n", addr );
-		debug_printf( "file_size: %d\n", file_size_ );
-		debug_printf( "rounded: %d\n", rounded );
+		debug_printf( "addr: %X\n", (int)addr );
+		debug_printf( "file_size: %ld\n", file_size_ );
+		debug_printf( "rounded: %ld\n", rounded );
 		debug_printf( "mask: $%X\n", mask );
 	}
 }
