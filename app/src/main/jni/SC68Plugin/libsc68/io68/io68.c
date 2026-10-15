@@ -3,9 +3,7 @@
  * @brief   IO chips library
  * @author  http://sourceforge.net/users/benjihan
  *
- * Copyright (C) 1998-2011 Benjamin Gerard
- *
- * Time-stamp: <2011-10-05 16:44:14 ben>
+ * Copyright (c) 1998-2016 Benjamin Gerard
  *
  * This program is free software: you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -27,9 +25,11 @@
 #ifdef HAVE_CONFIG_H
 # include "config.h"
 #endif
+#include "io68_private.h"
 
+#include <assert.h>
 #include "io68.h"
-#include "sc68/msg68.h"
+#include "sc68/file68_msg.h"
 
 static const struct {
   const char * name;
@@ -71,7 +71,21 @@ void io68_shutdown(void)
 
 void io68_destroy(io68_t * const io)
 {
-  if (io && io->destroy) {
-    io->destroy(io);
+  if (io) {
+    assert(!io->next);
+    if (io->next)
+      msg68_critical("io68: destroying an attached IO <%s>\n",io->name);
+    if (io->destroy)
+      io->destroy(io);
+    else
+      emu68_free(io);
   }
+}
+
+int io68_reset(io68_t * const io)
+{
+  return !io
+    ? -1
+    : io->reset ? io->reset(io) : 0
+    ;
 }
