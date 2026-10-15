@@ -1,16 +1,15 @@
-/**
- * @ingroup   emu68_lib_inline
+/*
+ * @ingroup   lib_emu68_inl
  * @file      emu68/inl68_exception.h
  * @brief     68k exception header.
- * @date      2009/05/08
  * @author    Benjamin Gerard
- *
+ * @date      2009/05/08
  */
 
-/* $Id$ */
+/* Copyright (c) 1998-2016 Benjamin Gerard */
 
-#ifndef _EMU68_INL_EXCEPTION68_H_
-#define _EMU68_INL_EXCEPTION68_H_
+#ifndef EMU68_INL_EXCEPTION68_H
+#define EMU68_INL_EXCEPTION68_H
 
 EMU68_EXTERN
 void exception68(emu68_t * const emu68, const int vector, const int level);
@@ -39,4 +38,4 @@ void inl_linef68(emu68_t * const emu68)
   inl_exception68(emu68, LINEF_VECTOR, -1);
 }
 
-#endif /* #ifndef _EMU68_INL_EXCEPTION68_H_ */
+#endif
