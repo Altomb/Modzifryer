@@ -19,7 +19,7 @@ include $(CLEAR_VARS)
 
 LOCAL_MODULE    := hively
 
-LOCAL_SRC_FILES :=  HivelyPlugin.cpp hvl_replay.c
+LOCAL_SRC_FILES :=  HivelyPlugin.cpp hvl_replay.c hvl_tables.c
 
 LOCAL_CPPFLAGS := $(MY_CPPFLAGS)
 LOCAL_LDLIBS := -llog
