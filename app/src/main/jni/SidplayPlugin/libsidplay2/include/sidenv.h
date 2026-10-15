@@ -17,13 +17,7 @@
  *                                                                         *
  ***************************************************************************/
 /***************************************************************************
- *  $Log: sidenv.h,v $
- *  Revision 1.2.2.1  2004/07/26 18:11:14  sid
- *  synced with libsidplay2 from cvs and resid 0.16
- *
- *  Revision 1.5  2002/01/29 21:53:25  s_a_white
- *  Fixed envSleep
- *
+ *  $Log: not supported by cvs2svn $
  *  Revision 1.4  2002/01/29 08:02:22  s_a_white
  *  PSID sample improvements.
  *
