@@ -1,18 +1,19 @@
 /**
- * @ingroup   emu68_lib
+ * @ingroup   lib_emu68
  * @file      emu68/macro68.h
+ * @brief     68K instruction emulation macro definitions.
  * @author    Benjamin Gerard
  * @date      1999/13/03
- * @brief     68K instruction emulation macro definitions.
- *
  */
 
-/* $Id: macro68.h 141 2011-08-07 23:30:20Z benjihan $ */
+/* Copyright (c) 1998-2016 Benjamin Gerard */
 
-/* Copyright (C) 1998-2010 Benjamin Gerard */
+#ifndef EMU68_MACRO68_H
+#define EMU68_MACRO68_H
 
-#ifndef _EMU68_MACRO68_H_
-#define _EMU68_MACRO68_H_
+/**
+ * @cond emu68macros
+ */
 
 /* Determine what instruction to inline.
  *
@@ -145,9 +146,9 @@
 #define EORB(S, A, B)  S = _EOR68(A, B)
 #define EORW(S, A, B)  S = _EOR68(A, B)
 #define EORL(S, A, B)  S = _EOR68(A, B)
-#define NOTB(S, A)     S = _NOT68(A)
-#define NOTW(S, A)     S = _NOT68(A)
-#define NOTL(S, A)     S = _NOT68(A)
+#define NOTB(S, A)     S = _NOT68(A|~NRM_BYTE_MSK)
+#define NOTW(S, A)     S = _NOT68(A|~NRM_WORD_MSK)
+#define NOTL(S, A)     S = _NOT68(A|~NRM_LONG_MSK)
 
 
 #define BYTE_SR_X ( (int68_t)(REG68.sr&SR_X) << (BYTE_FIX-SR_X_BIT) )
@@ -324,7 +325,7 @@
 # define TRAP(N)          inl_trap68(emu68,N)
 # define TRAPV            inl_trapv68(emu68)
 # define NOP              inl_nop68(emu68)
-# define RESET            while (0) /* emu68_reset(emu68) */
+# define RESET            inl_reset68(emu68)
 # define STOP             inl_stop68(emu68)
 # define LINK(R)          inl_link68(emu68,R)
 # define UNLK(R)          inl_unlk68(emu68,R)
@@ -358,4 +359,8 @@
 #define BCC(PC,CC)   bcc68[CC](emu68,PC)
 #define DBCC(DN,CC)  dbcc68[CC](emu68,DN)
 
-#endif /* #ifdefndef _EMU68_MACRO68_H_ */
+/**
+ * @endcond
+ */
+
+#endif
