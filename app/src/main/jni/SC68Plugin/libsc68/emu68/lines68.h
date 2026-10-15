@@ -1,24 +1,25 @@
-/**
- * @ingroup   emu68_lib
+/*
+ * @ingroup   lib_emu68
  * @file      emu68/lines68.h
  * @brief     68k instructions header.
- * @date      2009/05/08
  * @author    Benjamin Gerard
- *
- *   The lines68.h header file should include all files required for
- *   compiling instruction emulator files.
- *
+ * @date      2009/05/08
  */
 
-/* $Id$ */
+/* Copyright (c) 1998-2016 Benjamin Gerard */
 
-#ifndef _EMU68_LINES68_H_
-#define _EMU68_LINES68_H_
+/* The lines68.h header file should include all files required for
+ * compiling instruction emulator files.
+ */
+
+#ifndef EMU68_LINES68_H
+#define EMU68_LINES68_H
 
 #ifdef HAVE_CONFIG_H
 # include "config.h"
 #endif
 
+#include "emu68_private.h"
 #include "assert68.h"
 #include "excep68.h"
 #include "emu68.h"
@@ -35,4 +36,4 @@
 #include "inl68_shifting.h"
 #include "inl68_systctrl.h"
 
-#endif /* #ifndef _EMU68_LINES68_H_ */
+#endif
