@@ -18,13 +18,13 @@ BOOL CSoundFile::ReadWav(const BYTE *lpStream, DWORD dwMemLength)
 //---------------------------------------------------------------
 {
 	DWORD dwMemPos = 0;
-	WAVEFILEHEADER *phdr = (WAVEFILEHEADER *)lpStream;
-	WAVEFORMATHEADER *pfmt = (WAVEFORMATHEADER *)(lpStream + sizeof(WAVEFILEHEADER));
-	if ((!lpStream) || (dwMemLength < (DWORD)sizeof(WAVEFILEHEADER))) return FALSE;
+	const WAVEFILEHEADER *phdr = (WAVEFILEHEADER *)lpStream;
+	const WAVEFORMATHEADER *pfmt = (WAVEFORMATHEADER *)(lpStream + sizeof(WAVEFILEHEADER));
+	if ((!lpStream) || (dwMemLength < sizeof(WAVEFILEHEADER)+sizeof(WAVEFORMATHEADER))) return FALSE;
 	if ((phdr->id_RIFF != IFFID_RIFF) || (phdr->id_WAVE != IFFID_WAVE)
 	 || (pfmt->id_fmt != IFFID_fmt)) return FALSE;
 	dwMemPos = sizeof(WAVEFILEHEADER) + 8 + pfmt->hdrlen;
-	if ((dwMemPos + 8 >= dwMemLength)
+	if ((dwMemPos >= dwMemLength - 8)
 	 || ((pfmt->format != WAVE_FORMAT_PCM) && (pfmt->format != WAVE_FORMAT_EXTENSIBLE))
 	 || (pfmt->channels > 4)
 	 || (!pfmt->channels)
@@ -32,13 +32,14 @@ BOOL CSoundFile::ReadWav(const BYTE *lpStream, DWORD dwMemLength)
 	 || (pfmt->bitspersample & 7)
 	 || (pfmt->bitspersample < 8)
 	 || (pfmt->bitspersample > 32))  return FALSE;
-	WAVEDATAHEADER *pdata;
+	const WAVEDATAHEADER *pdata;
 	for (;;)
 	{
 		pdata = (WAVEDATAHEADER *)(lpStream + dwMemPos);
 		if (pdata->id_data == IFFID_data) break;
+		if (pdata->length >= dwMemLength || dwMemPos > dwMemLength - pdata->length) return FALSE;
 		dwMemPos += pdata->length + 8;
-		if (dwMemPos + 8 >= dwMemLength) return FALSE;
+		if (dwMemPos >= dwMemLength - 8) return FALSE;
 	}
 	m_nType = MOD_TYPE_WAV;
 	m_nSamples = 0;
@@ -154,7 +155,7 @@ typedef struct IMAADPCMBLOCK
 
 #pragma pack()
 
-static const int gIMAUnpackTable[90] = 
+static const int gIMAUnpackTable[90] =
 {
   7,     8,     9,    10,    11,    12,    13,    14,
   16,    17,    19,    21,    23,    25,    28,    31,
@@ -215,6 +216,3 @@ BOOL IMAADPCMUnpack16(signed short *pdest, UINT nLen, LPBYTE psrc, DWORD dwBytes
 	}
 	return TRUE;
 }
-
-
-
