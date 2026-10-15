@@ -13,8 +13,6 @@
 #ifndef __SNDFILE_H
 #define __SNDFILE_H
 
-#include <android/log.h>
-
 #ifdef UNDER_CE
 int _strnicmp(const char *str1,const char *str2, int n);
 #endif
@@ -458,10 +456,10 @@ typedef struct _MODCOMMAND
 // Mix Plugins
 #define MIXPLUG_MIXREADY			0x01	// Set when cleared
 
-class IMixPlugin
+class MODPLUG_EXPORT IMixPlugin
 {
 public:
-	virtual ~IMixPlugin();
+	virtual ~IMixPlugin() {};
 	virtual int AddRef() = 0;
 	virtual int Release() = 0;
 	virtual void SaveAllParameters() = 0;
@@ -537,18 +535,29 @@ typedef VOID (* LPSNDMIXHOOKPROC)(int *, unsigned long, unsigned long); // buffe
 
 
 //==============
-class CSoundFile
+class MODPLUG_EXPORT CSoundFile
 //==============
 {
 public:	// Static Members
-	static UINT m_nXBassDepth, m_nXBassRange;
-	static UINT m_nReverbDepth, m_nReverbDelay, gnReverbType;
-	static UINT m_nProLogicDepth, m_nProLogicDelay;
+	static UINT m_nXBassDepth;
+	static UINT m_nXBassRange;
+	static UINT m_nReverbDepth;
+	static UINT m_nReverbDelay;
+	static UINT gnReverbType;
+	static UINT m_nProLogicDepth;
+	static UINT m_nProLogicDelay;
 	static UINT m_nStereoSeparation;
 	static UINT m_nMaxMixChannels;
 	static LONG m_nStreamVolume;
-	static DWORD gdwSysInfo, gdwSoundSetup, gdwMixingFreq, gnBitsPerSample, gnChannels;
-	static UINT gnAGC, gnVolumeRampSamples, gnVUMeter, gnCPUUsage;
+	static DWORD gdwSysInfo;
+	static DWORD gdwSoundSetup;
+	static DWORD gdwMixingFreq;
+	static DWORD gnBitsPerSample;
+	static DWORD gnChannels;
+	static UINT gnAGC;
+	static UINT gnVolumeRampSamples;
+	static UINT gnVUMeter;
+	static UINT gnCPUUsage;
 	static LPSNDMIXHOOKPROC gpSndMixHook;
 	static PMIXPLUGINCREATEPROC gpMixPluginCreateProc;
 
@@ -569,7 +578,7 @@ public:	// for Editing
 	UINT m_nType, m_nSamples, m_nInstruments;
 	UINT m_nTickCount, m_nTotalCount, m_nPatternDelay, m_nFrameDelay;
 	UINT m_nMusicSpeed, m_nMusicTempo;
-	UINT m_nNextRow, m_nRow;
+	UINT m_nNextRow, m_nRow, m_nNextStartRow;
 	UINT m_nPattern,m_nCurrentPattern,m_nNextPattern,m_nRestartPos;
 	UINT m_nMasterVolume, m_nGlobalVolume, m_nSongPreAmp;
 	UINT m_nFreqFactor, m_nTempoFactor, m_nOldGlbVolSlide;
@@ -612,11 +621,7 @@ public:
 	UINT GetMusicTempo() const { return m_nMusicTempo; }
 	DWORD GetLength(BOOL bAdjust, BOOL bTotal=FALSE);
 	DWORD GetSongTime() { return GetLength(FALSE, TRUE); }
-	void SetRepeatCount(int n) {
-
-		__android_log_print(ANDROID_LOG_VERBOSE, "SNDFILE", "REPEAT %d", n);
-		m_nRepeatCount = n; m_nInitialRepeatCount = n;
-	}
+	void SetRepeatCount(int n) { m_nRepeatCount = n; m_nInitialRepeatCount = n; }
 	int GetRepeatCount() const { return m_nRepeatCount; }
 	BOOL IsPaused() const {	return (m_dwSongFlags & SONG_PAUSED) ? TRUE : FALSE; }
 	void LoopPattern(int nPat, int nRow=0);
@@ -938,7 +943,7 @@ typedef struct WAVEEXTRAHEADER
 #define AGC_UNITY			(1 << AGC_PRECISION)
 
 // Calling conventions
-#ifdef MSC_VER
+#if defined(_MSC_VER) && defined(_M_IX86)
 #define MPPASMCALL	__cdecl
 #define MPPFASTCALL	__fastcall
 #else
