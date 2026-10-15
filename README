@@ -2,3 +2,5 @@ This is a sloppified version made to compile on my end. It will contain a lot of
 
 Uses also code from:
     GME (Game Music Emulator): https://github.com/libgme/game-music-emu
+    Hively Tracker: https://github.com/pete-gordon/hivelytracker
+    ModPlug: https://github.com/Konstanty/libmodplug
