@@ -1,4 +1,3 @@
-/* sidconfig.h (template) */
 #ifndef _sidconfig_h_
 #define _sidconfig_h_
 
@@ -8,40 +7,15 @@
 #define SID_SIZEOF_INT       4
 #define SID_SIZEOF_LONG_INT  8
 
-/* Define SID_WORDS_BIGENDIAN if your processor stores words
-   with the most significant byte first (like Motorola and SPARC,
-   unlike Intel and VAX).  */
-/* Define SID_WORDS_LITTLEENDIAN if your processor stores words
-   with the least significant byte first (like Intel and VAX).  */
+/* Android/Linux LP64 is little endian. */
+#define SID_WORDS_LITTLEENDIAN
 
-// [AV]
-#include "TargetConditionals.h"
-   
-#if TARGET_RT_LITTLE_ENDIAN
-	#define SID_WORDS_LITTLEENDIAN
-#else
-	#define SID_WORDS_BIGENDIAN
-#endif
-
-
-/* Define if your compiler supports type "bool".
-   If not, a user-defined signed integral type will be used.  */
 #define SID_HAVE_BOOL
-
-/* Define if your compiler supports AC99 header "stdbool.h" */
 #define SID_HAVE_STDBOOL_H
 
 /* DLL building support on win32 hosts */
 #ifndef SID_EXTERN
-#   ifdef DLL_EXPORT      /* defined by libtool (if required) */
-#       define SID_EXTERN __declspec(dllexport)
-#   endif
-#   ifdef SID_DLL_IMPORT  /* define if linking with this dll */
-#       define SID_EXTERN __declspec(dllimport)
-#   endif
-#   ifndef SID_EXTERN     /* static linking or !_WIN32 */
-#       define SID_EXTERN
-#   endif
+#   define SID_EXTERN
 #endif
 
 /* Namespace support */
