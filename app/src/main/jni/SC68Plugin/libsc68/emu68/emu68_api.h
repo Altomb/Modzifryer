@@ -1,31 +1,23 @@
 /**
- * @ingroup   emu68_lib
+ * @ingroup   lib_emu68
  * @file      emu68/emu68_api.h
+ * @brief     emu68 library export header.
  * @author    Benjamin Gerard
  * @date      2009/02/10
- * @brief     emu68 library export header.
- *
  */
 
-/* $Id: emu68.h 91 2009-02-09 17:25:51Z benjihan $ */
+/* Copyright (c) 1998-2016 Benjamin Gerard */
 
-/* Copyright (C) 1998-2009 Benjamin Gerard */
+#ifndef EMU68_EMU68_API_H
+#define EMU68_EMU68_API_H
 
-#ifndef _EMU68_EMU68_API_H_
-#define _EMU68_EMU68_API_H_
-
-#ifndef EMU68_API
-# ifdef EMU68_EXPORT
-#  include "sc68/sc68.h"
-#  define EMU68_EXTERN SC68_EXTERN
-#  define EMU68_API    SC68_API
-# elif defined (__cplusplus)
-#  define EMU68_EXTERN extern "C"
-#  define EMU68_API    EMU68_EXTERN
-# else
-#  define EMU68_EXTERN extern
-#  define EMU68_API    EMU68_EXTERN
-# endif
+#ifndef EMU68_EXTERN
+# include "sc68/sc68.h"
+# define EMU68_EXTERN SC68_EXTERN
 #endif
 
-#endif /* #ifndef _EMU68_EMU68_API_H_ */
+#ifndef EMU68_API
+# define EMU68_API EMU68_EXTERN
+#endif
+
+#endif
