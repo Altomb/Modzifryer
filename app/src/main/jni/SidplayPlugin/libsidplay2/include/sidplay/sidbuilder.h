@@ -1,5 +1,5 @@
 /***************************************************************************
-                          sidbuilder.h  -  Sid Builder Classes
+                          sidbuilder.h  -  Sid Builder Interface
                              -------------------
     begin                : Sat May 6 2001
     copyright            : (C) 2000 by Simon White
@@ -18,60 +18,50 @@
 #ifndef _sidbuilder_h_
 #define _sidbuilder_h_
 
-#include "sid2types.h"
-#include "component.h"
-#include "c64env.h"
+#include <sidplay/sid2types.h>
+#include <sidplay/component.h>
+#include <sidplay/c64env.h>
 
-
-// Inherit this class to create a new SID emulations for libsidplay2.
-class sidbuilder;
-class sidemu: public component
+class ISidEmulation: public ISidComponent
 {
-private:
-    sidbuilder *m_builder;
-
 public:
-    sidemu (sidbuilder *builder)
-    :m_builder (builder) {;}
-    virtual ~sidemu () {;}
+    static const Iid &iid () {
+        SIDIID(0x82c01032, 0x5d8c, 0x447a, 0x89fa, 0x0599, 0x0990b766);
+    }
 
-    // Standard component functions
-    void            reset () { reset (0); }
-    virtual void    reset (uint8_t volume) = 0;
-    virtual uint8_t read  (uint_least8_t addr) = 0;
-    virtual void    write (uint_least8_t addr, uint8_t data) = 0;
-    virtual const   char *credits (void) = 0;
+    virtual ISidUnknown *builder      (void) const = 0;
+    virtual void         clock        (sid2_clock_t clk) = 0;
+    virtual void         optimisation (uint_least8_t level) = 0;
+    virtual void         reset        (uint_least8_t volume) = 0;
 
-    // Standard SID functions
+    // @FIXME@ Export via another interface
     virtual int_least32_t output  (uint_least8_t bits) = 0;
-    virtual void          volume  (uint_least8_t num, uint_least8_t level) = 0;
-    virtual void          mute    (uint_least8_t num, bool enable) = 0;
-    virtual void          gain    (int_least8_t precent) = 0;
-    virtual void          optimisation (uint_least8_t /*level*/) {;}
-    sidbuilder           *builder (void) const { return m_builder; }
 };
 
-
-class sidbuilder
+class ISidMixer: public ISidUnknown
 {
-private:
-    const char * const m_name;
-
-protected:
-    bool m_status;
-
 public:
-    // Determine current state of object (true = okay, false = error).
-    sidbuilder(const char * const name)
-        : m_name(name), m_status (true) {;}
-    virtual ~sidbuilder() {;}
+    static const Iid &iid () {
+        SIDIID(0xc4438750, 0x06ec, 0x11db, 0x9cd8, 0x0800, 0x200c9a66);
+    }
 
-    virtual  sidemu      *lock    (c64env *env, sid2_model_t model) = 0;
-    virtual  void         unlock  (sidemu *device) = 0;
-    const    char        *name    (void) const { return m_name; }
-    virtual  const  char *error   (void) const = 0;
-    virtual  const  char *credits (void) = 0;
-    operator bool() const { return m_status; }
+    virtual void mute   (uint_least8_t num, bool enable) = 0;
+    virtual void volume (uint_least8_t num, uint_least8_t level) = 0;
+    virtual void gain   (int_least8_t precent) = 0;
+};
+
+class ISidBuilder: public ISidUnknown
+{
+public:
+    static const Iid &iid () {
+        SIDIID(0x1c9ea475, 0xac10, 0x4345, 0x8b88, 0x3e48, 0x04e0ea38);
+    }
+
+    virtual operator     bool    () const = 0;
+    virtual const char  *credits (void) = 0;
+    virtual const char  *error   (void) const = 0;
+    virtual ISidUnknown *lock    (c64env *env, sid2_model_t model) = 0;
+    virtual void         unlock  (ISidUnknown &device) = 0;
 };
 
 #endif // _sidbuilder_h_
