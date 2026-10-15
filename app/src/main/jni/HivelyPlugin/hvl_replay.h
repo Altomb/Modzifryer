@@ -1,21 +1,34 @@
+/*
+  Original code from hvl2wav tool by
+  (C) Xeron/IRIS pete@petergordon.org.uk
+  
+  Code cleanup, fixes and adaptation by
+  (C) Vitamin/CAIG vitamin.caig@gmail.com
+*/
 
-typedef signed char int8;
-typedef unsigned char uint8;
-typedef short int16;
-typedef unsigned short uint16;
-typedef int int32;
-typedef unsigned int uint32;
-typedef double float64;
-typedef char TEXT;
-typedef int BOOL;
+#ifndef HVL_REPLAY_H
+#define HVL_REPLAY_H
 
-#define TRUE 1
-#define FALSE 0
+#include "types.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 // Woohoo!
 #define MAX_CHANNELS 16
 
-#define Period2Freq(period) ((3546897.f * 65536.f) / (period)) 
+// Some handy constants. Thanks eightbitbubsy.
+#define AMIGA_PAL_XTAL            28375160
+#define AMIGA_NTSC_XTAL           28636360
+#define AMIGA_CPU_PAL_CLK         ((AMIGA_PAL_XTAL / 4))
+#define AMIGA_CPU_NTSC_CLK        ((AMIGA_NTSC_XTAL / 4))
+#define AMIGA_CIA_PAL_CLK         ((AMIGA_CPU_PAL_CLK / 10))
+#define AMIGA_CIA_NTSC_CLK        ((AMIGA_CPU_NTSC_CLK / 10))
+#define AMIGA_PAULA_PAL_CLK       ((AMIGA_CPU_PAL_CLK / 2))
+#define AMIGA_PAULA_NTSC_CLK      ((AMIGA_CPU_NTSC_CLK / 2))
+
+#define Period2Freq(period) ((AMIGA_PAULA_PAL_CLK * 65536.f) / (period))
 
 struct hvl_envelope
 {
@@ -143,8 +156,8 @@ struct hvl_voice
   int16                  vc_PerfSpeed;
   int16                  vc_PerfWait;
   struct hvl_plist      *vc_PerfList;
-  int8                  *vc_AudioPointer;
-  int8                  *vc_AudioSource;
+  const int8            *vc_AudioPointer;
+  const int8            *vc_AudioSource;
   uint8                  vc_NoteDelayOn;
   uint8                  vc_NoteCutOn;
   int16                  vc_NoteDelayWait;
@@ -152,7 +165,7 @@ struct hvl_voice
   int16                  vc_AudioPeriod;
   int16                  vc_AudioVolume;
   int32                  vc_WNRandom;
-  int8                  *vc_MixSource;
+  const int8            *vc_MixSource;
   int8                   vc_SquareTempBuffer[0x80];
   int8                   vc_VoiceBuffer[0x282*4];
   uint8                  vc_VoiceNum;
@@ -165,12 +178,12 @@ struct hvl_voice
   uint32                 vc_PanMultRight;
   uint32                 vc_RingSamplePos;
   uint32                 vc_RingDelta;
-  int8                  *vc_RingMixSource;
+  const int8            *vc_RingMixSource;
   uint8                  vc_RingPlantPeriod;
   int16                  vc_RingInstrPeriod;
   int16                  vc_RingBasePeriod;
   int16                  vc_RingAudioPeriod;
-  int8                  *vc_RingAudioSource;
+  const int8            *vc_RingAudioSource;
   uint8                  vc_RingNewWaveform;
   uint8                  vc_RingWaveform;
   uint8                  vc_RingFixedPeriod;
@@ -182,8 +195,7 @@ struct hvl_tune
   TEXT                   ht_Name[128];
   uint16                 ht_SongNum;
   uint32                 ht_Frequency;
-  float64                ht_FreqF;
-  int8                  *ht_WaveformTab[MAX_CHANNELS];
+  const int8                  *ht_WaveformTab[MAX_CHANNELS];
   uint16                 ht_Restart;
   uint16                 ht_PositionNr;
   uint8                  ht_SpeedMultiplier;
@@ -213,13 +225,22 @@ struct hvl_tune
   int32                  ht_defpanright;
   int32                  ht_mixgain;
   uint8                  ht_Version;
+  uint16                 ht_ChannelsMask;
 };
 
-void hvl_DecodeFrame( struct hvl_tune *ht, int8 *buf1, int8 *buf2, int32 bufmod );
 void hvl_InitReplayer( void );
-BOOL hvl_InitSubsong( struct hvl_tune *ht, uint32 nr );
-struct hvl_tune *hvl_LoadTune( TEXT *name, uint32 freq, uint32 defstereo );
-struct hvl_tune *hvl_LoadTuneMemory( uint8 *buf, int buflen, uint32 freq, uint32 defstereo );
-
+struct hvl_tune *hvl_LoadTune( const TEXT *name, uint32 freq, uint32 defstereo );
+struct hvl_tune *hvl_ParseTune(const uint8 *buf, uint32 buflen, uint32 freq, uint32 defstereo );
 void hvl_FreeTune( struct hvl_tune *ht );
+BOOL hvl_InitSubsong( struct hvl_tune *ht, uint32 nr );
+void hvl_DecodeFrame( struct hvl_tune *ht, int8 *buf1, int8 *buf2, int32 bufmod );
+void hvl_NextFrame( struct hvl_tune *ht );
+void hvl_SetChannelsMask( struct hvl_tune *ht, uint32 mask );
 
+#ifdef __cplusplus
+}
+#endif
+
+#endif
+
+struct hvl_tune *hvl_LoadTuneMemory( const uint8 *buf, uint32 buflen, uint32 freq, uint32 defstereo );
