@@ -3,9 +3,7 @@
  * @brief   YM-2149 I/O plugin
  * @author  http://sourceforge.net/users/benjihan
  *
- * Copyright (C) 1998-2011 Benjamin Gerard
- *
- * Time-stamp: <2011-10-06 14:11:28 ben>
+ * Copyright (c) 1998-2016 Benjamin Gerard
  *
  * This program is free software: you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -27,6 +25,7 @@
 #ifdef HAVE_CONFIG_H
 # include "config.h"
 #endif
+#include "io68_private.h"
 
 #include "ym_io.h"
 #include "ymemul.h"
@@ -55,7 +54,7 @@ cycle68_t cycle_cputoym(const ym_io68_t * const ymio, const cycle68_t cycle)
     u64 cycle64 = cycle;
     cycle64 *= ymio->clock.mul;
     cycle64 /= ymio->clock.div;
-    return cycle64;
+    return (cycle68_t) cycle64;
   }
 }
 
@@ -72,7 +71,7 @@ cycle68_t cycle_ymtocpu(const ym_io68_t * const ymio, const cycle68_t cycle)
     u64 cycle64 = cycle;
     cycle64 *= ymio->clock.div;
     cycle64 /= ymio->clock.mul;
-    return cycle64;
+    return (cycle68_t) cycle64;
   }
 }
 
