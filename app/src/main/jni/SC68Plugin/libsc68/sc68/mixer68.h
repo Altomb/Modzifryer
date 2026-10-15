@@ -1,59 +1,63 @@
 /**
- * @ingroup   sc68_lib
+ * @ingroup   lib_sc68
  * @file      sc68/mixer68.h
+ * @brief     audio mixer header.
  * @author    Benjamin Gerard
  * @date      1999/05/17
- * @brief     audio mixer header.
- *
  */
 
-/* $Id: mixer68.h 102 2009-03-14 17:21:58Z benjihan $ */
+/* Copyright (c) 1998-2016 Benjamin Gerard */
 
-/* Copyright (C) 1998-2009 Benjamin Gerard */
-
-#ifndef _MIXER68_H_
-#define _MIXER68_H_
+#ifndef MIXER68_H
+#define MIXER68_H
 
 #include "emu68/type68.h"
 
-#ifndef SC68_EXTERN
-# ifdef __cplusplus
-#  define SC68_EXTERN extern "C"
+#ifndef MIXER68_API
+# ifdef SC68_EXTERN
+#  define MIXER68_API SC68_EXTERN
+# elif defined(__cplusplus)
+#  define MIXER68_API extern "C"
 # else
-#  define SC68_EXTERN
+#  define MIXER68_API
 # endif
 #endif
 
-/** @defgroup  sc68_mixer  audio mixer
- *  @ingroup   sc68_lib
+/**
+ * @defgroup  lib_sc68_mixer  Simple audio mixer
+ * @ingroup   lib_sc68
  *
- *  sc68 audio mixer provides functions for computing audio data PCM.
- *  Almost all functions work on 16 bit stereo PCM. Some functions
- *  require signed input to work properly. All functions allow to
- *  change PCM sign. Functions that require signed input perform a
- *  double sign change operation which allow to have any kind of input
- *  PCM.
+ *   sc68 audio mixer provides functions for computing audio data PCM.
+ *   Almost all functions work on 16 bit stereo PCM. Some functions
+ *   require signed input to work properly. All functions allow to
+ *   change PCM sign. Functions that require signed input perform a
+ *   double sign change operation which allow to have any kind of
+ *   input PCM.
  *
- *  Internaly PCM are read as 32bit integer. This implies that buffer
- *  must be properly aligned (depending on the architecture). Left
- *  channel is stored the less signifiant 16 bit and right the most
- *  signifiant 16 bit. Ensure the audio device use the same byte
- *  order.
+ *   Internaly PCM are read as 32bit integer. This implies that buffer
+ *   must be properly aligned (depending on the architecture). Left
+ *   channel is stored the less signifiant 16 bit and right the most
+ *   signifiant 16 bit. Ensure the audio device use the same byte
+ *   order.
  *
- *  @{
+ * @{
  */
 
-/** @name  Constants for PCM sign transformation.
- *  @{
+/**
+ * @name  Constants for PCM sign transformation.
+ * @{
  */
 #define MIXER68_SAME_SIGN                 0x00000000 /**< No channel.    */
 #define MIXER68_CHANGE_LEFT_CHANNEL_SIGN  0x00008000 /**< Left channel.  */
 #define MIXER68_CHANGE_RIGHT_CHANNEL_SIGN 0x80000000 /**< Right channel. */
 #define MIXER68_CHANGE_SIGN               0x80008000 /**< Both channels. */
-/**@}*/
+/**
+ * @}
+ */
 
-SC68_EXTERN
-/** Copy 16-bit-stereo PCM with optionnal sign change.
+MIXER68_API
+/**
+ * Copy 16-bit-stereo PCM with optionnal sign change.
  *
  * @param  dst  dstination PCM buffer
  * @param  src   Source PCM buffer (can be same as dst).
@@ -63,8 +67,10 @@ SC68_EXTERN
 void mixer68_stereo_16_LR(u32 * dst, u32 * src, int nb,
                           const u32 sign);
 
-SC68_EXTERN
-/** Copy 16-bit-stereo PCM with channel swapping and optionnal sign change.
+MIXER68_API
+/**
+ * Copy 16-bit-stereo PCM with channel swapping and optionnal sign
+ * change.
  *
  * @note  Sign change occurs after channel swapping.
  *
@@ -76,8 +82,9 @@ SC68_EXTERN
 void mixer68_stereo_16_RL(u32 * dst, u32 * src, int nb,
                           const u32 sign);
 
-SC68_EXTERN
-/** Copy 16-bit-stereo PCM into normalized float-stereo (-norm..+norm).
+MIXER68_API
+/**
+ * Copy 16-bit-stereo PCM into normalized float-stereo (-norm..+norm).
  *
  * @note     Sign change occurs before float transformation.
  * @warning  PCM are assumed to be signed after sign transform.
@@ -93,9 +100,10 @@ SC68_EXTERN
 void mixer68_stereo_FL_LR(float * dst, u32 * src, int nb,
                           const u32 sign, const float norm);
 
-SC68_EXTERN
-/** Copy left channel of 16-bit stereo PCM into L/R channels
- *  with optionnal sign change.
+MIXER68_API
+/**
+ * Copy left channel of 16-bit stereo PCM into L/R channels with
+ * optionnal sign change.
  *
  * @param  dst   Destination PCM buffer
  * @param  src   Source PCM buffer (can be same as dst).
@@ -104,9 +112,10 @@ SC68_EXTERN
  */
 void mixer68_dup_L_to_R(u32 * dst, u32 * src, int nb, const u32 sign);
 
-SC68_EXTERN
-/** Copy right channel of 16-bit stereo PCM into L/R channels
- *  with optionnal sign change.
+MIXER68_API
+/**
+ * Copy right channel of 16-bit stereo PCM into L/R channels
+ * with optionnal sign change.
  *
  * @param  dst   Destination PCM buffer
  * @param  src   Source PCM buffer (can be same as dst).
@@ -115,8 +124,9 @@ SC68_EXTERN
  */
 void mixer68_dup_R_to_L(u32 * dst, u32 * src, int nb, const u32 sign);
 
-SC68_EXTERN
-/** Copy 16-bit-stereo PCM with L/R blending and optionnal sign change.
+MIXER68_API
+/**
+ * Copy 16-bit-stereo PCM with L/R blending and optionnal sign change.
  *
  *  This function performs following transformations in this order :
  *  - Read 32 bit value from src.
@@ -142,9 +152,10 @@ void mixer68_blend_LR(u32 * dst, u32 * src, int nb,
                       int factor,
                       const u32 sign_r, const u32 sign_w);
 
-SC68_EXTERN
-/** Copy 16-bit-stereo PCM with L/R amplitude factor and
- *  optionnal sign change.
+MIXER68_API
+/**
+ * Copy 16-bit-stereo PCM with L/R amplitude factor and optionnal sign
+ * change.
  *
  *  This function performs following transformations in this order :
  *  - Read 32 bit value from src.
@@ -170,8 +181,9 @@ void mixer68_mult_LR(u32 * dst, u32 * src, int nb,
                      const int ml, const int mr,
                      const u32 sign_r, const u32 sign_w);
 
-SC68_EXTERN
-/** Fill 16-bit-stereo buffer with sign value (RRRRLLLL).
+MIXER68_API
+/**
+ * Fill 16-bit-stereo buffer with sign value (RRRRLLLL).
  *
  * @param  dst     Destination PCM buffer
  * @param  nb      Number of PCM
@@ -180,8 +192,9 @@ SC68_EXTERN
 void mixer68_fill(u32 * dst, int nb,
                   const u32 sign);
 
-SC68_EXTERN
-/** Copy 16-bit-stereo buffer.
+MIXER68_API
+/**
+ * Copy 16-bit-stereo buffer.
  *
  * @param  dst  Destination PCM buffer
  * @param  src  Source PCM buffer
@@ -190,7 +203,7 @@ SC68_EXTERN
 void mixer68_copy(u32 * dst, u32 * src, int nb);
 
 /**
- *  @}
+ * @}
  */
 
-#endif /* #ifndef _MIXER68_H_ */
+#endif
