@@ -15,24 +15,24 @@ public:
 	void volume( double );
 	void treble_eq( const blip_eq_t& );
 	void output( Blip_Buffer* );
-	enum { osc_count = 8 };
+	static const int osc_count = 8;
 	void osc_output( int index, Blip_Buffer* );
 	void reset();
 	void end_frame( blip_time_t );
-	
+
 	// Read/write data register is at 0x4800
-	enum { data_reg_addr = 0x4800 };
+	static const unsigned int data_reg_addr = 0x4800;
 	void write_data( blip_time_t, int );
 	int read_data();
-	
+
 	// Write-only address register is at 0xF800
-	enum { addr_reg_addr = 0xF800 };
+	static const unsigned int addr_reg_addr = 0xF800;
 	void write_addr( int );
-	
+
 	// to do: implement save/restore
 	void save_state( namco_state_t* out ) const;
 	void load_state( namco_state_t const& );
-	
+
 public:
 	Nes_Namco_Apu();
 	BLARGG_DISABLE_NOTHROW
@@ -40,38 +40,38 @@ private:
 	// noncopyable
 	Nes_Namco_Apu( const Nes_Namco_Apu& );
 	Nes_Namco_Apu& operator = ( const Nes_Namco_Apu& );
-	
+
 	struct Namco_Osc {
-		blargg_long delay;
+		int32_t delay;
 		Blip_Buffer* output;
 		short last_amp;
 		short wave_pos;
 	};
-	
+
 	Namco_Osc oscs [osc_count];
-	
+
 	blip_time_t last_time;
 	int addr_reg;
-	
-	enum { reg_count = 0x80 };
-	BOOST::uint8_t reg [reg_count];
+
+	static const int reg_count = 0x80;
+	uint8_t reg [reg_count];
 	Blip_Synth<blip_good_quality,15> synth;
-	
-	BOOST::uint8_t& access();
+
+	uint8_t& access();
 	void run_until( blip_time_t );
 };
 /*
 struct namco_state_t
 {
-	BOOST::uint8_t regs [0x80];
-	BOOST::uint8_t addr;
-	BOOST::uint8_t unused;
-	BOOST::uint8_t positions [8];
-	BOOST::uint32_t delays [8];
+	uint8_t regs [0x80];
+	uint8_t addr;
+	uint8_t unused;
+	uint8_t positions [8];
+	uint32_t delays [8];
 };
 */
 
-inline BOOST::uint8_t& Nes_Namco_Apu::access()
+inline uint8_t& Nes_Namco_Apu::access()
 {
 	int addr = addr_reg & 0x7F;
 	if ( addr_reg & 0x80 )
