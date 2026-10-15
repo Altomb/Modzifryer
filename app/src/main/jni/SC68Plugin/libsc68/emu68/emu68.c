@@ -1,11 +1,9 @@
 /*
- * @file    emu68.c
- * @brief   emu68 main API
+ * @file    emu68/emu68.c
+ * @brief   emu68 API
  * @author  http://sourceforge.net/users/benjihan
  *
- * Copyright (C) 1998-2011 Benjamin Gerard
- *
- * Time-stamp: <2011-10-28 22:45:13 ben>
+ * Copyright (c) 1998-2016 Benjamin Gerard
  *
  * This program is free software: you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -29,6 +27,7 @@
 # include "config.h"
 #endif
 
+#include "emu68_private.h"
 #include "struct68.h"
 #include "srdef68.h"
 #include "excep68.h"
@@ -36,11 +35,13 @@
 
 #include "emu68.h"
 #include "ioplug68.h"
+#include "io68/io68.h"
 
 #include "macro68.h"
 
 #include "inl68_exception.h"
 #include <string.h>
+#include <stdio.h>
 
 EMU68_EXTERN linefunc68_t *line_func[1024];
 
@@ -52,7 +53,7 @@ EMU68_EXTERN linefunc68_t *line_func[1024];
 /*  Set new interrupt IO
  *  return previous pointer
  */
-io68_t * emu68_set_interrupt_io(emu68_t * emu68, io68_t * io)
+io68_t * emu68_set_interrupt_io(emu68_t * const emu68, io68_t * const io)
 {
   io68_t * oldio = 0;
   if (emu68) {
@@ -120,11 +121,8 @@ void * emu68_get_cookie(emu68_t * const emu68)
 
 emu68_handler_t emu68_set_handler(emu68_t * const emu68, emu68_handler_t hdl)
 {
-  emu68_handler_t old = 0;
-  if (emu68) {
-    old = emu68->handler;
-    emu68->handler = hdl;
-  }
+  emu68_handler_t old = emu68->handler;
+  emu68->handler = hdl;
   return old;
 }
 
@@ -136,34 +134,49 @@ emu68_handler_t emu68_get_handler(emu68_t * const emu68)
     ;
 }
 
-const char * emu68_exception_name(unsigned int vector)
+const char * emu68_exception_name(unsigned int vector, char * buf)
 {
-  const char * ret = 0;
-
   static const char * xtra_names[] = {
-    "hw-brkp", "hw-trace", "hw-halt"
+    "hw-trace", "hw-halt", "hw-stop", "hw-reset", "hw-init", "hw-iovf"
   };
+
   static const char * xcpt_names[] = {
-    "reset", "reset_pc", "bus-error", "addr-error",
+    "reset-sp", "reset-pc", "bus-error", "addr-error",
     "illegal", "0-divide", "chk", "trapv", "privv",
     "trace", "linea", "linef"
   };
-  static const char * trap_names[] = {
-    "trap#0", "trap#1", "trap#2", "trap#3",
-    "trap#4", "trap#5", "trap#6", "trap#7",
-    "trap#8", "trap#9", "trap#A", "trap#B",
-    "trap#C", "trap#D", "trap#E", "trap#F",
-  };
-  if (vector >= 0x100) {
+
+  static char tmp[16];
+  if (!buf) buf = tmp;
+
+  switch ( vector & ~0xCFF ) {
+  case 0x000:
+    if (vector < sizeof(xcpt_names)/sizeof(*xcpt_names))
+      strcpy(buf,xcpt_names[vector]);
+    else if (vector >= TRAP_VECTOR(0) && vector <= TRAP_VECTOR(15))
+      sprintf(buf,"trap#%02d",vector-TRAP_VECTOR_0);
+    else
+      sprintf(buf,"vector#%02x",vector);
+    break;
+
+  case 0x100:
     vector -= 0x100;
-    if (vector < sizeof(xtra_names)/sizeof(*xtra_names))
-      ret = xtra_names[vector];
-  } else if (vector < sizeof(xcpt_names)/sizeof(*xcpt_names)) {
-    ret = xcpt_names[vector];
-  } else if (vector >= TRAP_VECTOR(0) && vector <= TRAP_VECTOR(15)) {
-    ret = trap_names[vector-TRAP_VECTOR_0];
+    if (vector < 0x20)
+      sprintf(buf,"hw-brkp#%02d",vector);
+    else if (vector-0x20 < sizeof(xtra_names)/sizeof(*xtra_names))
+      strcpy(buf,xtra_names[vector-0x20]);
+    else
+      sprintf(buf,"special#%02x",vector);
+    break;
+
+  case 0x200:
+    sprintf(buf,"private#%02x", vector-0x200);
+    break;
+  default:
+    sprintf(buf,"invalid#%d", vector);
+    break;
   }
-  return ret;
+  return buf;
 }
 
 /* ,-----------------------------------------------------------------.
@@ -175,13 +188,13 @@ u8 * emu68_memptr(emu68_t * const emu68, addr68_t dst, uint68_t sz)
 {
   u8 * ptr = 0;
   if (emu68) {
-    addr68_t end = (dst+sz)&MEMMSK68;
-    if (sz > MEMMSK68+1) {
+    const uint68_t adr = dst;
+    const uint68_t bot = MEMMSK68+1;
+    const uint68_t end = adr+sz;
+    if (adr >= bot || end > bot || adr > end) {
       emu68_error_add(emu68,
-                      "Not enough 68K memory ($%X>=$%X)",sz,emu68->memmsk);
-    } else if (end < dst) {
-      emu68_error_add(emu68,
-                      "68K memory overflow :($%X-%X,$%X)",dst,dst+sz,sz);
+                      "invalid memory range [$%06x..$%06x] > $%06x",
+                      adr,end,bot);
     } else {
       ptr = emu68->mem + dst;
     }
@@ -202,7 +215,7 @@ u8 * emu68_chkptr(emu68_t * const emu68, addr68_t dst, uint68_t sz)
 int emu68_peek(emu68_t * const emu68, addr68_t addr)
 {
   return emu68
-    ? emu68->mem[addr&MEMMSK68]
+    ? emu68->mem[addr & MEMMSK68]
     : -1
     ;
 }
@@ -210,7 +223,7 @@ int emu68_peek(emu68_t * const emu68, addr68_t addr)
 int emu68_chkpeek(emu68_t * const emu68, addr68_t addr)
 {
   return (emu68 && emu68->chk)
-    ? emu68->chk[addr&MEMMSK68]
+    ? emu68->chk[addr & MEMMSK68]
     : -1
     ;
 }
@@ -233,7 +246,7 @@ int emu68_chkpoke(emu68_t * const emu68, addr68_t addr, int68_t v)
 
 /*  Write memory block to 68K on board memory
  */
-int emu68_memput(emu68_t * const emu68, addr68_t dst, u8 *src, uint68_t sz)
+int emu68_memput(emu68_t * const emu68, addr68_t dst, const u8 *src, uint68_t sz)
 {
   u8 * ptr = emu68_memptr(emu68,dst,sz);
   if (ptr) {
@@ -265,9 +278,8 @@ int emu68_memset(emu68_t * const emu68, addr68_t dst, u8 val, uint68_t sz)
       sz = emu68->memmsk + 1 - dst;
     }
     ptr = emu68_memptr(emu68, dst, sz);
-    if (ptr) {
-      while (sz--) *ptr++ = val;
-    }
+    if (ptr)
+      memset(ptr,val,sz);
   }
   return -!ptr;
 }
@@ -283,14 +295,27 @@ int emu68_chkset(emu68_t * const emu68, addr68_t dst, u8 val, uint68_t sz)
       sz = emu68->memmsk+1-dst;
     }
     ptr = emu68_chkptr(emu68, dst, sz);
-    if (ptr) {
-      while (sz--) *ptr++ = val;
-    }
+    if (ptr)
+      memset(ptr,val,sz);
   }
   return -!ptr;
 }
 
-#include "crc32.inc"
+static uint_t crc32b(uint_t crc, u8 * ptr, int len)
+{
+  u8 * end = ptr + len;
+  /* crc = (u32)~crc; */
+  while (ptr < end) {
+    int j;
+    crc ^= *ptr++;
+    for (j = 7; j >= 0; j--) {
+      const int mask = -(int)(crc & 1);
+      crc = (crc >> 1) ^ (0xEDB88320 & mask);
+    }
+  }
+  /* crc = (u32)~crc; */
+  return crc;
+}
 
 uint68_t emu68_crc32(emu68_t * const emu68)
 {
@@ -310,8 +335,8 @@ uint68_t emu68_crc32(emu68_t * const emu68)
     tmp[i++] = emu68->reg.sr;
     assert ( i == sizeof(tmp) );
 
-    crc = crc32(crc, tmp, i);
-    crc = crc32(crc, emu68->mem, emu68->memmsk+1);
+    crc = crc32b(0xFFFFFFFF, tmp, i);
+    crc = crc32b(crc, emu68->mem, emu68->memmsk+1);
   }
   return crc;
 }
@@ -323,6 +348,13 @@ static inline void step68(emu68_t * const emu68)
   u8 * mem;
 
   assert( emu68->status == EMU68_NRM );
+  emu68->inst_pc = REG68.pc;
+  /* Save the sr and rise the trace exception if needed. */
+  if ( ((emu68->inst_sr = emu68->reg.sr) & SR_T) ) {
+    inl_exception68(emu68, TRACE_VECTOR, -1);
+    if (emu68->status != EMU68_NRM)
+      return;
+  }
 
   /* TODO: check address valid */
   mem = emu68->mem + (REG68.pc & (MEMMSK68 & ~1));
@@ -349,36 +381,45 @@ static inline void step68(emu68_t * const emu68)
   (line_func[line])(emu68, reg9, opw);
 }
 
-/* $$$ evil duplicated code from mem68.c */
-static void chkframe(emu68_t * const emu68, addr68_t addr, const int flags)
-{
-  int oldchk;
-
-  assert ( ! (addr & 0x800000) );
-  addr &= MEMMSK68;
-  oldchk = emu68->chk[addr];
-  if ( ( oldchk & flags ) != flags ) {
-    emu68->framechk |= flags;
-    emu68->chk[addr] = oldchk|flags;
-  }
+static inline int valid_bp(const unsigned int id) {
+  return id < 31u;
 }
 
-/* Run a single step emulation with all pogramm controls. */
+static inline int free_bp(const emu68_t * const emu68, const int id) {
+  return !emu68->breakpoints[id].count;
+}
+
+/* Run a single step emulation with all program controls. */
 static inline int controlled_step68(emu68_t * const emu68)
 {
   assert( emu68->status == EMU68_NRM );
 
-  /* Running in debug mode. */
+  /* running in debug mode. */
   if (emu68->chk) {
+    int       id;
+    addr68_t  addr;
      /* HardWare TRACE exception */
-    exception68(emu68, HWTRACE_VECTOR, -1);
+    inl_exception68(emu68, HWTRACE_VECTOR, -1);
     if (emu68->status != EMU68_NRM)
       return emu68->status;
-     /* HardWare BREAKPOINT exception */
-    if (emu68->chk[ REG68.pc & MEMMSK68 ] & EMU68_B) {
-      exception68(emu68, HWBREAK_VECTOR, -1);
-      if (emu68->status != EMU68_NRM)
-        return emu68->status;
+     /* HardWare BREAKPOINT exception: the memory is flagged with a
+      * breakpoint number and that breakpoint is active.
+      */
+    addr = REG68.pc & MEMMSK68;
+    id = (emu68->chk[addr] >> 3) - 1;
+    if (valid_bp(id) && emu68->breakpoints[id].count) {
+      assert( addr == emu68->breakpoints[id].addr );
+      if (! --emu68->breakpoints[id].count ) {
+        /* breakpoint count reachs 0, it is an actual break:
+         * - run the appropriate exception
+         * - reset the breakpoint; delete it if neccessary
+         */
+        if (! (emu68->breakpoints[id].count = emu68->breakpoints[id].reset))
+          emu68->chk[addr] &= EMU68_A;
+        inl_exception68(emu68, HWBREAK_VECTOR+id, -1);
+        if (emu68->status != EMU68_NRM)
+          return emu68->status;
+      }
     }
     chkframe(emu68, REG68.pc, EMU68_X);
   }
@@ -388,7 +429,10 @@ static inline int controlled_step68(emu68_t * const emu68)
 
   /* Instruction countdown */
   if ( emu68->instructions && !--emu68->instructions )
-    emu68->status = EMU68_BRK;
+    if (emu68->status == EMU68_NRM) {
+      emu68->status = EMU68_BRK;
+      inl_exception68(emu68, HWINSTOV_VECTOR, -1);
+    }
 
   return emu68->status;
 }
@@ -396,6 +440,8 @@ static inline int controlled_step68(emu68_t * const emu68)
 static void loop68(emu68_t * const emu68)
 {
   assert( ! (emu68->finish_sp & 1 ) );
+  assert( emu68->status == EMU68_NRM );
+
   while ( controlled_step68(emu68) == EMU68_NRM &&
           emu68->finish_sp >= (addr68_t) REG68.a[7] )
     ;
@@ -406,52 +452,37 @@ const char * emu68_status_name(enum emu68_status_e status)
   switch (status) {
   case EMU68_ERR: return "error";
   case EMU68_NRM: return "ok";
-  case EMU68_STP: return "halt";
+  case EMU68_STP: return "stop";
+  case EMU68_HLT: return "halt";
   case EMU68_BRK: return "break";
   case EMU68_XCT: return "exception";
   }
+
+  assert(!"unknown emu68 status");
+
   return "unknown";
 }
 
 /* Execute one instruction. */
-int emu68_step(emu68_t * const emu68)
+int emu68_step(emu68_t * const emu68, uint68_t inst)
 {
   int rc = EMU68_ERR;
+
+  assert (emu68);
+  assert (inst == EMU68_STEP || inst == EMU68_CONT);
+
   if (emu68) {
-    switch (emu68->status) {
-    case EMU68_NRM:
-      emu68->framechk = 0;
-    case EMU68_BRK:
+    if (inst == EMU68_STEP) {
+      emu68->frm_chk_fl = 0;
       emu68->status = EMU68_NRM;
-      /* loop68(emu68); */
-      controlled_step68(emu68);
-    case EMU68_STP:
-      rc = emu68->status;
-      break;
-    default:
-      assert(!"unexpected value for emu68_t::status");
-      break;
     }
-  }
-  return rc;
-}
 
-/* Continue after a break. */
-int emu68_continue(emu68_t * const emu68)
-{
-  int rc = EMU68_ERR;
-
-  if (emu68) {
     switch (emu68->status) {
-
     case EMU68_NRM:
-      /* Nothing to continue: error */
-      break;
-
-    case EMU68_BRK:
-      emu68->status = EMU68_NRM;
       controlled_step68(emu68);
+    case EMU68_BRK:
     case EMU68_STP:
+    case EMU68_HLT:
       rc = emu68->status;
       break;
 
@@ -467,33 +498,44 @@ int emu68_finish(emu68_t * const emu68, uint68_t instructions)
 {
   io68_t *io;
 
-  if (!emu68) {
+  assert (emu68);
+  if (!emu68)
     return EMU68_ERR;
+
+
+  if (instructions != EMU68_CONT) {
+    emu68->finish_sp    = REG68.a[7];
+    emu68->frm_chk_fl   = 0;
+    emu68->instructions = instructions;
   }
 
-  emu68->finish_sp    = REG68.a[7];
-  emu68->framechk     = 0;
-  emu68->instructions = instructions;
-
-  for (io=emu68->iohead; io; io=io->next) {
-    io->adjust_cycle(io,emu68->cycle);
+  if (emu68->cycle) {
+    for (io=emu68->iohead; io; io=io->next) {
+      io->adjust_cycle(io, emu68->cycle);
+    }
+    emu68->cycle = 0;
   }
-  emu68->cycle = 0;
 
+  emu68->status = EMU68_NRM;
+  /* assert ( emu68->status == EMU68_NRM ); */
   loop68(emu68);
 
   return emu68->status;
 }
 
-/* Execute one instruction. */
+/* Execute interruptions. */
 int emu68_interrupt(emu68_t * const emu68, cycle68_t cycleperpass)
 {
-
-  if (!emu68) {
+  assert(emu68);
+  if (!emu68)
     return EMU68_ERR;
-  }
 
   assert ( emu68->status == EMU68_NRM || emu68->status == EMU68_STP );
+
+  /* Clear STOP mode. If interrupt is running it means execution is
+   * not stopped anymore.
+   */
+  emu68->status = EMU68_NRM;
 
   /* Get interrupt IO (MFP) if any */
   if (emu68->interrupt_io) {
@@ -506,6 +548,14 @@ int emu68_interrupt(emu68_t * const emu68, cycle68_t cycleperpass)
       emu68->cycle = t->cycle;
       if (t->level > ipl) {
         inl_exception68(emu68, t->vector, t->level);
+        if (emu68->status != EMU68_NRM)
+
+        /* $$$ ignore break in interrupt atm as we can't resume
+         * properly
+         */
+        if (emu68->status == EMU68_BRK)
+          emu68->status = EMU68_NRM;
+
         emu68->finish_sp = (addr68_t) REG68.a[7];
         loop68(emu68);
       }
@@ -516,231 +566,11 @@ int emu68_interrupt(emu68_t * const emu68, cycle68_t cycleperpass)
   return emu68->status;
 }
 
-#if 0
-/* Run until RTS level0 occurs
- * and play Interruption for 1 pass.
- * ( Specific SC68 !!! )
- */
-void emu68_level_and_interrupt(emu68_t * const emu68,
-                               cycle68_t cycleperpass)
-{
-  addr68_t stack, pc;
-  cycle68_t cycle;
-  io68_t *io;
-
-  if (!emu68) {
-    return;
-  }
-  stack = REG68.a[7];
-  pc = REG68.pc;
-  REG68.a[7] = stack - 4;
-
-  /* Clear ORed memory access flags ... */
-  emu68->framechk = 0;
-
-  /* Adjust internal IO cycle counter */
-  for (io=emu68->iohead; io; io=io->next) {
-    (io->adjust_cycle)(io,emu68->cycle);
-  }
-  emu68->cycle = 0;
-
-  /* Do until RTS */
-  do {
-    step68(emu68);
-  } while (stack>(addr68_t)REG68.a[7]);
-
-  cycle=0;
-
-  /* Get interrupt IO (MFP) if any */
-  if (emu68->interrupt_io) {
-    interrupt68_t * t;
-    int ipl = (REG68.sr & (7<<SR_I_BIT)) >> SR_I_BIT;
-#ifdef _DEBUG
-    int ipl_lost = 0;
-    int irq_pass = 0;
-#endif
-    /* $$$ HACK: mfp interupt at level 5 */
-    /* $$$ TEMP: FOR DEBUGIN A MUSIC !! */
-    if ( /*1 ||*/ 6 > ipl ) {
-      do {
-
-        /* Spool interrupt */
-        /* Execute mfp interrupt emulation */
-        t = emu68->interrupt_io->interrupt(emu68->interrupt_io, cycleperpass);
-        if (t) {
-#ifdef DEBUG
-          if (t->cycle >= cycleperpass) {
-            *(int *)0 = 0xDEADBEEF;
-          }
-#endif
-
-
-          emu68->cycle=t->cycle;
-          REG68.a[7] = stack; /* $$$ Safety net */
-          REG68.pc = 0x12345678;
-          inl_exception68(emu68,t->vector,t->level);
-          poll_rte(emu68, stack);
-#ifdef _DEBUG
-          if (REG68.pc != 0x12345678) {
-            BREAKPOINT68;
-          }
-          if (REG68.a[7] != stack) {
-            BREAKPOINT68;
-          }
-          if (!(REG68.sr & 0x2000)) {
-            BREAKPOINT68;
-          }
-#endif
-        } else {
-          //          BREAKPOINT68;
-          break; //$$$ ???
-        }
-      } while (t);
-    } else {
-      // ipl masks irq
-#ifdef _DEBUG
-      // This happens sometime
-      //BREAKPOINT68;
-      ipl_lost++;
-#endif
-    }
-  }
-
-  /* Restore A7, PC, and new cycle counter */
-  REG68.a[7]  = stack;
-  REG68.pc    = pc;
-  emu68->cycle = cycleperpass;
-}
-
-/* Run like a JSR at pc, exec interrupt if cycleperpass > 0.
- */
-void emu68_run_rts(emu68_t * const emu68,
-                   addr68_t pc, cycle68_t cycleperpass)
-{
-  addr68_t stack;
-
-  if (!emu68) {
-    return;
-  }
-
-  /* Push current pc .*/
-  stack = REG68.a[7];
-  pushl(REG68.pc);
-  REG68.pc = pc;
-
-  /* Clear ORed memory access flags ... */
-  emu68->framechk = 0;
-
-  /* Adjust internal IO cycle counter & find MFP */
-  if (emu68->cycle) {
-    io68_t *io;
-    for (io=emu68->iohead; io; io=io->next) {
-      (io->adjust_cycle)(io, emu68->cycle);
-    }
-    emu68->cycle = 0;
-  }
-
-  /* Do until RTS */
-  do {
-    step68(emu68);
-  } while (stack > (addr68_t)REG68.a[7]);
-
-  /* Get interrupt IO (MFP) if any */
-  if (cycleperpass && emu68->interrupt_io) {
-    interrupt68_t *t;
-    int ipl = (REG68.sr & (7<<SR_I_BIT)) >> SR_I_BIT;
-    cycle68_t cycle = 0;
-
-    if (6 > ipl ) {
-      cycle68_t fd;
-
-      /* Spool interrupt */
-      while (fd =
-             emu68->interrupt_io->next_interrupt(emu68->interrupt_io,cycle),
-             fd != IO68_NO_INT) {
-        /* ... This must not happen ...  */
-        if( (int)fd < 0 ) {
-          fd = 0;
-        }
-
-        /* ... */
-
-        /* TIME travel to next interruption */
-        cycle += fd;
-
-        if(cycle >= cycleperpass) {
-          /* interrupt after this pass */
-          break;
-        }
-
-        /* Execute mfp interrupt emulation */
-        t = emu68->interrupt_io->interrupt(emu68->interrupt_io,cycle);
-        if (t) {
-          emu68->cycle=cycle;
-          REG68.a[7] = stack; /* $$$ Safety net */
-          inl_exception68(emu68,t->vector,t->level);
-          poll_rte(emu68,stack);
-        }
-      }
-    }
-  }
-  emu68->cycle = cycleperpass;
-}
-
-
-/* Run emulation for given number of cycle
- */
-void emu68_cycle(emu68_t * const emu68, cycle68_t cycleperpass)
-{
-  cycle68_t cycle;
-  io68_t *io;
-
-  /* Clear ORed memory access flags ... */
-  REG68.framechk = 0;
-
-  /* Adjust internal IO cycle counter */
-  for (io=emu68->iohead; io; io=io->next) {
-    (io->adjust_cycle)(io, emu68->cycle);
-  }
-
-  /* Do until RTS */
-  cycle = emu68->cycle = 0;
-  do
-  {
-    /* If not stopped, execute an instruction */
-    if (1/* !REG68.status */) {
-      step68(emu68);
-      cycle += 4;
-    }
-    emu68->cycle = cycle;
-
-    if (emu68->interrupt_io) {
-      interrupt68_t *t;
-      int ipl;
-
-      ipl = (REG68.sr & (7<<SR_I_BIT)) >> SR_I_BIT;
-
-      /* $$$ HACK : mfp interupt at level 5 */
-      if (6 > ipl) {
-        t = emu68->interrupt_io->interrupt(emu68->interrupt_io,cycle);
-        if (t) {
-          inl_exception68(emu68,t->vector,t->level);
-          /* $$$ extra cycle should be added here for exception handle */
-        }
-      }
-    }
-  } while(cycle < cycleperpass);
-
-  // $$$ This is hack : should be "cycle" and handle later
-  cycle = cycleperpass;
-  emu68->cycle = cycle;
-}
-
-#endif
 
 /* Get debug mode.  */
 int emu68_debugmode(emu68_t * const emu68)
 {
+  assert(emu68);
   return emu68
     ? !!emu68->chk
     : -1
@@ -755,7 +585,9 @@ int emu68_debugmode(emu68_t * const emu68)
 static void bp_reset(emu68_t * const emu68)
 {
   int id;
-  for ( id=0; id<16; ++id ) {
+  assert(emu68);
+
+  for ( id=0; valid_bp(id); ++id ) {
     emu68->breakpoints[id].addr  = 0;
     emu68->breakpoints[id].count = 0;
     emu68->breakpoints[id].reset = 0;
@@ -765,17 +597,21 @@ static void bp_reset(emu68_t * const emu68)
 void emu68_bp_delall(emu68_t * const emu68)
 {
   int id;
-  for ( id=0; id<16; ++id ) {
+  assert(emu68);
+
+  for ( id=0; valid_bp(id); ++id ) {
     emu68_bp_del(emu68, id);
   }
 }
 
 void emu68_bp_del(emu68_t * const emu68, int id)
 {
-  if (emu68 && (unsigned int)id<16u) {
-    if (emu68->chk && emu68->breakpoints[id].count ) {
+  assert(emu68);
+
+  if (emu68 && valid_bp(id)) {
+    if (emu68->chk && !free_bp(emu68,id)) {
       const addr68_t addr = emu68->breakpoints[id].addr & MEMMSK68;
-      emu68->chk[addr] &= ~(EMU68_B|EMU68_M);
+      emu68->chk[addr] &= EMU68_A;
     }
     emu68->breakpoints[id].addr  = 0;
     emu68->breakpoints[id].count = 0;
@@ -786,18 +622,20 @@ void emu68_bp_del(emu68_t * const emu68, int id)
 int emu68_bp_set(emu68_t * const emu68, int id,
                  addr68_t addr, uint68_t count, uint68_t reset)
 {
+  assert(emu68);
+
   if (!emu68) {
     id = -1;
   } else {
     if ( id == -1 )
-      for ( id=0; id<16 && emu68->breakpoints[id].count; ++id)
+      for ( id=0; valid_bp(id) && !free_bp(emu68,id); ++id)
         ;
-    if ( (unsigned int) id < 16u) {
+    if ( valid_bp(id) ) {
       emu68->breakpoints[id].addr  = addr &= MEMMSK68;
       emu68->breakpoints[id].count = count;
       emu68->breakpoints[id].reset = reset;
       if (emu68->chk)
-        emu68->chk[addr] = (emu68->chk[addr] & ~EMU68_M) | EMU68_B | (id<<4);
+        emu68->chk[addr] = (emu68->chk[addr] & EMU68_A) | ((id+1)<<3);
     } else {
       id = -1;
     }
@@ -808,10 +646,12 @@ int emu68_bp_set(emu68_t * const emu68, int id,
 int emu68_bp_find(emu68_t * const emu68, addr68_t addr)
 {
   int id = -1;
+
+  assert(emu68);
   if (emu68) {
     int i;
-    for ( i=0; i<16; ++i ) {
-      if (emu68->breakpoints[i].count &&
+    for ( i=0; valid_bp(i); ++i ) {
+      if ( !free_bp(emu68, i) &&
           !( (emu68->breakpoints[i].addr ^ addr) & MEMMSK68 ) ) {
         id = i;
         break;
@@ -827,6 +667,8 @@ int emu68_bp_find(emu68_t * const emu68, addr68_t addr)
  * `-----------------------------------------------------------------'
  */
 
+extern io68_t * mem68_io(void);
+
 static emu68_parms_t def_parms;
 
 emu68_t * emu68_create(emu68_parms_t * const parms)
@@ -840,7 +682,8 @@ emu68_t * emu68_create(emu68_parms_t * const parms)
   }
   if (p->log2mem < 16 || p->log2mem > 24) {
     emu68_error_add(emu68,
-                    "Invalid requested amount of memory -- 2^%d", p->log2mem);
+                    "invalid requested amount of memory -- 2^%d",
+                    p->log2mem);
     goto error;
   }
 
@@ -849,27 +692,29 @@ emu68_t * emu68_create(emu68_parms_t * const parms)
   }
   if (p->clock<500000u || p->clock>60000000u) {
     emu68_error_add(emu68,
-                    "Invalid clock frequency -- %u", p->clock);
+                    "invalid clock frequency -- %u", p->clock);
     goto error;
   }
 
   memsize = 1 << p->log2mem;
   membyte = sizeof(emu68_t) + (memsize << !!p->debug);
   emu68   = emu68_alloc(membyte);
-  if (!emu68) {
+  if (!emu68)
     goto error;
-  }
-  memset(emu68,0,membyte);
+
+  memset(emu68,0,sizeof(emu68_t));
+  /* memset(emu68,0,membyte); */ /* this is too heavy just don't */
+
   strncpy(emu68->name,p->name?p->name:"emu68",sizeof(emu68->name)-1);
   emu68->clock = p->clock;
 
   emu68->log2mem = p->log2mem;
   emu68->memmsk  = memsize-1;
-  if (p->debug) {
-    emu68->chk = emu68->mem + memsize+8;
-  }
-
+  emu68->chk     = p->debug ? emu68->mem + memsize + 8 : 0;
   emu68_mem_init(emu68);
+  /* Notice that emu68_reset() triggers the HWVECTOR_INIT exception
+   * but it won't be catch by the user as as at this point it is null.
+   */
   emu68_reset(emu68);
 
 error:
@@ -881,6 +726,10 @@ emu68_t * emu68_duplicate(emu68_t * emu68src, const char * dupname)
   emu68_parms_t parms;
   emu68_t * emu68 = 0;
 
+  assert(!"This function needs rework");
+  return 0;
+
+  assert(emu68src);
   if (!emu68src)
     goto error;
 
@@ -896,7 +745,12 @@ emu68_t * emu68_duplicate(emu68_t * emu68src, const char * dupname)
   /* Copy registers and status */
   emu68->reg          = emu68src->reg;
   emu68->cycle        = emu68src->cycle;
-  emu68->framechk     = emu68src->framechk;
+
+  /* Copy memory access control stuff */
+  emu68->frm_chk_fl   = emu68src->frm_chk_fl;
+  emu68->fst_chk      = emu68src->fst_chk;
+  emu68->lst_chk      = emu68src->lst_chk;
+
   emu68->instructions = emu68src->instructions;
   emu68->finish_sp    = emu68src->finish_sp;
   emu68->status       = emu68src->status;
@@ -907,7 +761,10 @@ emu68_t * emu68_duplicate(emu68_t * emu68src, const char * dupname)
     memcpy(emu68->chk, emu68src->chk, 1<<emu68->log2mem);
 
   /* Copy breakpoints */
-  memcpy(emu68->breakpoints, emu68src->breakpoints, sizeof(emu68->breakpoints));
+  memcpy(emu68->breakpoints, emu68src->breakpoints,
+         sizeof(emu68->breakpoints));
+
+  /* TODO: all related IO stuff */
 
 error:
   return emu68;
@@ -918,6 +775,7 @@ void emu68_destroy(emu68_t * const emu68)
 {
   if (emu68) {
     emu68_ioplug_destroy_all(emu68);
+    emu68_mem_destroy(emu68);
     emu68_free(emu68);
   }
 }
@@ -931,24 +789,44 @@ void emu68_destroy(emu68_t * const emu68)
  */
 void emu68_reset(emu68_t * const emu68)
 {
+  assert(emu68);
   if (emu68) {
     io68_t * io;
-    for (io=emu68->iohead; io; io=io->next) {
-      (io->reset)(io);
-    }
+
+    /* Reset IOs */
+    for (io=emu68->iohead; io; io=io->next)
+      io68_reset(io);
+    io68_reset(emu68->memio);
+    if (&emu68->ramio != emu68->memio)
+      io68_reset(&emu68->ramio);
+    if (&emu68->errio != emu68->memio)
+      io68_reset(&emu68->errio);
+
+    /* Reset breakpoints. */
     bp_reset(emu68);
 
+    /* Reset registers. */
     memset(REG68.d,0,sizeof(REG68.d)*2);
     REG68.pc     = 0;
     REG68.sr     = 0x2700;
     REG68.a[7]   = MEMMSK68+1-4;
     REG68.usp    = REG68.a[7];
 
+    /* Reset internals */
+    emu68->nerr         = 0;
     emu68->cycle        = 0;
-    emu68->framechk     = 0;
+    emu68->frm_chk_fl   = 0;
     emu68->instructions = 0;
     emu68->finish_sp    = -1;
     emu68->status       = EMU68_NRM;
+    emu68->inst_sr      = emu68->inst_pc = -1;
+
+    /* Reset memory access control flags */
+    if (emu68->chk)
+      memset(emu68->chk, 0, emu68->memmsk+1);
+
+    /* Notify init is complete */
+    inl_exception68(emu68, HWINIT_VECTOR, -1);
   }
 }
 
@@ -961,7 +839,7 @@ void emu68_reset(emu68_t * const emu68)
 int emu68_init(int * argc, char ** argv)
 {
   def_parms.name    = 0;
-  def_parms.log2mem = 19;            /* log2mem: 2^19 => 512 kB */
+  def_parms.log2mem = 20;               /* log2mem: 2^20 => 1 mB */
   def_parms.clock   = EMU68_ATARIST_CLOCK;
   def_parms.debug   = 0;
 
