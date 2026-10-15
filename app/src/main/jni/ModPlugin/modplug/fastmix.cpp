@@ -9,7 +9,7 @@
 #include "sndfile.h"
 #include <math.h>
 
-#ifdef MSC_VER
+#if defined(_MSC_VER) && defined(_M_IX86)
 #pragma bss_seg(".modplug")
 #endif
 
@@ -27,7 +27,7 @@ int MixRearBuffer[MIXBUFFERSIZE*2];
 float MixFloatBuffer[MIXBUFFERSIZE*2];
 #endif
 
-#ifdef MSC_VER
+#if defined(_MSC_VER) && defined(_M_IX86)
 #pragma bss_seg()
 #endif
 
@@ -146,7 +146,7 @@ CzCUBICSPLINE sspline;
    fir interpolation doc,
      (derived from "an engineer's guide to fir digital filters", n.j. loy)
 
-     calculate coefficients for ideal lowpass filter (with cutoff = fc in 
+     calculate coefficients for ideal lowpass filter (with cutoff = fc in
 	0..1 (mapped to 0..nyquist))
      c[-N..N] = (i==0) ? fc : sin(fc*pi*i)/(pi*i)
 
@@ -189,25 +189,25 @@ CzCUBICSPLINE sspline;
 #define M_zBESSELEPS	1e-21
 
 class CzWINDOWEDFIR
-{	
+{
 public:
 	CzWINDOWEDFIR( );
 	~CzWINDOWEDFIR( );
-	float coef( int _PCnr, float _POfs, float _PCut, int _PWidth, int _PType ) 
+	float coef( int _PCnr, float _POfs, float _PCut, int _PWidth, int _PType )
 //OLD args to coef: float _PPos, float _PFc, int _PLen )
-	{	
+	{
 		double	_LWidthM1       = _PWidth-1;
 		double	_LWidthM1Half   = 0.5*_LWidthM1;
 		double	_LPosU          = ((double)_PCnr - _POfs);
 		double	_LPos           = _LPosU-_LWidthM1Half;
 		double	_LPIdl          = 2.0*M_zPI/_LWidthM1;
 		double	_LWc,_LSi;
-		if( fabs(_LPos)<M_zEPS ) {	
+		if( fabs(_LPos)<M_zEPS ) {
 			_LWc	= 1.0;
 			_LSi	= _PCut;
-		} else {	
+		} else {
 			switch( _PType )
-			{	
+			{
 			case WFIR_HANN:
 				_LWc = 0.50 - 0.50 * cos(_LPIdl*_LPosU);
 				break;
@@ -215,30 +215,30 @@ public:
 				_LWc = 0.54 - 0.46 * cos(_LPIdl*_LPosU);
 				break;
 			case WFIR_BLACKMANEXACT:
-				_LWc = 0.42 - 0.50 * cos(_LPIdl*_LPosU) + 
+				_LWc = 0.42 - 0.50 * cos(_LPIdl*_LPosU) +
 					0.08 * cos(2.0*_LPIdl*_LPosU);
 				break;
 			case WFIR_BLACKMAN3T61:
-				_LWc = 0.44959 - 0.49364 * cos(_LPIdl*_LPosU) + 
+				_LWc = 0.44959 - 0.49364 * cos(_LPIdl*_LPosU) +
 					0.05677 * cos(2.0*_LPIdl*_LPosU);
 				break;
 			case WFIR_BLACKMAN3T67:
-				_LWc = 0.42323 - 0.49755 * cos(_LPIdl*_LPosU) + 
+				_LWc = 0.42323 - 0.49755 * cos(_LPIdl*_LPosU) +
 					0.07922 * cos(2.0*_LPIdl*_LPosU);
 				break;
 			case WFIR_BLACKMAN4T92:
-				_LWc = 0.35875 - 0.48829 * cos(_LPIdl*_LPosU) + 
-					0.14128 * cos(2.0*_LPIdl*_LPosU) - 
+				_LWc = 0.35875 - 0.48829 * cos(_LPIdl*_LPosU) +
+					0.14128 * cos(2.0*_LPIdl*_LPosU) -
 					0.01168 * cos(3.0*_LPIdl*_LPosU);
 				break;
 			case WFIR_BLACKMAN4T74:
-				_LWc = 0.40217 - 0.49703 * cos(_LPIdl*_LPosU) + 
-					0.09392 * cos(2.0*_LPIdl*_LPosU) - 
+				_LWc = 0.40217 - 0.49703 * cos(_LPIdl*_LPosU) +
+					0.09392 * cos(2.0*_LPIdl*_LPosU) -
 					0.00183 * cos(3.0*_LPIdl*_LPosU);
 				break;
 			case WFIR_KAISER4T:
-				_LWc = 0.40243 - 0.49804 * cos(_LPIdl*_LPosU) + 
-					0.09831 * cos(2.0*_LPIdl*_LPosU) - 
+				_LWc = 0.40243 - 0.49804 * cos(_LPIdl*_LPosU) +
+					0.09831 * cos(2.0*_LPIdl*_LPosU) -
 					0.00122 * cos(3.0*_LPIdl*_LPosU);
 				break;
 			default:
@@ -256,14 +256,14 @@ public:
 signed short CzWINDOWEDFIR::lut[WFIR_LUTLEN*WFIR_WIDTH];
 
 CzWINDOWEDFIR::CzWINDOWEDFIR()
-{	
+{
 	int _LPcl;
 	float _LPcllen	= (float)(1L<<WFIR_FRACBITS);	// number of precalculated lines for 0..1 (-1..0)
 	float _LNorm	= 1.0f / (float)(2.0f * _LPcllen);
 	float _LCut		= WFIR_CUTOFF;
 	float _LScale	= (float)WFIR_QUANTSCALE;
 	for( _LPcl=0;_LPcl<WFIR_LUTLEN;_LPcl++ )
-	{	
+	{
 		float _LGain,_LCoefs[WFIR_WIDTH];
 		float _LOfs		= ((float)_LPcl-_LPcllen)*_LNorm;
 		int _LCc,_LIdx	= _LPcl<<WFIR_LOG2WIDTH;
@@ -287,8 +287,14 @@ CzWINDOWEDFIR sfir;
 // ----------------------------------------------------------------------------
 // MIXING MACROS
 // ----------------------------------------------------------------------------
+#if defined(__cplusplus) && (__cplusplus >= 201402L)
+#define REGISTER
+#else
+#define REGISTER register
+#endif
+
 #define SNDMIX_BEGINSAMPLELOOP8\
-	register MODCHANNEL * const pChn = pChannel;\
+	REGISTER MODCHANNEL * const pChn = pChannel;\
 	nPos = pChn->nPosLo;\
 	const signed char *p = (signed char *)(pChn->pCurrentSample+pChn->nPos);\
 	if (pChn->dwFlags & CHN_STEREO) p += pChn->nPos;\
@@ -296,7 +302,7 @@ CzWINDOWEDFIR sfir;
 	do {
 
 #define SNDMIX_BEGINSAMPLELOOP16\
-	register MODCHANNEL * const pChn = pChannel;\
+	REGISTER MODCHANNEL * const pChn = pChannel;\
 	nPos = pChn->nPosLo;\
 	const signed short *p = (signed short *)(pChn->pCurrentSample+(pChn->nPos*2));\
 	if (pChn->dwFlags & CHN_STEREO) p += pChn->nPos;\
@@ -348,7 +354,7 @@ CzWINDOWEDFIR sfir;
 	               CzCUBICSPLINE::lut[poslo+1]*(int)p[poshi  ] + \
 	               CzCUBICSPLINE::lut[poslo+3]*(int)p[poshi+2] + \
 	               CzCUBICSPLINE::lut[poslo+2]*(int)p[poshi+1]) >> SPLINE_8SHIFT;
-	
+
 #define SNDMIX_GETMONOVOL16SPLINE \
 	int poshi	= nPos >> 16; \
 	int poslo	= (nPos >> SPLINE_FRACSHIFT) & SPLINE_FRACMASK; \
@@ -1275,39 +1281,39 @@ const LPMIXINTERFACE gpMixFunctionTable[2*2*16] =
 {
 	// No SRC
 	Mono8BitMix, Mono16BitMix, Stereo8BitMix, Stereo16BitMix,
-	Mono8BitRampMix, Mono16BitRampMix, Stereo8BitRampMix, 
+	Mono8BitRampMix, Mono16BitRampMix, Stereo8BitRampMix,
             Stereo16BitRampMix,
 	// No SRC, Filter
-	FilterMono8BitMix, FilterMono16BitMix, FilterStereo8BitMix, 
-        FilterStereo16BitMix, FilterMono8BitRampMix, FilterMono16BitRampMix, 
+	FilterMono8BitMix, FilterMono16BitMix, FilterStereo8BitMix,
+        FilterStereo16BitMix, FilterMono8BitRampMix, FilterMono16BitRampMix,
 	FilterStereo8BitRampMix, FilterStereo16BitRampMix,
 	// Linear SRC
 	Mono8BitLinearMix, Mono16BitLinearMix, Stereo8BitLinearMix,
 	Stereo16BitLinearMix, Mono8BitLinearRampMix, Mono16BitLinearRampMix,
 	Stereo8BitLinearRampMix,Stereo16BitLinearRampMix,
 	// Linear SRC, Filter
-	FilterMono8BitLinearMix, FilterMono16BitLinearMix, 
+	FilterMono8BitLinearMix, FilterMono16BitLinearMix,
         FilterStereo8BitLinearMix, FilterStereo16BitLinearMix,
 	FilterMono8BitLinearRampMix, FilterMono16BitLinearRampMix,
         FilterStereo8BitLinearRampMix, FilterStereo16BitLinearRampMix,
 
 	// FirFilter SRC
-	Mono8BitSplineMix, Mono16BitSplineMix, Stereo8BitSplineMix, 
+	Mono8BitSplineMix, Mono16BitSplineMix, Stereo8BitSplineMix,
         Stereo16BitSplineMix, Mono8BitSplineRampMix, Mono16BitSplineRampMix,
 	Stereo8BitSplineRampMix,Stereo16BitSplineRampMix,
 	// Spline SRC, Filter
-	FilterMono8BitSplineMix, FilterMono16BitSplineMix, 
+	FilterMono8BitSplineMix, FilterMono16BitSplineMix,
         FilterStereo8BitSplineMix, FilterStereo16BitSplineMix,
 	FilterMono8BitSplineRampMix, FilterMono16BitSplineRampMix,
         FilterStereo8BitSplineRampMix, FilterStereo16BitSplineRampMix,
 
 	// FirFilter  SRC
 	Mono8BitFirFilterMix, Mono16BitFirFilterMix, Stereo8BitFirFilterMix,
-	Stereo16BitFirFilterMix, Mono8BitFirFilterRampMix, 
-        Mono16BitFirFilterRampMix, Stereo8BitFirFilterRampMix, 
+	Stereo16BitFirFilterMix, Mono8BitFirFilterRampMix,
+        Mono16BitFirFilterRampMix, Stereo8BitFirFilterRampMix,
         Stereo16BitFirFilterRampMix,
 	// FirFilter  SRC, Filter
-	FilterMono8BitFirFilterMix, FilterMono16BitFirFilterMix, 
+	FilterMono8BitFirFilterMix, FilterMono16BitFirFilterMix,
         FilterStereo8BitFirFilterMix, FilterStereo16BitFirFilterMix,
 	FilterMono8BitFirFilterRampMix, FilterMono16BitFirFilterRampMix,
         FilterStereo8BitFirFilterRampMix, FilterStereo16BitFirFilterRampMix
@@ -1320,39 +1326,39 @@ const LPMIXINTERFACE gpFastMixFunctionTable[2*2*16] =
 	FastMono8BitRampMix, FastMono16BitRampMix, Stereo8BitRampMix,
         Stereo16BitRampMix,
 	// No SRC, Filter
-	FilterMono8BitMix, FilterMono16BitMix, FilterStereo8BitMix, 
+	FilterMono8BitMix, FilterMono16BitMix, FilterStereo8BitMix,
         FilterStereo16BitMix, FilterMono8BitRampMix, FilterMono16BitRampMix,
         FilterStereo8BitRampMix, FilterStereo16BitRampMix,
 	// Linear SRC
 	FastMono8BitLinearMix, FastMono16BitLinearMix, Stereo8BitLinearMix,
-        Stereo16BitLinearMix, FastMono8BitLinearRampMix, 
-        FastMono16BitLinearRampMix, Stereo8BitLinearRampMix, 
+        Stereo16BitLinearMix, FastMono8BitLinearRampMix,
+        FastMono16BitLinearRampMix, Stereo8BitLinearRampMix,
         Stereo16BitLinearRampMix,
 	// Linear SRC, Filter
-	FilterMono8BitLinearMix, FilterMono16BitLinearMix, 
+	FilterMono8BitLinearMix, FilterMono16BitLinearMix,
         FilterStereo8BitLinearMix, FilterStereo16BitLinearMix,
-	FilterMono8BitLinearRampMix, FilterMono16BitLinearRampMix, 
+	FilterMono8BitLinearRampMix, FilterMono16BitLinearRampMix,
         FilterStereo8BitLinearRampMix, FilterStereo16BitLinearRampMix,
 
 	// Spline SRC
-	Mono8BitSplineMix, Mono16BitSplineMix, Stereo8BitSplineMix, 
+	Mono8BitSplineMix, Mono16BitSplineMix, Stereo8BitSplineMix,
         Stereo16BitSplineMix, Mono8BitSplineRampMix, Mono16BitSplineRampMix,
         Stereo8BitSplineRampMix, Stereo16BitSplineRampMix,
 	// Spline SRC, Filter
-	FilterMono8BitSplineMix, FilterMono16BitSplineMix, 
+	FilterMono8BitSplineMix, FilterMono16BitSplineMix,
         FilterStereo8BitSplineMix, FilterStereo16BitSplineMix,
-	FilterMono8BitSplineRampMix, FilterMono16BitSplineRampMix, 
+	FilterMono8BitSplineRampMix, FilterMono16BitSplineRampMix,
         FilterStereo8BitSplineRampMix, FilterStereo16BitSplineRampMix,
 
 	// FirFilter SRC
 	Mono8BitFirFilterMix, Mono16BitFirFilterMix, Stereo8BitFirFilterMix,
-        Stereo16BitFirFilterMix, Mono8BitFirFilterRampMix, 
-        Mono16BitFirFilterRampMix, Stereo8BitFirFilterRampMix, 
+        Stereo16BitFirFilterMix, Mono8BitFirFilterRampMix,
+        Mono16BitFirFilterRampMix, Stereo8BitFirFilterRampMix,
         Stereo16BitFirFilterRampMix,
 	// FirFilter SRC, Filter
-	FilterMono8BitFirFilterMix, FilterMono16BitFirFilterMix, 
+	FilterMono8BitFirFilterMix, FilterMono16BitFirFilterMix,
         FilterStereo8BitFirFilterMix, FilterStereo16BitFirFilterMix,
-	FilterMono8BitFirFilterRampMix, FilterMono16BitFirFilterRampMix, 
+	FilterMono8BitFirFilterRampMix, FilterMono16BitFirFilterRampMix,
         FilterStereo8BitFirFilterRampMix, FilterStereo16BitFirFilterRampMix,
 };
 
@@ -1375,7 +1381,7 @@ static LONG MPPFASTCALL GetSampleCount(MODCHANNEL *pChn, LONG nSamples)
 			LONG nDelta = ((nLoopStart - pChn->nPos) << 16) - (pChn->nPosLo & 0xffff);
 			pChn->nPos = nLoopStart | (nDelta>>16);
 			pChn->nPosLo = nDelta & 0xffff;
-			if (((LONG)pChn->nPos < nLoopStart) || 
+			if (((LONG)pChn->nPos < nLoopStart) ||
 				(pChn->nPos >= (nLoopStart+pChn->nLength)/2))
 			{
 				pChn->nPos = nLoopStart; pChn->nPosLo = 0;
@@ -1391,7 +1397,7 @@ static LONG MPPFASTCALL GetSampleCount(MODCHANNEL *pChn, LONG nSamples)
 			}
 		} else
 		{
-			// We probably didn't hit the loop end yet 
+			// We probably didn't hit the loop end yet
 			// (first loop), so we do nothing
 			if ((LONG)pChn->nPos < 0) pChn->nPos = 0;
 		}
@@ -1414,8 +1420,8 @@ static LONG MPPFASTCALL GetSampleCount(MODCHANNEL *pChn, LONG nSamples)
 			LONG nDeltaLo = 0x10000 - (pChn->nPosLo & 0xffff);
 			pChn->nPos = pChn->nLength - nDeltaHi - (nDeltaLo>>16);
 			pChn->nPosLo = nDeltaLo & 0xffff;
-			if ((pChn->nPos <= pChn->nLoopStart) || 
-			(pChn->nPos >= pChn->nLength)) 
+			if ((pChn->nPos <= pChn->nLoopStart) ||
+			(pChn->nPos >= pChn->nLength))
 				pChn->nPos = pChn->nLength-1;
 		} else
 		{
@@ -1426,7 +1432,7 @@ static LONG MPPFASTCALL GetSampleCount(MODCHANNEL *pChn, LONG nSamples)
 			}
 			// Restart at loop start
 			pChn->nPos += nLoopStart - pChn->nLength;
-			if ((LONG)pChn->nPos < nLoopStart) 
+			if ((LONG)pChn->nPos < nLoopStart)
 				pChn->nPos = pChn->nLoopStart;
 		}
 	}
@@ -1485,13 +1491,13 @@ UINT CSoundFile::CreateStereoMix(int count)
 	{
 		const LPMIXINTERFACE *pMixFuncTable;
 		MODCHANNEL * const pChannel = &Chn[ChnMix[nChn]];
-		UINT nFlags, nMasterCh;
+		UINT nFlags;//, nMasterCh
 		LONG nSmpCount;
 		int nsamples;
 		int *pbuffer;
 
 		if (!pChannel->pCurrentSample) continue;
-		nMasterCh = (ChnMix[nChn] < m_nChannels) ? ChnMix[nChn]+1 : pChannel->nMasterChn;
+		//nMasterCh = (ChnMix[nChn] < m_nChannels) ? ChnMix[nChn]+1 : pChannel->nMasterChn;
 		pOfsR = &gnDryROfsVol;
 		pOfsL = &gnDryLOfsVol;
 		nFlags = 0;
@@ -1503,7 +1509,7 @@ UINT CSoundFile::CreateStereoMix(int count)
 		if (!(pChannel->dwFlags & CHN_NOIDO))
 		{
 			// use hq-fir mixer?
-			if( (gdwSoundSetup & (SNDMIX_HQRESAMPLER|SNDMIX_ULTRAHQSRCMODE)) == 
+			if( (gdwSoundSetup & (SNDMIX_HQRESAMPLER|SNDMIX_ULTRAHQSRCMODE)) ==
 				(SNDMIX_HQRESAMPLER|SNDMIX_ULTRAHQSRCMODE) )
 				nFlags += MIXNDX_FIRSRC;
 			else if( (gdwSoundSetup & (SNDMIX_HQRESAMPLER)) == SNDMIX_HQRESAMPLER )
@@ -1606,12 +1612,12 @@ UINT CSoundFile::CreateStereoMix(int count)
 }
 
 
-#ifdef MSC_VER
+#ifdef _MSC_VER
 #pragma warning (disable:4100)
 #endif
 
 // Clip and convert to 8 bit
-#ifdef MSC_VER
+#if defined(_MSC_VER) && defined(_M_IX86)
 __declspec(naked) DWORD MPPASMCALL X86_Convert32To8(LPVOID lp16, int *pBuffer, DWORD lSampleCount, LPLONG lpMin, LPLONG lpMax)
 //------------------------------------------------------------------------------
 {
@@ -1700,8 +1706,7 @@ DWORD MPPASMCALL X86_Convert32To8(LPVOID lp8, int *pBuffer, DWORD lSampleCount, 
 }
 #endif //MSC_VER, else
 
-
-#ifdef MSC_VER
+#if defined(_MSC_VER) && defined(_M_IX86)
 // Clip and convert to 16 bit
 __declspec(naked) DWORD MPPASMCALL X86_Convert32To16(LPVOID lp16, int *pBuffer, DWORD lSampleCount, LPLONG lpMin, LPLONG lpMax)
 //------------------------------------------------------------------------------
@@ -1794,7 +1799,7 @@ DWORD MPPASMCALL X86_Convert32To16(LPVOID lp16, int *pBuffer, DWORD lSampleCount
 }
 #endif //MSC_VER, else
 
-#ifdef MSC_VER
+#if defined(_MSC_VER) && defined(_M_IX86)
 // Clip and convert to 24 bit
 __declspec(naked) DWORD MPPASMCALL X86_Convert32To24(LPVOID lp16, int *pBuffer, DWORD lSampleCount, LPLONG lpMin, LPLONG lpMax)
 //------------------------------------------------------------------------------
@@ -1873,7 +1878,7 @@ DWORD MPPASMCALL X86_Convert32To24(LPVOID lp16, int *pBuffer, DWORD lSampleCount
 	int vumin = *lpMin, vumax = *lpMax;
 	int n,p ;
 	unsigned char* buf = (unsigned char*)lp16 ;
-	
+
 	for ( i=0; i<lSampleCount; i++)
 	{
 		n = pBuffer[i];
@@ -1887,13 +1892,13 @@ DWORD MPPASMCALL X86_Convert32To24(LPVOID lp16, int *pBuffer, DWORD lSampleCount
 			vumax = n;
 		p = n >> (8-MIXING_ATTENUATION) ; // 24-bit signed
 #ifdef WORDS_BIGENDIAN
-		buf[i*3+0] = p & 0xFF0000 >> 24;
-		buf[i*3+1] = p & 0x00FF00 >> 16 ;
-		buf[i*3+2] = p & 0x0000FF ;
+		buf[i*3+0] = (p >> 16) & 0xFF;
+		buf[i*3+1] = (p >> 8)  & 0xFF;
+		buf[i*3+2] = (p >> 0)  & 0xFF;
 #else
-		buf[i*3+0] = p & 0x0000FF ;
-		buf[i*3+1] = p & 0x00FF00 >> 16;
-		buf[i*3+2] = p & 0xFF0000 >> 24;
+		buf[i*3+0] = (p >> 0)  & 0xFF;
+		buf[i*3+1] = (p >> 8)  & 0xFF;
+		buf[i*3+2] = (p >> 16) & 0xFF;
 #endif
 	}
 	*lpMin = vumin;
@@ -1902,7 +1907,7 @@ DWORD MPPASMCALL X86_Convert32To24(LPVOID lp16, int *pBuffer, DWORD lSampleCount
 }
 #endif
 
-#ifdef MSC_VER
+#if defined(_MSC_VER) && defined(_M_IX86)
 // Clip and convert to 32 bit
 __declspec(naked) DWORD MPPASMCALL X86_Convert32To32(LPVOID lp16, int *pBuffer, DWORD lSampleCount, LPLONG lpMin, LPLONG lpMax)
 //------------------------------------------------------------------------------
@@ -1971,7 +1976,7 @@ DWORD MPPASMCALL X86_Convert32To32(LPVOID lp16, int *pBuffer, DWORD lSampleCount
 	UINT i ;
 	int vumin = *lpMin, vumax = *lpMax;
 	int32_t *p = (int32_t *)lp16;
-	
+
 	for ( i=0; i<lSampleCount; i++)
 	{
 		int n = pBuffer[i];
@@ -1992,7 +1997,7 @@ DWORD MPPASMCALL X86_Convert32To32(LPVOID lp16, int *pBuffer, DWORD lSampleCount
 #endif
 
 
-#ifdef MSC_VER
+#if defined(_MSC_VER) && defined(_M_IX86)
 void MPPASMCALL X86_InitMixBuffer(int *pBuffer, UINT nSamples)
 //------------------------------------------------------------
 {
@@ -2034,7 +2039,7 @@ void MPPASMCALL X86_InitMixBuffer(int *pBuffer, UINT nSamples)
 #endif
 
 
-#ifdef MSC_VER
+#if defined(_MSC_VER) && defined(_M_IX86)
 __declspec(naked) void MPPASMCALL X86_InterleaveFrontRear(int *pFrontBuf, int *pRearBuf, DWORD nSamples)
 //------------------------------------------------------------------------------
 {
@@ -2079,7 +2084,7 @@ void MPPASMCALL X86_InterleaveFrontRear(int *pFrontBuf, int *pRearBuf, DWORD nSa
 #endif
 
 
-#ifdef MSC_VER
+#if defined(_MSC_VER) && defined(_M_IX86)
 VOID MPPASMCALL X86_MonoFromStereo(int *pMixBuf, UINT nSamples)
 //-------------------------------------------------------------
 {
@@ -2116,7 +2121,7 @@ VOID MPPASMCALL X86_MonoFromStereo(int *pMixBuf, UINT nSamples)
 #define OFSDECAYMASK	0xFF
 
 
-#ifdef MSC_VER
+#if defined(_MSC_VER) && defined(_M_IX86)
 void MPPASMCALL X86_StereoFill(int *pBuffer, UINT nSamples, LPLONG lpROfs, LPLONG lpLOfs)
 //------------------------------------------------------------------------------
 {
@@ -2217,7 +2222,7 @@ void MPPASMCALL X86_StereoFill(int *pBuffer, UINT nSamples, LPLONG lpROfs, LPLON
 }
 #endif
 
-#ifdef MSC_VER
+#if defined(_MSC_VER) && defined(_M_IX86)
 void MPPASMCALL X86_EndChannelOfs(MODCHANNEL *pChannel, int *pBuffer, UINT nSamples)
 //------------------------------------------------------------------------------
 {
@@ -2291,7 +2296,7 @@ void MPPASMCALL X86_EndChannelOfs(MODCHANNEL *pChannel, int *pBuffer, UINT nSamp
 #define MIXING_LIMITMAX		(0x08100000)
 #define MIXING_LIMITMIN		(-MIXING_LIMITMAX)
 
-#ifdef MSC_VER
+#if defined(_MSC_VER) && defined(_M_IX86)
 __declspec(naked) UINT MPPASMCALL X86_AGC(int *pBuffer, UINT nSamples, UINT nAGC)
 //------------------------------------------------------------------------------
 {
@@ -2327,7 +2332,6 @@ agcupdate:
 	jmp agcrecover
 	}
 }
-
 #pragma warning (default:4100)
 #else
 // Version for GCC
@@ -2358,7 +2362,7 @@ void CSoundFile::ProcessAGC(int count)
 	static DWORD gAGCRecoverCount = 0;
 	UINT agc = X86_AGC(MixSoundBuffer, count, gnAGC);
 	// Some kind custom law, so that the AGC stays quite stable, but slowly
-	// goes back up if the sound level stays below a level inversely 
+	// goes back up if the sound level stays below a level inversely
 	// proportional to the AGC level. (J'me comprends)
 	if ((agc >= gnAGC) && (gnAGC < AGC_UNITY) && (gnVUMeter < (0xFF - (gnAGC >> (AGC_PRECISION-7))) ))
 	{
@@ -2378,11 +2382,9 @@ void CSoundFile::ProcessAGC(int count)
 }
 
 
-
 void CSoundFile::ResetAGC()
 //-------------------------
 {
 	gnAGC = AGC_UNITY;
 }
-
 #endif // NO_AGC
