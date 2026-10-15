@@ -1,19 +1,17 @@
 /**
- * @ingroup   io68_lib
+ * @ingroup   lib_io68
  * @file      io68/io68.h
  * @author    Benjamin Gerard
  * @date      1999/03/20
  * @brief     all io68 headers.
- *
  */
 
-/* Copyright (C) 1998-2011 Benjamin Gerard */
+/* Copyright (c) 1998-2016 Benjamin Gerard */
 
-#ifndef _IO68_H_
-#define _IO68_H_
+#ifndef IO68_IO68_H
+#define IO68_IO68_H
 
 #include "io68_api.h"
-
 #include "ym_io.h"
 #include "mw_io.h"
 #include "shifter_io.h"
@@ -21,56 +19,62 @@
 #include "paula_io.h"
 
 /**
- *  @defgroup  io68_lib  Chipset emulators.
- *  @ingroup   sc68_lib
+ * @defgroup  lib_io68  Chipset emulators.
+ * @ingroup   lib_sc68
  *
- *  @{
+ * @{
  */
 
-/** IO chip init parameters. */
-/* typedef struct { */
-/*   paula_parms_t paula;          /\**< paula init parms.     *\/ */
-/*   mw_parms_t    mw;             /\**< microwire init parms. *\/ */
-/*   ym_parms_t    ym;             /\**< ym-2149 init parms.   *\/ */
-/*   int          *argc;           /\**< Argument count.       *\/ */
-/*   char        **argv;           /\**< Argument array.       *\/ */
-/* } io68_init_t; */
-
 IO68_API
-/** Initialize the io68 library.
+/**
+ * Initialize the io68 library.
  *
- *     The io68_init() function setup chipset emulator engines.
+ *   The io68_init() function setup chipset emulator engines.
  *
- *  @param   argc  pointer to argument count.
- *  @param   argv  argument array.
- *  @retval  0 on success
- *  @retval -1 on error
+ * @param   argc  pointer to argument count.
+ * @param   argv  argument array.
+ * @retval  0 on success
+ * @retval -1 on error
  */
 int io68_init(int * argc, char ** argv);
 
 IO68_API
-/** Shutdown the io68 library.
+/**
+ * Shutdown the io68 library.
  *
- *    The io68_shutdown() function cleanup emulator engines. It should
- *    call the corresponding shutdown function for each existing
- *    chipset emulators. It should be call only after all chipset
- *    instances have been released.
+ *   The io68_shutdown() function cleanup emulator engines. It should
+ *   call the corresponding shutdown function for each existing
+ *   chipset emulators. It should be call only after all chipset
+ *   instances have been released.
  */
 void io68_shutdown(void);
 
 IO68_API
-/** Destroy an chipset instance.
+/**
+ * Destroy an chipset instance.
  *
- *    The io68_destroy() function calls the io68_t::destroy() callback
- *    function.
+ *   The io68_destroy() function calls the io68_t::destroy() callback
+ *   function or if it is null just free the memory.
  *
  *  @param  io  chipset instance
  */
 void io68_destroy(io68_t * const io);
 
+IO68_API
 /**
- *  @}
+ * Reset chipset.
+ *
+ *   The io68_reset() function calls the io68_t::reset() callback
+ *   function.
+ *
+ *  @param  io  chipset instance
+ *  @retval  0  on success
+ *  @retval -1  on failure
+ */
+int io68_reset(io68_t * const io);
+
+/**
+ * @}
  */
 
-
-#endif /* #ifndef _IO68_H_ */
+#endif
