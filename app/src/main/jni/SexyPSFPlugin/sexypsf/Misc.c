@@ -20,7 +20,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdarg.h>
-//#include <android/log.h>
+#include <android/log.h>
 
 #include "PsxCommon.h"
 #include "driver.h"
@@ -325,8 +325,10 @@ static PSFINFO *LoadPSF(char *path, int level, int type) // Type==1 for just inf
 						 */
 						tmpfn = GetFileWithBase(path, value);
 						if(!(tmpi = LoadPSF(tmpfn, level + 1, 0))) {
-							free(key);
-							free(value);
+							/* key/value are owned by psfi->tags now and
+							 * will be freed by FreeTags(psfi->tags) below;
+							 * freeing them here was a double-free. */
+							__android_log_print(ANDROID_LOG_VERBOSE, "SexyPSF", "Unable to load psflib: %s", tmpfn);
 							free(tmpfn);
 							if(!level)
 								free(out);
@@ -465,4 +467,3 @@ int sexy_execute(void) {
 void sexy_shutdown(void) {
 	psxShutdown();
 }
-
