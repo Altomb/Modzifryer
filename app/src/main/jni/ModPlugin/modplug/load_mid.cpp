@@ -30,40 +30,25 @@
 #include <math.h>
 #include <ctype.h>
 #ifndef _WIN32
-#include <unistd.h> // for sleep
+#include <unistd.h> /* sleep() */
 #endif
 
-#ifdef NEWMIKMOD
-#include "mikmod.h"
-#include "uniform.h"
-#include "itshare.h" // for STMEM_PITCHSLIDE
-typedef UBYTE BYTE;
-typedef UWORD WORD;
-#define MAX_POLYPHONY 12  // max notes in one midi channel
-#define MAX_TRACKS    63  // max mod tracks
-#define WHEELSHIFT    11  // how many bits the 13bit midi wheel value must shift right 
-#else
 #include "stdafx.h"
 #include "sndfile.h"
 #define PAN_LEFT    0x30
 #define PAN_RIGHT   0xD0
 #define MAX_POLYPHONY 16  // max notes in one midi channel
 #define MAX_TRACKS    (MAX_BASECHANNELS-6)  // max mod tracks
-#define WHEELSHIFT    10  // how many bits the 13bit midi wheel value must shift right 
-#endif
+#define WHEELSHIFT    10  // how many bits the 13bit midi wheel value must shift right
 
 #include "load_pat.h"
 
 #define ROWSPERNOTE 16
-#define ENV_MMMID_SPEED	"MMMID_SPEED"
+#define ENV_MMMID_SPEED "MMMID_SPEED"
 #define ENV_MMMID_DEBUG "MMMID_DEBUG"
 #define ENV_MMMID_VERBOSE "MMMID_VERBOSE"
 
-/**************************************************************************
-**************************************************************************/
-#ifdef NEWMIKMOD
-static char  MID_Version[] = "Musical Instrument Digital Interface";
-#endif
+/**********************************************************************/
 
 typedef enum {
 	none,
@@ -103,18 +88,7 @@ typedef struct _MIDTRACK
 	BYTE instr;	// current instrument for this track
 } MIDTRACK;
 
-#ifdef NEWMIKMOD
-
-#define MMFILE						MMSTREAM
-#define mmfseek(f,p,w)		_mm_fseek(f,p,w)
-#define mmftell(x)		_mm_ftell(x)
-#define mmreadUBYTE(f)	_mm_read_UBYTE(f)
-#define mmreadSBYTES(buf,sz,f)	_mm_read_SBYTES(buf,sz,f)
-#define mmreadUBYTES(buf,sz,f)	_mm_read_UBYTES(buf,sz,f)
-
-#else
-
-#if defined(WIN32) && defined(_mm_free)
+#if defined(_WIN32) && defined(_mm_free)
 #undef _mm_free
 #endif
 
@@ -127,64 +101,14 @@ typedef struct _MIDTRACK
 #define _mm_recalloc(h,buf,sz,elsz)	realloc(buf,sz)
 #define _mm_free(h,p)				free(p)
 
-typedef struct {
-	char *mm;
-	int sz;
-	int pos;
-} MMFILE;
-
-static void mmfseek(MMFILE *mmfile, long p, int whence)
-{
-	switch(whence) {
-		case SEEK_SET:
-			mmfile->pos = p;
-			break;
-		case SEEK_CUR:
-			mmfile->pos += p;
-			break;
-		case SEEK_END:
-			mmfile->pos = mmfile->sz + p;
-			break;
-	}
-}
-
-static long mmftell(MMFILE *mmfile)
-{
-	return mmfile->pos;
-}
-
-static BYTE mmreadUBYTE(MMFILE *mmfile)
-{
-	BYTE b;
-	b = (BYTE)mmfile->mm[mmfile->pos];
-	mmfile->pos++;
-	return b;
-}
-
-static void mmreadUBYTES(BYTE *buf, long sz, MMFILE *mmfile)
-{
-	memcpy(buf, &mmfile->mm[mmfile->pos], sz);
-	mmfile->pos += sz;
-}
-
-static void mmreadSBYTES(char *buf, long sz, MMFILE *mmfile)
-{
-	memcpy(buf, &mmfile->mm[mmfile->pos], sz);
-	mmfile->pos += sz;
-}
-
-#endif
-
-/**************************************************************************
-**************************************************************************/
+/**********************************************************************/
 
 typedef struct _MIDHANDLE
 {
-#ifdef NEWMIKMOD
-	MM_ALLOC *allochandle;
-	MM_ALLOC *trackhandle;
-#endif
-	MMFILE *mmf;
+	const BYTE *mm;
+	unsigned long sz;
+	unsigned long pos;
+	int err;
 	MIDTRACK *track;
 	MIDTRACK *tp;
 	ULONG tracktime;
@@ -244,11 +168,7 @@ static void mid_message(const char *s1, const char *s2)
 	char txt[256];
 	if( strlen(s1) + strlen(s2) > 255 ) return;
 	sprintf(txt, s1, s2);
-#ifdef NEWMIKMOD
-	_mmlog(txt);
-#else
 	fprintf(stderr, "load_mid > %s\n", txt);
-#endif
 }
 
 static ULONG miditicks(MIDHANDLE *h, ULONG modtick)
@@ -311,19 +231,19 @@ static MIDEVENT *mid_new_event(MIDHANDLE *h)
 static MIDTRACK *mid_new_track(MIDHANDLE *h, int mch, int pos)
 // =====================================================================================
 {
-    MIDTRACK *retval;
-    retval = (MIDTRACK *)_mm_calloc(h->trackhandle, 1,sizeof(MIDTRACK));
-		retval->next       = NULL;
-    retval->vpos       = pos;
-		retval->instr      = 1;
-		retval->chan       = mch;
-		retval->head       = NULL;
-		retval->tail       = NULL;
-		retval->workevent  = NULL;
-		retval->vtracktick = 0;
-		retval->volume     = h->track? h->track->volume: 120;
-		retval->balance    = 64;
-    return retval;
+	MIDTRACK *retval;
+	retval = (MIDTRACK *)_mm_calloc(h->trackhandle, 1,sizeof(MIDTRACK));
+	retval->next       = NULL;
+	retval->vpos       = pos;
+	retval->instr      = 1;
+	retval->chan       = mch;
+	retval->head       = NULL;
+	retval->tail       = NULL;
+	retval->workevent  = NULL;
+	retval->vtracktick = 0;
+	retval->volume     = h->track? h->track->volume: 120;
+	retval->balance    = 64;
+	return retval;
 }
 
 static int mid_numtracks(MIDHANDLE *h)
@@ -454,6 +374,10 @@ static MIDTRACK *mid_locate_track(MIDHANDLE *h, int mch, int pos)
 		for( tr=h->track; tr; tr=tr->next ) {
 			if( tr->chan == mch ) {
 				e = tr->workevent;
+				if (!e) {
+					trunused = tr;
+					break;
+				}
 				if( h->tracktime > e->tracktick + tmin ) {
 					tmin = h->tracktime - e->tracktick;
 					trunused = tr;
@@ -470,6 +394,10 @@ static MIDTRACK *mid_locate_track(MIDHANDLE *h, int mch, int pos)
 		for( tr=h->track; tr; tr=tr->next ) {
 			if( tr->chan == mch ) {
 				e = tr->workevent;
+				if (!e) {
+					trunused = tr;
+					break;
+				}
 				if( h->tracktime >= e->tracktick + tmin ) {
 					tmin = h->tracktime - e->tracktick;
 					trunused = tr;
@@ -483,6 +411,10 @@ static MIDTRACK *mid_locate_track(MIDHANDLE *h, int mch, int pos)
 		tmin = 0;
 		for( tr=h->track; tr; tr=tr->next ) {
 			e = tr->workevent;
+			if (!e) {
+				trunused = tr;
+				break;
+			}
 			if( h->tracktime >= e->tracktick + tmin ) {
 				tmin = h->tracktime - e->tracktick;
 				trunused = tr;
@@ -691,7 +623,6 @@ static void mid_all_notes_off(MIDHANDLE *h, int mch)
 	}
 }
 
-#ifndef NEWMIKMOD
 static void mid_add_sync(MIDHANDLE *h, MIDTRACK *tp)
 {
 	MIDEVENT *e;
@@ -700,7 +631,6 @@ static void mid_add_sync(MIDHANDLE *h, MIDTRACK *tp)
 	e->fx = fxsync;
 	mid_add_event(h, tp, e);
 }
-#endif
 
 static BYTE mid_to_mod_wheel(unsigned int midwheel)
 {
@@ -745,23 +675,48 @@ static void mid_add_pitchwheel(MIDHANDLE *h, int mch, int wheel)
 	}
 }
 
-static long int mid_read_long(MIDHANDLE *h)
+static uint32_t mid_read_long(MIDHANDLE *h)
 {
 	BYTE buf[4];
-	mmreadUBYTES(buf, 4, h->mmf);
+	if (h->pos > h->sz - 4) {
+		h->err = EOF;
+		return 0;
+	}
+	memcpy(buf, h->mm + h->pos, 4);
+	h->pos += 4;
 	return (buf[0]<<24)|(buf[1]<<16)|(buf[2]<<8)|buf[3];
 }
 
 static short int mid_read_short(MIDHANDLE *h)
 {
 	BYTE buf[2];
-	mmreadUBYTES(buf, 2, h->mmf);
+	if (h->pos > h->sz - 2) {
+		h->err = EOF;
+		return 0;
+	}
+	memcpy(buf, h->mm + h->pos, 2);
+	h->pos += 2;
 	return (buf[0]<<8)|buf[1];
 }
 
 static BYTE mid_read_byte(MIDHANDLE *h)
 {
-	return mmreadUBYTE(h->mmf);
+	if (h->pos >= h->sz) {
+		h->err = EOF;
+		return 0;
+	}
+	return h->mm[h->pos++];
+}
+
+static unsigned long mid_read_bytes(void *dest, unsigned long sz, MIDHANDLE *h)
+{
+	if (sz > h->sz || h->pos > h->sz - sz) {
+		h->err = EOF;
+		return 0;
+	}
+	memcpy(dest, h->mm + h->pos, sz);
+	h->pos += sz;
+	return sz;
 }
 
 static int mid_read_delta(MIDHANDLE *h)
@@ -781,25 +736,17 @@ static int mid_read_delta(MIDHANDLE *h)
 }
 
 // =====================================================================================
-#ifdef NEWMIKMOD
-BOOL MID_Test(MMSTREAM *mmfile)
-#else
 BOOL CSoundFile::TestMID(const BYTE *lpStream, DWORD dwMemLength)
-#endif
 // =====================================================================================
 {
 	char id[5];
 	MIDHANDLE h;
-#ifdef NEWMIKMOD
-	h.mmf = mmfile;
-#else
-	MMFILE mm;
-	mm.mm = (char *)lpStream;
-	mm.sz = dwMemLength;
-	h.mmf = &mm;
-#endif
-	mmfseek(h.mmf,0,SEEK_SET);
-	mmreadSBYTES(id, 4, h.mmf);
+	if (dwMemLength < 14) return FALSE;
+	h.mm = lpStream;
+	h.sz = dwMemLength;
+	h.pos = 0;
+	h.err = 0;
+	mid_read_bytes(id, 4, &h);
 	id[4] = '\0';
 	return !strcmp(id,"MThd") && mid_read_long(&h) == 6;
 }
@@ -808,26 +755,15 @@ BOOL CSoundFile::TestMID(const BYTE *lpStream, DWORD dwMemLength)
 static MIDHANDLE *MID_Init(void)
 {
 	MIDHANDLE *retval;
-#ifdef NEWMIKMOD
-	MM_ALLOC *allochandle;
-	
-	allochandle = _mmalloc_create("Load_MID", NULL);
-	retval = (MIDHANDLE *)_mm_calloc(allochandle, 1,sizeof(MIDHANDLE));
-	if( !retval ) return NULL;
-	retval->allochandle = allochandle;
-	allochandle = _mmalloc_create("Load_ABC_tracks", NULL);
-	retval->trackhandle = allochandle;
-#else
 	retval = (MIDHANDLE *)calloc(1,sizeof(MIDHANDLE));
 	if( !retval ) return NULL;
-#endif
 	retval->track      = NULL;
 	retval->percussion = 0;
 	retval->debug      = NULL;
+	retval->miditracks = 0;
 	return retval;
 }
 
-#ifndef NEWMIKMOD
 static void MID_CleanupTrack(MIDTRACK *tp)
 {
 	MIDEVENT *ep, *en;
@@ -839,51 +775,36 @@ static void MID_CleanupTrack(MIDTRACK *tp)
 		tp->head = NULL;
 	}
 }
-#endif
 
 // =====================================================================================
 static void MID_CleanupTracks(MIDHANDLE *handle)
 // =====================================================================================
 {
-#ifdef NEWMIKMOD
-	if(handle && handle->trackhandle) {
-		_mmalloc_close(handle->trackhandle);
-		handle->trackhandle = 0;
-	}
-#else
 	MIDTRACK *tp, *tn;
 	if(handle) {
 		for( tp=handle->track; tp; tp = tn ) {
 			tn=tp->next;
 			MID_CleanupTrack(tp);
+			free(tp);
 		}
 		handle->track = NULL;
 	}
-#endif
 }
 
 // =====================================================================================
 static void MID_Cleanup(MIDHANDLE *handle)
 // =====================================================================================
 {
-#ifdef NEWMIKMOD
-	if(handle && handle->allochandle) {
-		MID_CleanupTracks(handle);
-		_mmalloc_close(handle->allochandle);
-		handle->allochandle = 0;
-	}
-#else
 	if(handle) {
 		MID_CleanupTracks(handle);
 		free(handle);
 		handle = 0;
 	}
-#endif
 }
 
 static int mid_is_global_event(MIDEVENT *e)
 {
-	return (e->fx == tmpo || e->fx == fxbrk); 
+	return (e->fx == tmpo || e->fx == fxbrk);
 }
 
 static MIDEVENT *mid_next_global(MIDEVENT *e)
@@ -916,173 +837,6 @@ static MIDEVENT *mid_next_note(MIDEVENT *e)
 }
 
 // =====================================================================================
-#ifdef NEWMIKMOD
-static void MID_ReadPatterns(UNIMOD *of, MIDHANDLE *h, int numpat)
-// =====================================================================================
-{
-	int pat,row,i,ch,trkset;
-	BYTE n,ins,vol;
-	MIDTRACK *t;
-	MIDEVENT *e, *en, *ef, *el;
-	ULONG tt1, tt2;
-	UNITRK_EFFECT eff;
-
-	// initialize start points of event list in tracks
-	for( t = h->track; t; t = t->next ) t->workevent = t->head;
-	for( pat = 0; pat < numpat; pat++ ) {
-		utrk_reset(of->ut);
-		for( row = 0; row < 64; row++ ) {
-			tt1 = miditicks(h, (pat * 64 + row ) * h->speed);
-			tt2 = tt1 + h->midispeed;
-			for( e=mid_next_global(h->track->workevent); e && e->tracktick < tt2; e=mid_next_global(e->next) ) {
-				if( e && e->tracktick >= tt1 ) {	// we have a controller event in this row
-					switch( e->fx ) {
-						case tmpo:
-							eff.effect   = UNI_GLOB_TEMPO;
-							eff.param.u  = e->fxparam;
-							eff.framedly = UFD_RUNONCE;
-							utrk_write_global(of->ut, &eff, PTMEM_TEMPO);
-							break;
-						case fxbrk:
-							eff.effect   = UNI_GLOB_PATBREAK;
-							eff.param.u  = 0;
-							eff.framedly = UFD_RUNONCE;
-							utrk_write_global(of->ut, &eff, UNIMEM_NONE);
-							break;
-					}
-				}
-			}
-			ch = 0;
-			for( t = h->track; t; t = t->next ) {
-				trkset = 0;
-				e = NULL;
-				for( el=mid_next_fx(t->workevent); el && el->tracktick < tt2; el=mid_next_fx(el->next) ) {
-					if( el && el->tracktick >= tt1 ) {
-						switch( el->fx ) {
-							case modwheel:
-							case wheelup:
-							case wheeldown:
-								e = el;
-							default:
-								break;
-						}
-					}
-				}
-				if( e )	{	// we have a controller event in this row
-					switch( e->fx ) {
-						case modwheel:
-							if( !trkset ) {
-								utrk_settrack(of->ut, ch);
-								trkset = 1;
-							}
-							eff.effect   = UNI_VOLSLIDE;
-							eff.framedly = UFD_RUNONCE;
-							if( (e->fxparam & 0x0f) == 0x0f )
-								eff.param.s = (e->fxparam >> 3)&0x1f;
-							else
-								eff.param.s = -((e->fxparam & 0x0f)*2);
-							utrk_write_local(of->ut, &eff, STMEM_VOLSLIDE);
-							break;
-						case wheelup:
-							if( !trkset ) {
-								utrk_settrack(of->ut, ch);
-								trkset = 1;
-							}
-							eff.effect   = UNI_PITCHSLIDE;
-							eff.framedly = UFD_RUNONCE;
-							eff.param.s = e->fxparam;
-							utrk_write_local(of->ut, &eff, STMEM_PITCHSLIDE);
-							break;
-						case wheeldown:
-							if( !trkset ) {
-								utrk_settrack(of->ut, ch);
-								trkset = 1;
-							}
-							eff.effect   = UNI_PITCHSLIDE;
-							eff.framedly = UFD_RUNONCE;
-							eff.param.s = -(int)(e->fxparam);
-							utrk_write_local(of->ut, &eff, STMEM_PITCHSLIDE);
-							break;
-					}
-				}
-				for( e=mid_next_note(t->workevent); e && e->tracktick < tt1; e=mid_next_note(e->next) )
-					t->workevent = e;
-				i = 0;
-				ef = NULL;
-				en = e;
-				el = e;
-				for( ; e && e->tracktick < tt2; e=mid_next_note(e->next) ) {	// we have a note event in this row
-					t->workevent = e;
-					i++;
-					if( e->volume ) {
-						if( !ef ) ef = e;
-						el = e;
-					}
-				}
-				if( i ) {
-					if( !trkset ) {
-						utrk_settrack(of->ut, ch);
-						trkset = 1;
-					}
-					if( i == 1 || ef == el || !ef ) { // only one event in this row
-						if( ef ) e = ef;
-						else e = en;
-						el  = t->workevent;
-						n   = pat_modnote(e->note);
-						ins = e->smpno;
-						eff.framedly = modticks(h, e->tracktick - tt1);
-						eff.param.u      = 0;
-						eff.param.byte_a = n;
-						eff.param.byte_b = ins;
-						vol = e->volume;
-						if( vol == 0 ) {
-							eff.effect  = UNI_NOTEKILL;
-							utrk_write_local(of->ut, &eff, UNIMEM_NONE);
-						}
-						else {
-							if( el->volume == 0 ) {
-								eff.framedly     = modticks(h, el->tracktick - tt1);
-								eff.effect       = UNI_NOTEKILL;
-								utrk_write_local(of->ut, &eff, UNIMEM_NONE);
-							}
-							else {
-								if( eff.framedly ) {
-									eff.effect       = UNI_NOTEDELAY;
-									utrk_write_local(of->ut, &eff, UNIMEM_NONE);
-								}
-							}
-						}
-						utrk_write_inst(of->ut, ins);
-						utrk_write_note(of->ut, n); // <- normal note
-						pt_write_effect(of->ut, 0xc, vol);
-					}
-					else { 
-						// two notes in one row, use FINEPITCHSLIDE runonce effect
-						// start first note on first tick and framedly runonce on seconds note tick
-						// use volume and instrument of last note
-						n   = pat_modnote(ef->note);
-						i   = pat_modnote(el->note);
-						ins = el->smpno;
-						vol = el->volume;
-						eff.effect    = UNI_PITCHSLIDE;
-						eff.framedly  = modticks(h, el->tracktick - tt1)|UFD_RUNONCE;
-						eff.param.s   = ((i > n)?i-n:n-i);
-						utrk_write_inst(of->ut, ins);
-						utrk_write_note(of->ut, n); // <- normal note
-						pt_write_effect(of->ut, 0xc, vol);
-						utrk_write_local(of->ut, &eff, (i > n)? PTMEM_PITCHSLIDEUP: PTMEM_PITCHSLIDEDN);
-					}
-				}
-				ch++;
-			}
-			utrk_newline(of->ut);
-		}
-		if(!utrk_dup_pattern(of->ut,of)) return;
-	}
-}
-
-#else
-
 static int MID_ReadPatterns(MODCOMMAND *pattern[], WORD psize[], MIDHANDLE *h, int numpat, int channels)
 // =====================================================================================
 {
@@ -1107,6 +861,7 @@ static int MID_ReadPatterns(MODCOMMAND *pattern[], WORD psize[], MIDHANDLE *h, i
 			ch = 0;
 			tempo = 0;
 			patbrk = 0;
+			if ( h->track )
 			for( e=mid_next_global(h->track->workevent); e && e->tracktick < tt2; e=mid_next_global(e->next) ) {
 				if( e && e->tracktick >= tt1 ) {	// we have a controller event in this row
 					switch( e->fx ) {
@@ -1196,7 +951,7 @@ static int MID_ReadPatterns(MODCOMMAND *pattern[], WORD psize[], MIDHANDLE *h, i
 						m->volcmd = VOLCMD_VOLUME;
 						m->vol    = vol;
 					}
-					else { 
+					else {
 						// two notes in one row, use FINEPITCHSLIDE runonce effect
 						// start first note on first tick and framedly runonce on seconds note tick
 						// use volume and instrument of last note
@@ -1245,8 +1000,6 @@ static int MID_ReadPatterns(MODCOMMAND *pattern[], WORD psize[], MIDHANDLE *h, i
 	return 0;
 }
 
-#endif
-
 static ULONG mid_next_tracktick(MIDEVENT *e)
 {
 	MIDEVENT *en;
@@ -1258,13 +1011,11 @@ static ULONG mid_next_tracktick(MIDEVENT *e)
 // cut off alle events that follow the given event
 static void mid_stripoff(MIDTRACK *tp, MIDEVENT *e)
 {
-#ifndef NEWMIKMOD
 	MIDEVENT *ep, *en;
 	for( ep=e->next; ep; ep = en ) {
 		en=ep->next;
 		free(ep);
 	}
-#endif
 	e->next  = NULL;
 	tp->tail = e;
 	tp->workevent = tp->head;
@@ -1318,7 +1069,7 @@ static void mid_notes_to_percussion(MIDTRACK *tp, ULONG adjust, ULONG tmin)
 		}
 	}
 	if( ton > toff ) {
-		char info[32];
+		char info[64];
 		sprintf(info,"%ld > %ld note %d", (long)ton, (long)toff, n);
 		mid_message("drum track ends with note on (%s)", info);
 	}
@@ -1372,7 +1123,7 @@ static void mid_prog_to_notes(MIDTRACK *tp, ULONG adjust, ULONG tmin)
 		}
 	}
 	if( ton > toff ) {
-		char info[40];
+		char info[128];
 		sprintf(info,"channel %d, %ld > %ld note %d", tp->chan + 1, (long)ton, (long)toff, n);
 		mid_message("melody track ends with note on (%s)", info);
 	}
@@ -1399,24 +1150,15 @@ ULONG mid_first_noteonevent_tick(MIDEVENT *e)
 }
 
 // =====================================================================================
-#ifdef NEWMIKMOD
-BOOL MID_Load(MIDHANDLE *h, UNIMOD *of, MMSTREAM *mmfile)
-#else
 BOOL CSoundFile::ReadMID(const BYTE *lpStream, DWORD dwMemLength)
-#endif
 {
 	static int avoid_reentry = 0;
-#ifdef NEWMIKMOD
-#define m_nDefaultTempo	of->inittempo
-#else
 	MIDHANDLE *h;
-	MMFILE mm;
-#endif
 	int ch, dmulti, maxtempo, panlow, panhigh, numchans, numtracks;
 	MIDTRACK *ttp;
 	uint32_t t, numpats;
 	char buf[256];
-	long miditracklen;
+	uint32_t miditracklen;
 	BYTE runningstatus;
 	BYTE cmd;
 	BYTE midibyte[2];
@@ -1424,42 +1166,37 @@ BOOL CSoundFile::ReadMID(const BYTE *lpStream, DWORD dwMemLength)
 	BYTE *p;
 	while( avoid_reentry ) sleep(1);
 	avoid_reentry = 1;
-#ifdef NEWMIKMOD
-	h->mmf = mmfile;
-#else
-	if( !TestMID(lpStream, dwMemLength) ) {
-		avoid_reentry = 0;
-		return FALSE;
-	}
+	if( !TestMID(lpStream, dwMemLength) ) goto ErrorExit;
 	h = MID_Init();
-	if( !h ) {
-		avoid_reentry = 0;
-		return FALSE;
-	}
-	h->mmf = &mm;
-	mm.mm = (char *)lpStream;
-	mm.sz = dwMemLength;
-	mm.pos = 0;
-#endif
+	if( !h ) goto ErrorExit;
+	h->mm = lpStream;
+	h->sz = dwMemLength;
+	h->err = 0;
 	h->debug = getenv(ENV_MMMID_DEBUG);
 	h->verbose = getenv(ENV_MMMID_VERBOSE);
 	pat_resetsmp();
 	pat_init_patnames();
-	mmfseek(h->mmf,8,SEEK_SET);
-	h->midiformat	= mid_read_short(h);
+
+	h->pos = 8;
+	h->midiformat = mid_read_short(h);
 	h->miditracks = mid_read_short(h);
 	h->resolution = mid_read_short(h);
-	// at this point the h->mmf is positioned at first miditrack
+	if (h->err) goto ErrorCleanup;
+
+	// at this point the h->pos is positioned at first miditrack
 	if( h->midiformat == 0 ) h->miditracks = 1;
 	if( h->resolution & 0x8000 )
 		h->divider = ((h->resolution & 0x7f00)>>8)*(h->resolution & 0xff);
 	else
 		h->divider = h->resolution;
 	h->divider <<= 2; // ticks per quartnote ==> ticks per note
+	if (!h->divider) h->divider = 1;
 	h->tempo = 122;
 	m_nDefaultTempo = 0;
 	h->tracktime = 0;
 	h->speed = 6;
+	if (h->miditracks == 0) goto ErrorCleanup;
+
 	p = (BYTE *)getenv(ENV_MMMID_SPEED);
 	if( p && isdigit(*p) && p[0] != '0' && p[1] == '\0' ) {
 		// transform speed
@@ -1481,11 +1218,7 @@ BOOL CSoundFile::ReadMID(const BYTE *lpStream, DWORD dwMemLength)
 	}
 	h->tp = NULL;
 	memset(buf,0,sizeof(buf));
-#ifdef NEWMIKMOD
-	of->songname = NULL;
-#else
 	strcpy(m_szNames[0], "");
-#endif
 	maxtempo = 0;
 	panlow   = 64;
 	panhigh  = 64;
@@ -1501,17 +1234,20 @@ BOOL CSoundFile::ReadMID(const BYTE *lpStream, DWORD dwMemLength)
 	}
 	for( t=0; t<(uint32_t)h->miditracks; t++ ) {
 		if( h->verbose ) printf("Parsing track %d\n", t+1);
-		mmreadSBYTES(buf,4,h->mmf);
+		if (mid_read_bytes(buf,4,h) < 4) {
+			buf[0] = '\0'; // make sure start is \0
+		}
 		buf[4] = '\0';
 		if( strcmp(buf,"MTrk") ) {
 			mid_message("invalid track-chunk '%s' is not 'MTrk'",buf);
-			avoid_reentry = 0;
-			return FALSE;
+			goto ErrorCleanup;
 		}
 		miditracklen = mid_read_long(h);
+		if (h->err || h->sz < miditracklen) continue;
 		runningstatus = 0;
 		if( t && h->midiformat == 1 ) mid_rewind_tracks(h); // tracks sound simultaneously
 		while( miditracklen > 0 ) {
+			if (h->err) break;
 			miditracklen -= mid_read_delta(h);
 			midibyte[0] = mid_read_byte(h);
 			miditracklen--;
@@ -1594,7 +1330,7 @@ BOOL CSoundFile::ReadMID(const BYTE *lpStream, DWORD dwMemLength)
 							break;
 						case 0x0b: // expression
 							break;
-						case 0x7b: 
+						case 0x7b:
 							if( midibyte[1] == 0x00 ) // all notes off
 								mid_all_notes_off(h, ch);
 							break;
@@ -1630,6 +1366,7 @@ BOOL CSoundFile::ReadMID(const BYTE *lpStream, DWORD dwMemLength)
 								t, (long)(h->tracktime), midibyte[0]);
 							while( midibyte[0] != 0xf7 ) {
 								midibyte[0] = mid_read_byte(h);
+								if (h->err) break;
 								miditracklen--;
 								if( h->debug ) printf(" %02X", midibyte[0]);
 							}
@@ -1639,7 +1376,7 @@ BOOL CSoundFile::ReadMID(const BYTE *lpStream, DWORD dwMemLength)
 							midibyte[1] = mid_read_byte(h);
 							miditracklen--;
 							if( h->debug )
-								printf("%2d %08ld song position pointer: %d", 
+								printf("%2d %08ld song position pointer: %d",
 								t, (long)(h->tracktime), midishort(midibyte));
 							break;
 						case 0xf7:
@@ -1651,6 +1388,7 @@ BOOL CSoundFile::ReadMID(const BYTE *lpStream, DWORD dwMemLength)
 								t, (long)(h->tracktime), metalen);
 							while( metalen > 0 ) {
 								midibyte[1] = mid_read_byte(h);
+								if (h->err) break;
 								metalen--;
 								miditracklen--;
 								if( h->debug ) printf(" %02X", midibyte[1]);
@@ -1663,13 +1401,14 @@ BOOL CSoundFile::ReadMID(const BYTE *lpStream, DWORD dwMemLength)
 							metalen = h->deltatime;
 							if( metalen > 31 ) metalen = 31;
 							if( metalen ) {
-								mmreadSBYTES(buf, metalen, h->mmf);
+								if (!mid_read_bytes(buf, metalen, h)) break;
 								miditracklen -= metalen;
 							}
 							buf[metalen] = '\0';
 							metalen = h->deltatime - metalen;
 							while( metalen > 0 ) {
 								midibyte[1] = mid_read_byte(h);
+								if (h->err) break;
 								metalen--;
 								miditracklen--;
 							}
@@ -1678,13 +1417,8 @@ BOOL CSoundFile::ReadMID(const BYTE *lpStream, DWORD dwMemLength)
 								case 0x03: // type: track name
 									if( h->debug )
 										printf("%2d %08ld META trackname:%s\n", t, (long)(h->tracktime), buf);
-#ifdef NEWMIKMOD
-									if( !of->songname )
-										of->songname = DupStr(of->allochandle, buf, strlen(buf));
-#else
 									if( m_szNames[0][0] == '\0' )
 										strcpy(m_szNames[0], buf);
-#endif
 									break;
 								case 0x51: // type: tempo
 									p=(BYTE *)buf;
@@ -1695,7 +1429,7 @@ BOOL CSoundFile::ReadMID(const BYTE *lpStream, DWORD dwMemLength)
 									if( m_nDefaultTempo == 0 ) m_nDefaultTempo = h->tempo;
 									else {
 										ttp = h->track;
-										if( !ttp ) ttp = mid_locate_track(h, 0, 0xff);
+										if( !ttp ) mid_locate_track(h, 0, 0xff);
 										mid_add_tempo_event(h,h->tempo);
 									}
 									if( h->tempo > maxtempo ) maxtempo = h->tempo;
@@ -1703,7 +1437,7 @@ BOOL CSoundFile::ReadMID(const BYTE *lpStream, DWORD dwMemLength)
 								case 0x2f: // type: end of track
 									if( h->debug ) printf("%2d %08ld META end of track\n", t, (long)(h->tracktime));
 									if( miditracklen > 0 ) {
-										sprintf(buf, "%ld", miditracklen);
+										sprintf(buf, "%u", miditracklen);
 										mid_message("Meta event not at end of track, %s bytes left in track", buf);
 										miditracklen = 0;
 									}
@@ -1723,8 +1457,8 @@ BOOL CSoundFile::ReadMID(const BYTE *lpStream, DWORD dwMemLength)
 					break;
 			}
 			if( miditracklen < 1 && (runningstatus != 0xff || midibyte[0] != 0x2f) ) {
-				delta = mmftell(h->mmf);
-				mmreadSBYTES(buf,4,h->mmf);
+				delta = h->pos;
+				if (!mid_read_bytes(buf,4,h)) break;
 				buf[4] = '\0';
 				if( strcmp(buf,"MTrk") ) {
 					miditracklen = 0x7fffffff;
@@ -1732,7 +1466,7 @@ BOOL CSoundFile::ReadMID(const BYTE *lpStream, DWORD dwMemLength)
 				}
 				else
 					mid_message("Meta event not at end of track, %s bytes left in track", "no");
-				mmfseek(h->mmf,delta,SEEK_SET);
+				h->pos = delta;
 			}
 		}
 	}
@@ -1750,7 +1484,7 @@ BOOL CSoundFile::ReadMID(const BYTE *lpStream, DWORD dwMemLength)
 		}
 	}
 	if( metalen & 0x03ff ) {
-		if( (metalen & 0x0f00) == 0x0400 ) 
+		if( (metalen & 0x0f00) == 0x0400 )
 			h->percussion = 10; // buggy sng2mid uses channel 10
 		else
 			h->percussion = 9;
@@ -1770,8 +1504,10 @@ BOOL CSoundFile::ReadMID(const BYTE *lpStream, DWORD dwMemLength)
 		if( ttp->tail && ttp->tail->tracktick > h->tracktime )
 			h->tracktime = ttp->tail->tracktick;
 	}
+
 	h->tracktime += h->divider >> 2; // add one quartnote to the song for silence
-	mid_add_partbreak(h);
+	if ( h->track )
+		mid_add_partbreak(h);
 	if( h->debug )
 		mid_dump_tracks(h);
 	numchans = mid_numchans(h);
@@ -1789,66 +1525,24 @@ BOOL CSoundFile::ReadMID(const BYTE *lpStream, DWORD dwMemLength)
 		mid_adjust_for_optimal_tempo(h, maxtempo);
 	}
 	if( maxtempo > 0 ) m_nDefaultTempo = (255 * m_nDefaultTempo) / maxtempo;
+
 	numpats = 1 + (modticks(h, h->tracktime) / h->speed / 64 );
+	if (numpats > MAX_PATTERNS) numpats = MAX_PATTERNS;
+
 	if( h->verbose ) printf("Generating %d patterns with speed %d\n", numpats, h->speed);
-#ifdef NEWMIKMOD
-	if( !of->songname ) of->songname = DupStr(of->allochandle, "Untitled", 8);
-	of->memsize     = STMEM_LAST;      // Number of memory slots to reserve!
-	of->modtype     = _mm_strdup(of->allochandle, MID_Version);
-	of->numpat      = numpats;
-	of->numpos      = of->numpat;
-	of->reppos      = 0;
-	of->initspeed   = h->speed;
-	of->numchn      = numtracks;
-	of->numtrk      = of->numpat * of->numchn;
-	of->initvolume  = 64;
-	of->pansep      = 128;
-	// orderlist
-	if(!AllocPositions(of, of->numpos)) {
-		avoid_reentry = 0;
-		return FALSE;
-	}
-	for(t=0; t<of->numpos; t++)
-		of->positions[t] = t;
-	if( !PAT_Load_Instruments(of) ) {
-		avoid_reentry = 0;
-		return FALSE;
-	}
-	// ==============================
-	// Load the pattern info now!
-	if(!AllocTracks(of)) {
-		avoid_reentry = 0;
-		return FALSE;
-	}
-	if(!AllocPatterns(of)) {
-		avoid_reentry = 0;
-		return FALSE;
-	}
-	of->ut = utrk_init(of->numchn, h->allochandle);
-	utrk_memory_reset(of->ut);
-	utrk_local_memflag(of->ut, PTMEM_PORTAMENTO, TRUE, FALSE);
-	MID_ReadPatterns(of, h, numpats);
-	// ============================================================
-	// set panning positions
-	t = 0;
-	for( ttp=h->track; ttp; ttp=ttp->next ) {
-		of->panning[t] = modpan(ttp->balance, numchans / 2);
-		t++;
-	}
-#else
 	m_nType         = MOD_TYPE_MID;
 	m_nDefaultSpeed = h->speed;
 	m_nChannels     = numtracks;
 	m_dwSongFlags   = SONG_LINEARSLIDES;
 	m_nMinPeriod    = 28 << 2;
 	m_nMaxPeriod    = 1712 << 3;
+	if (m_nChannels == 0) goto ErrorCleanup;
+
 	// orderlist
 	for(t=0; t < numpats; t++)
 		Order[t] = t;
-	if( !PAT_Load_Instruments(this) ) {
-		avoid_reentry = 0;
-		return FALSE;
-	}
+	if( !PAT_Load_Instruments(this) ) goto ErrorCleanup;
+
 	// ==============================
 	// Load the pattern info now!
 	if( MID_ReadPatterns(Patterns, PatternSize, h, numpats, m_nChannels) ) {
@@ -1872,154 +1566,14 @@ BOOL CSoundFile::ReadMID(const BYTE *lpStream, DWORD dwMemLength)
 		ChnSettings[t].nVolume = 64;
 		t++;
 	}
+	if( h->verbose ) printf("Cleanup.\n");
 	MID_Cleanup(h);	// we dont need it anymore
-#endif
-	if( h->verbose ) printf("Done\n");
 	avoid_reentry = 0; // it is safe now, I'm finished
 	return TRUE;
-}
 
-#ifdef NEWMIKMOD
-// =====================================================================================
-CHAR *MID_LoadTitle(MMSTREAM *mmfile)
-// =====================================================================================
-{
-	int t;
-	char buf[24];
-	long miditracklen;
-	BYTE runningstatus;
-	BYTE cmd;
-	BYTE midibyte[2];
-	long metalen;
-	MIDHANDLE hh, *h;
-	h = &hh;
-	h->mmf = mmfile;
-	mmfseek(h->mmf,8,SEEK_SET);
-	h->midiformat	= mid_read_short(h);
-	h->miditracks = mid_read_short(h);
-	h->resolution = mid_read_short(h);
-	// at this point the h->mmf is positioned at first miditrack
-	if( h->midiformat == 0 ) h->miditracks = 1;
-	h->tracktime = 0;
-	for( t=0; t<h->miditracks; t++ ) {
-		mmreadSBYTES(buf,4,h->mmf);
-		miditracklen = mid_read_long(h);
-		runningstatus = 0;
-		while( miditracklen > 0 ) {
-			miditracklen -= mid_read_delta(h);
-			midibyte[0] = mid_read_byte(h);
-			miditracklen--;
-			if( midibyte[0] & 0x80 ) {
-				runningstatus = midibyte[0];
-				switch( runningstatus ) {
-					case 0xf1:
-					case 0xf4:
-					case 0xf5:
-					case 0xf6:
-					case 0xf7:
-					case 0xf8:
-					case 0xf9:
-					case 0xfa:
-					case 0xfb:
-					case 0xfc:
-					case 0xfd:
-					case 0xfe:
-						break;
-					default:
-						midibyte[0] = mid_read_byte(h);
-						miditracklen--;
-						break;
-				}
-			}
-			cmd = runningstatus & 0xf0;
-			switch( cmd ) {
-				case 0x80: // note off
-				case 0x90: // note on
-				case 0xa0: // polyphonic key pressure
-				case 0xb0: // control change
-				case 0xe0: // pitch wheel change
-					midibyte[1] = mid_read_byte(h);
-					miditracklen--;
-				case 0xc0: // program change
-				case 0xd0: // channel pressure
-					break;
-				case 0xf0: // system & realtime
-					switch( runningstatus ) {
-						case 0xf0:	// sysex
-							while( midibyte[0] != 0xf7 ) {
-								midibyte[0] = mid_read_byte(h);
-								miditracklen--;
-							}
-							break;
-						case 0xf2:	// song position pointer
-							midibyte[1] = mid_read_byte(h);
-							miditracklen--;
-							break;
-						case 0xf7:
-							miditracklen -= mid_read_delta(h);
-							metalen = h->deltatime;
-							while( metalen > 0 ) {
-								midibyte[1] = mid_read_byte(h);
-								metalen--;
-								miditracklen--;
-							}
-							break;
-						case 0xff: // meta event
-							miditracklen -= mid_read_delta(h);
-							metalen = h->deltatime;
-							if( metalen > 21 ) metalen = 21;
-							if( metalen ) {
-								mmreadSBYTES(buf, metalen, h->mmf);
-								miditracklen -= metalen;
-							}
-							buf[metalen] = '\0';
-							metalen = h->deltatime - metalen;
-							while( metalen > 0 ) {
-								midibyte[1] = mid_read_byte(h);
-								metalen--;
-								miditracklen--;
-							}
-							switch( midibyte[0] ) {
-								case 0x03: // type: track name
-									return DupStr(NULL, buf, strlen(buf));
-									break;
-								case 0x2f: // type: end of track
-									miditracklen = 0;
-									break;
-								default:
-									break;
-							}
-							break;
-						default:
-							break;
-					}
-					break;
-				default:   // no running status, just skip it...
-					break;
-			}
-			if( miditracklen < 1 && (runningstatus != 0xff || midibyte[0] != 0x2f) ) {
-				metalen = mmftell(h->mmf);
-				mmreadSBYTES(buf,4,h->mmf);
-				buf[4] = '\0';
-				if( strcmp(buf,"MTrk") ) miditracklen = 0x7fffffff;
-				mmfseek(h->mmf,metalen,SEEK_SET);
-			}
-		}
-	}
-	return DupStr(NULL, "Untitled" ,8);
+ErrorCleanup:
+	MID_Cleanup(h);
+ErrorExit:
+	avoid_reentry = 0;
+	return FALSE;
 }
-
-MLOADER load_mid =
-{
-    "MID",
-    "Musical Instrument Digital Interface",
-    0x30,
-    NULL,
-    MID_Test,
-    (void *(*)(void))MID_Init,
-    (void (*)(ML_HANDLE *))MID_Cleanup,
-    /* Every single loader seems to need one of these! */
-    (BOOL (*)(ML_HANDLE *, UNIMOD *, MMSTREAM *))MID_Load,
-    MID_LoadTitle
-};
-#endif
