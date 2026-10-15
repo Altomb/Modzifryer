@@ -3,9 +3,7 @@
  * @brief   string manipulation
  * @author  http://sourceforge.net/users/benjihan
  *
- * Copyright (C) 2001-2011 Benjamin Gerard
- *
- * Time-stamp: <2011-11-07 10:58:23 ben>
+ * Copyright (c) 1998-2016 Benjamin Gerard
  *
  * This program is free software: you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -27,12 +25,13 @@
 #ifdef HAVE_CONFIG_H
 # include "config.h"
 #endif
+#include "file68_private.h"
 #include "file68_api.h"
-#include "string68.h"
-#include "alloc68.h"
+#include "file68_str.h"
 
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
 /* Convert letter to uppercase. */
 static int toupper68(int c)
@@ -109,7 +108,7 @@ char * strdup68(const char * s)
   if (s) {
     int len = strlen(s) + 1;
 
-    d = alloc68(len);
+    d = malloc(len);
     if (d) {
       int i;
       for (i=0; i<len; ++i) {
@@ -129,7 +128,7 @@ char * strcatdup68(const char * a, const char * b)
     return strdup68(a);
   } else {
     int lena = strlen(a), lenb = strlen(b);
-    char * d = alloc68(lena+lenb+1);
+    char * d = malloc(lena+lenb+1);
     if (d) {
       int i = 0;
       while (lena--) {
