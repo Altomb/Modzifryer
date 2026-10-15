@@ -3,9 +3,7 @@
  * @brief   load and save sc68 stream
  * @author  http://sourceforge.net/users/benjihan
  *
- * Copyright (C) 1998-2011 Benjamin Gerard
- *
- * Time-stamp: <2011-11-21 19:59:29 ben>
+ * Copyright (c) 1998-2016 Benjamin Gerard
  *
  * This program is free software: you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -27,26 +25,23 @@
 #ifdef HAVE_CONFIG_H
 # include "config.h"
 #endif
+#include "file68_private.h"
 #include "file68_api.h"
 #include "file68.h"
-#include "chunk68.h"
-#include "error68.h"
-#include "alloc68.h"
-#include "msg68.h"
-#include "string68.h"
-#include "rsc68.h"
-#include "option68.h"
+#include "file68_chk.h"
+#include "file68_err.h"
+#include "file68_msg.h"
+#include "file68_str.h"
+#include "file68_rsc.h"
+#include "file68_opt.h"
 
-#include "istream68_def.h"
-#include "istream68_file.h"
-#include "istream68_fd.h"
-#include "istream68_curl.h"
-#include "istream68_mem.h"
-#include "istream68_z.h"
-#include "istream68_null.h"
-#include "gzip68.h"
-#include "ice68.h"
-#include "url68.h"
+#include "file68_vfs_def.h"
+#include "file68_vfs.h"
+#include "file68_vfs_z.h"
+#include "file68_ice.h"
+#include "file68_zip.h"
+#include "file68_uri.h"
+#include "file68_tdb.h"
 
 #ifndef u64
 # ifdef HAVE_STDINT_H
@@ -60,28 +55,25 @@
 #endif
 
 #ifndef u64
-# error "u64 must be defined as an integer of at least 64 bit"
+# error u64 must be defined as an integer of at least 64 bit
 #endif
 
 #include <string.h>
+#include <stdlib.h>
 #include <ctype.h>
 #include <stdio.h>
-
-int aSIDify = 0;                        /* 0:off, 1:safe, 2:force */
+#include <assert.h>
 
 #define FOURCC(A,B,C,D) ((int)( ((A)<<24) | ((B)<<16) | ((C)<<8) | (D) ))
 #define gzip_cc FOURCC('g','z','i','p')
-#define ice_cc  FOURCC('i','c','e','!')
+#define ice_cc	FOURCC('i','c','e','!')
 #define sndh_cc FOURCC('S','N','D','H')
 #define sc68_cc FOURCC('S','C','6','8')
 
 /* SC68 file identifier strings */
-const char file68_idstr_v1[56] = SC68_IDSTR;
-const char file68_idstr_v2[8]  = SC68_IDSTR_V2;
-const char file68_mimestr[]    = SC68_MIMETYPE;
-#define MAX_TRACK_LP 4          /* maximum number of guessed loop allowed                */
-#define MIN_TRACK_MS (45*1000u) /* below this value, force a few loops                   */
-#define DEF_TRACK_MS (90*1000u) /* time we use as default if track contains no such info */
+const char file68_idstr_v1[] = SC68_IDSTR;
+const char file68_idstr_v2[] = SC68_IDSTR_V2;
+const char file68_mimestr[]  = SC68_MIMETYPE;
 
 #ifndef DEBUG_FILE68_O
 # define DEBUG_FILE68_O 0
@@ -89,6 +81,10 @@ const char file68_mimestr[]    = SC68_MIMETYPE;
 int file68_cat = msg68_DEFAULT;
 
 #define ISCHK(A,B) ( (A)[0] == (B)[0] && (A)[1] == (B)[1] )
+
+#define MIN_TRACK_MS (45u*1000u)      /* minimum time to be played. */
+#define MAX_TRACK_LP 4u		      /* max guessed loop allowed */
+
 
 /* Array of static strings, mainly used by metatags. */
 static /* const */ struct strings_table {
@@ -114,7 +110,7 @@ static /* const */ struct strings_table {
   char amiga_chiptune[15];
   char atari_st_chiptune[18];
 
-  char _reserved;
+  char _reserved;			/* must be last */
 } tagstr = {
   SC68_NOFILENAME,
   TAG68_AKA,
@@ -140,11 +136,48 @@ static /* const */ struct strings_table {
   -1,
 };
 
+
+/***********************************************************************
+ * Check functions
+ **********************************************************************/
+
+/* valid year ? */
+static int is_year(const char * const s) {
+  int year = 0;
+  if (isdigit((int)s[0]) && isdigit((int)s[1]) &&
+      isdigit((int)s[2]) && isdigit((int)s[3]) )
+    year = (s[0]-'0')*1000u + (s[1]-'0')*100u
+      + (s[2]-'0')*10u + (s[3]-'0');
+  if (year < 1980 || year >= 2100)	/* Hopefully :) */
+    year = 0;
+  return year;
+}
+
+/* valid disk ? */
+static inline int is_disk(const disk68_t * const mb) {
+  return mb && mb->magic == SC68_DISK_ID;
+}
+
+/* null or valid disk ? */
+static inline int null_or_disk(const disk68_t * const mb) {
+  return !mb || mb->magic == SC68_DISK_ID;
+}
+
+/* Track value in range ? */
+static inline int in_range(const disk68_t * mb, const int track) {
+  return track > 0 && track <= mb->nb_mus;
+}
+
+/* Track in disk ? */
+static inline int in_disk(const disk68_t * mb, const int track) {
+  return is_disk(mb) && in_range(mb, track);
+}
+
 /* Does this memory belongs to the disk data ? */
 static inline int is_disk_data(const disk68_t * const mb, const void * const _s)
 {
   const char * const s = (const char *) _s;
-  return (mb && s >= mb->data && s < mb->data+mb->datasz);
+  return is_disk(mb) && s >= mb->data && s < mb->data+mb->datasz;
 }
 
 /* Does this memory belongs to the static string array ? */
@@ -160,7 +193,7 @@ static inline int is_static_str(const char * const s)
 static void free_string(const disk68_t * const mb, void * const s)
 {
   if (s && !is_static_str(s) && !is_disk_data(mb,s))
-    free68(s);
+    free(s);
 }
 
 static inline void safe_free_string(const disk68_t * const mb, void * const _s)
@@ -172,9 +205,10 @@ static inline void safe_free_string(const disk68_t * const mb, void * const _s)
 static char *strdup_not_static(const disk68_t * const mb, const char * s)
 {
   return (char *) ( (s && !is_static_str(s) && !is_disk_data(mb,s))
-                    ? strdup68(s)
-                    : s );
+		    ? strdup68(s)
+		    : s );
 }
+
 
 /* Peek Little Endian Unaligned 32 bit value */
 static inline int LPeek(const void * const a)
@@ -185,6 +219,16 @@ static inline int LPeek(const void * const a)
   return r;
 }
 
+/* Peek big Endian Unaligned 16 bit value */
+static inline int WPeekBE(const void * const a)
+{
+  int r;
+  const unsigned char * const c = (const unsigned char *) a;
+  r = c[1] + ((int)(signed char)c[0] << 8);
+  return r;
+}
+
+/* Peek Big Endian Unaligned 32 bit value */
 static inline int LPeekBE(const void * const a)
 {
   int r;
@@ -207,12 +251,11 @@ static int myatoi(const char *s, int i, int max, int * pv)
 {
   int v = 0;
   for (; i<max; ++i) {
-    int c = s[i] & 255;
-    if (c>='0' && c<='9') {
+    int c = s[i];
+    if (isdigit(c))
       v = v * 10 + c - '0';
-    } else {
+    else
       break;
-    }
   }
   if (pv) *pv = v;
   return i;
@@ -231,7 +274,7 @@ static int is_valid_key(const char * key)
   return 1;
 }
 
-/* Searching a key (key can be 0 to search an empty slot) */
+/* Searching a key (key can be nullptr to search an empty slot) */
 static int get_customtag(const tagset68_t * tags, const char * key)
 {
   int i;
@@ -256,7 +299,7 @@ static int get_customtag(const tagset68_t * tags, const char * key)
 
 /* Set/Replace a custom key (val can be 0 to remove the tag). */
 static int set_customtag(disk68_t * mb, tagset68_t * tags,
-                         const char * key, const char * val)
+			 const char * key, const char * val)
 {
   int i
     = get_customtag(tags, key);
@@ -264,17 +307,18 @@ static int set_customtag(disk68_t * mb, tagset68_t * tags,
     if (i >= 0) {
       safe_free_string(mb,&tags->array[i].val);
       if (i >= TAG68_ID_CUSTOM)
-        safe_free_string(mb,&tags->array[i].key);
+	safe_free_string(mb,&tags->array[i].key);
     }
   } else {
     if (i < 0)
       i = get_customtag(tags, 0);
     if (i >= 0) {
       safe_free_string(mb,&tags->array[i].val);
-      if (!tags->array[i].key && !(tags->array[i].key = strdup_not_static(mb, key)))
-        i = -1;
+      if (!tags->array[i].key &&
+	  !(tags->array[i].key = strdup_not_static(mb, key)))
+	i = -1;
       else if (!(tags->array[i].val = strdup_not_static(mb, val)))
-        i = -1;
+	i = -1;
     }
   }
   return i;
@@ -283,29 +327,120 @@ static int set_customtag(disk68_t * mb, tagset68_t * tags,
 #define ok_int(V)  strok68(V)
 #define strnull(S) strnevernull68(S)
 
-static int sndh_is_magic(const char *buffer, int max)
+static int gzip_is_magic(const char * buffer)
 {
-  const int start = 6;
+  return 1
+    && buffer[0] == 0x1f
+    && buffer[1] == (char)0x8b
+    && buffer[2] == 8;
+}
+
+static int ice_is_magic(const char * buffer)
+{
+  return 1
+    && buffer[0] == 'I'
+    && (buffer[1]|0x20) == 'c'
+    && (buffer[2]|0x20) == 'e'
+    && buffer[3] == '!';
+}
+
+struct sndh_boot { int init, kill, play, data; };
+
+/* Decode 68k instruction at the beginning of sndh files.
+ * @return  offset of the jump or org if it's a rts.
+ * @retval -1 on error
+ */
+static int sndh_decode(const char * buf, int org, int off)
+{
+  if (off <= 10) {
+    unsigned int w0, w1;
+    w0 = WPeekBE(buf + off + 0);
+
+    /* Skip nop */
+    if (w0 == 0x4e71)
+      return sndh_decode(buf,org,off+2);
+    w1 = WPeekBE(buf + off + 2);
+
+    /* Decode 68k instructions allowed instructions: jmp(pc)/bra/bra.s/rts
+     */
+    if (w0 == 0x6000 || w0 == 0x4efa)
+      return off + 2 + w1;		/* bra and jmp(pc) */
+    else if ( (w0 & 0xff00) == 0x6000 )
+      return off + (int8_t) w0;		/* bra.s */
+    else if ( w0 == 0x4e75 || (w0 == 0x4e00 && off == 4))
+      return org;			/* rts or illegal-fix */
+  }
+  return -1;
+}
+
+/* @retval 0   on error
+ * @retval 12  nornal 'SNDH' tag position.
+ */
+static int sndh_is_magic(const char *buffer, int max, struct sndh_boot * sb)
+{
+  struct sndh_boot tmp, * boot = sb ? sb : &tmp;
+  const int start = 10;
   int i=0, v = 0;
-  if (max >= start) {
-    for (i=start, v = LPeekBE(buffer); i < max && v != sndh_cc;
-         v = ((v<<8)| (buffer[i++]&255)) & 0xFFFFFFFF)
+
+  boot->init = boot->kill = boot->play = -1;
+  boot->data = 0x8000;
+
+  if (max >= 12
+      && (boot->init = sndh_decode(buffer,0,0)) >= 0
+      && (boot->kill = sndh_decode(buffer,4,4)) >= 0
+      && (boot->play = sndh_decode(buffer,8,8)) >= 0 ) {
+
+    if (boot->init >= 16 && boot->init < boot->data)
+      boot->data = boot->init;
+    if (boot->kill >= 16 && boot->kill < boot->data)
+      boot->data = boot->kill;
+    if (boot->play >= 16 && boot->play < boot->data)
+      boot->data = boot->play;
+    if (boot->data == 0x1000)
+      return 0;
+    max = boot->data;
+
+    for (i=start, v = LPeekBE(buffer+i); i < max && v != sndh_cc;
+	 v = ((v<<8) | (buffer[i++]&255)) & 0xFFFFFFFF)
       ;
   }
   i = (v == sndh_cc) ? i-4: 0;
+
+  assert(i==0 || i == 12);
+
   return i;
 }
+
+static
+int isread(vfs68_t * const is, void * data, int len, unsigned int * hptr)
+{
+  int read = vfs68_read(is, data, len);
+  if (read > 0 && hptr) {
+    uint32_t h = *hptr;
+    int n = read;
+    uint8_t * k = (uint8_t *) data;
+    do {
+      h += *k++;
+      h += h << 10;
+      h ^= h >> 6;
+    } while (--n);
+    *hptr = h;
+  }
+  return read;
+}
+
 
 /* Ensure enough data in id buffer;
  *  retval  0      on error
  *  retval  count  on success
  */
 static inline
-int ensure_header(istream68_t * const is, char *id, int have, int need)
+int ensure_header(vfs68_t * const is, char *id,
+		  int have, int need, unsigned int * hptr)
 {
   if (have < need) {
     int miss = need - have;
-    int read = istream68_read(is, id+have, miss);
+    int read = isread(is, id+have, miss, hptr);
     if (read != miss) {
       /* msg68_error("not a sc68 file (%s)\n", read==-1?"read error":"eof"); */
       have = 0;
@@ -322,23 +457,25 @@ int ensure_header(istream68_t * const is, char *id, int have, int need)
  * or -ice_cc if may be iced
  * or -sndh_cc if may be sndh
  */
-static int read_header(istream68_t * const is)
+static int read_header(vfs68_t * const is, unsigned int * hptr)
 {
   char id[256];
   const int idv1_req = sizeof(file68_idstr_v1);
   const int idv2_req = sizeof(file68_idstr_v2);
   const int sndh_req = 32;
   int have = 0;
-  const char * missing_id = "not a sc68 file (no magic)";
+  const char missing_id[] = "not a sc68 file (no magic)";
+
+  assert( idv1_req == 56 );
+  assert( idv2_req ==  8 );
 
   /* Read ID v2 string */
-  if(have = ensure_header(is, id, have, idv2_req), !have) {
+  if(have = ensure_header(is, id, have, idv2_req, hptr), !have)
     return -1;
-  }
 
   if (!memcmp(id, file68_idstr_v1, idv2_req)) {
     /* looks like idv1; need more bytes to confirm */
-    if (have = ensure_header(is, id, have, idv1_req), !have) {
+    if (have = ensure_header(is, id, have, idv1_req, hptr), !have) {
       return -1;
     }
     if (memcmp(id, file68_idstr_v1, idv1_req)) {
@@ -348,35 +485,35 @@ static int read_header(istream68_t * const is)
   } else if (!memcmp(id, file68_idstr_v2, idv2_req)) {
     TRACE68(file68_cat,"file68: found %s signature\n","SC68_v2");
   } else {
-    if (have = ensure_header(is, id, have, sndh_req), !have) {
+    if (have = ensure_header(is, id, have, sndh_req, hptr), !have) {
       return -1;
     }
-    if (gzip68_is_magic(id)) {
+    if (gzip_is_magic(id)) {
       TRACE68(file68_cat,"file68: found %s signature\n","GZIP");
       return -gzip_cc;
-    } else if (ice68_is_magic(id)) {
+    } else if (ice_is_magic(id)) {
       TRACE68(file68_cat,"file68: found %s signature\n","ICE!");
       return -ice_cc;
     } else {
-      /* Must be done after gzip or ice becausez id-string may appear
+      /* Must be done after gzip or ice because id-string may appear
        * in compressed buffer too.
        */
-      if (sndh_is_magic(id,sndh_req)) {
-        TRACE68(file68_cat,"file68: found %s signature\n","SNDH");
-        return -sndh_cc;
+      if (sndh_is_magic(id,sndh_req,0)) {
+	TRACE68(file68_cat,"file68: found %s signature\n","SNDH");
+	return -sndh_cc;
       }
     }
     return error68(missing_id);
   }
 
   /* Check 1st chunk */
-  if (istream68_read(is, id, 4) != 4
+  if (isread(is, id, 4, hptr) != 4
       || memcmp(id, CH68_CHUNK CH68_BASE, 4)) {
     return error68("file68: not sc68 file -- missing base chunk");
   }
 
   /* Get base chunk : file total size */
-  if (istream68_read(is, id, 4) != 4
+  if (isread(is, id, 4, hptr) != 4
       || (have = LPeek(id), have <= 8)) {
     return error68("file68: not sc68 file -- weird base chunk size");
   }
@@ -414,29 +551,77 @@ static unsigned int ms_to_fr(unsigned int ms, unsigned int hz)
   return (unsigned int) fr;
 }
 
-/* Extract AKA from legacy sc68 artist nomenclature `ARTIST (AKA)'
- * excepted for unknown (replay) ones.
- */
-static int guess_artist_alias(disk68_t * mb, tagset68_t * tags)
+static inline int is_aka_char(int c) {
+  return c >= 32 && c != ')';
+}
+
+/* match ".+ ([^)]+)$" */
+static int has_parenthesis(char * name, char ** sptr, char ** eptr)
 {
-  int id;
-  char * artist = tags->array[TAG68_ID_ARTIST].val;
-  if ((id = get_customtag(tags, tagstr.aka))<0 && artist) {
-    /* Don't have aka tag, trying to guess it from artist */
-    char * e = strrchr(artist,')');
-    if (e && !e[1]) {
-      char * s;
-      for (s = e-1; s > artist && *s != '('; --s)
-        ;
-      if (s > artist && s[-1] == ' ' && strncmp68(artist,"unknown",7)) {
-        s[-1] = 0;
-        *e = 0;
-        id = set_customtag(mb, tags, tagstr.aka, s+1);
-        TRACE68(file68_cat,"file68 guessed AKA '%s' from '%s' tag-id:%d\n", s+1, artist, id);
-      }
+  int i, l = strlen(name);
+
+  if (l < 5 || name[l-1] != ')')
+    return 0;
+  for (i = l-2; i > 1 && name[i] != '('; --i)
+    if (!is_aka_char(name[i])) return 0;
+  if (i < 2 || i == l-2 || name[i-1] != ' ')
+    return 0;
+  *sptr = name+i;
+  *eptr = name+l-1;
+
+  return 1;
+}
+
+/* A bit of cooking here
+ *
+ * For sc68 file: extract AKA from legacy sc68 artist nomenclature
+ *                `ARTIST (AKA)' excepted for unknown (replay) ones.
+ *
+ * For sndh file: extract YEAR from title or artist.
+ *
+ * always returns AKA tag id or -1
+ */
+static int decode_artist(disk68_t * mb, tagset68_t * tags)
+{
+  char *s, *e;
+  const int is_sc68 = mb->tags.tag.genre.val == tagstr.sc68;
+  int id_aka
+    = get_customtag(tags, tagstr.aka);
+
+  if (is_sc68) {
+    /* sc68 file format */
+    if (id_aka >= 0)
+      return id_aka;
+    if ( !tags->tag.artist.val ||
+	 !has_parenthesis(tags->tag.artist.val, &s, &e) ||
+	 !strncmp68(tags->tag.artist.val,"unknown",7) )
+      return id_aka;
+    s[-1] = e[0] = 0;			/* strip  */
+    id_aka = set_customtag(mb, tags, tagstr.aka, s+1);
+    TRACE68(file68_cat, "file68 guessed %s='%s'\n", tagstr.aka, s+1);
+  } else {
+    /* Some sndhs have a "(year)" in the title or in the artist. Only
+     * search for it if the file does not provide a YEAR tag. */
+    if (get_customtag(&mb->tags, tagstr.year) < 0 &&
+	 (
+	   (
+	     ( tags->tag.title.val &&
+	       has_parenthesis(tags->tag.title.val, &s, &e) &&
+	       e - s == 5 && is_year(s+1) )
+	     ||
+	     ( tags->tag.artist.val &&
+	       has_parenthesis(tags->tag.artist.val, &s, &e) &&
+	       e - s == 5 && is_year(s+1) )
+	     )
+	   )
+      ) {
+      s[-1] = e[0] = 0;			/* strip */
+      set_customtag(mb, &mb->tags, tagstr.year, s+1);
+      TRACE68(file68_cat, "file68 guessed %s='%s'\n",
+	      tagstr.year, s+1);
     }
   }
-  return id;
+  return id_aka;
 }
 
 /* This function inits all pointers for this music files. It setup non
@@ -446,9 +631,10 @@ static int guess_artist_alias(disk68_t * mb, tagset68_t * tags)
 static int valid(disk68_t * mb)
 {
   music68_t *m;
-  int i, pdatasz = 0;
-  void * pdata   = 0;
+  int i, pdatasz = 0, has_xtd = SC68_XTD, has_time = 0;
+  void * pdata	 = 0;
   char * title, * artist, * aalias;
+  int is_sndh = mb->tags.tag.genre.val == tagstr.sndh;
 
   if (mb->nb_mus <= 0)
     return error68("file68: disk has no track");
@@ -457,31 +643,30 @@ static int valid(disk68_t * mb)
   if (mb->def_mus < 0 || mb->def_mus >= mb->nb_mus)
     mb->def_mus = 0;
 
-  /* default album is 'noname' */
+  /* default album is 'n/a' */
   if (!mb->tags.tag.title.val)
     mb->tags.tag.title.val = tagstr.n_a;
   /* default title is album */
-  title  = mb->tags.tag.title.val;
+  title	 = mb->tags.tag.title.val;
   /* default album artist is default track artist. Postpone ... */
   /* default artist is album artist or 'n/a' */
   artist = mb->tags.tag.artist.val ? mb->tags.tag.artist.val : tagstr.n_a;
   /* default alias */
-  aalias = (i = guess_artist_alias(mb, &mb->tags), i<0) ? 0 : mb->tags.array[i].val;
+  aalias = (i = decode_artist(mb, &mb->tags), i<0)
+    ? 0 : mb->tags.array[i].val;
 
   /* Disk total time : 00:00 */
   mb->time_ms = 0;
 
   /* Clear flags */
-  mb->hwflags.all = 0;
+  mb->hwflags = 0;
 
   /* Init all music in this file */
   for (m = mb->mus, i = 0; m < mb->mus + mb->nb_mus; m++, i++) {
 
-    /* $$$ TEMP $$$ hack tao_tsd, to remove ym from hardware flags */
-    if (!strcmp68(m->replay,"tao_tsd")) {
-      m->hwflags.bit.ym     = 0;
-      m->hwflags.bit.ste    = 1;
-    }
+    /* Default d0 value is track number */
+    if ( ! m->d0 )
+      m->d0 = i+1;
 
     /* Default load address */
     if ( (m->has.pic = !m->a0) )
@@ -495,9 +680,44 @@ static int valid(disk68_t * mb)
     if ( (m->has.time = m->first_fr > 0u) ) {
       m->first_ms = fr_to_ms(m->first_fr, m->frq);
     } else {
-      if ( !(m->has.time = m->first_ms > 0) )
-        m->first_ms = DEF_TRACK_MS;
+      m->has.time = m->first_ms > 0u;
       m->first_fr = ms_to_fr(m->first_ms, m->frq);
+    }
+
+    /* For sndh file that does not have time or hardware flags look up
+     * in sc68 hardcoded database. */
+    if (is_sndh && ( ! m->has.time || ! (m->hwflags & SC68_XTD) ) ) {
+      unsigned int frames;
+      int flags;
+
+      /* TODO: check sndh time */
+      TRACE68(file68_cat,
+	      "file68: searching track #%02d:%08x in sndh timedb\n",
+	      i+1, mb->hash);
+
+      if (-1 != timedb68_get(mb->hash, i, &frames, &flags)) {
+	m->has.time = 1;
+	m->first_fr = frames;
+	m->first_ms = fr_to_ms(m->first_fr, m->frq);
+	m->hwflags  = SC68_XTD;
+	if (flags & TDB_PSG)
+	  m->hwflags |= SC68_PSG;
+	if (flags & TDB_STE)
+	  m->hwflags |= (SC68_DMA|SC68_LMC);
+	/* Invert the flag as timerdb knows about unused timers. */
+
+	m->hwflags |= (flags&(TDB_TA|TDB_TB|TDB_TC|TDB_TD)/TDB_TA) << SC68_MFP_BIT;
+	TRACE68(file68_cat,
+		"file68: found track #%02d:%08x in sndh timedb"
+		" -- %d ms, %d frames, %c%c%c%c%s%s\n",
+		i+1, mb->hash, m->first_ms, m->first_fr,
+		(m->hwflags & SC68_MFP_TA) ? 'A' : '.',
+		(m->hwflags & SC68_MFP_TB) ? 'B' : '.',
+		(m->hwflags & SC68_MFP_TC) ? 'C' : '.',
+		(m->hwflags & SC68_MFP_TD) ? 'D' : '.',
+		(m->hwflags & SC68_PSG) ? ",PSG" : "",
+		(m->hwflags & SC68_DMA) ? ",STE" : "");
+      }
     }
 
     if (m->has.loop) {
@@ -513,60 +733,62 @@ static int valid(disk68_t * mb)
       /* Track does not loop, force number of loops to 1. */
       m->loops = 1;
     } else if (!m->loops) {
+      /* Number of loop unspeficied: calcultate it so that the total
+       * time never be less than MIN_TRACK_MS, unless it requires more
+       * loop than MAX_TRACK_LP.
+       */
       m->loops = 1;
       if ( m->first_ms < MIN_TRACK_MS)
-        m->loops += (MIN_TRACK_MS - m->first_ms + (m->loops_ms>>1)) / m->loops_ms;
+	m->loops += (MIN_TRACK_MS - m->first_ms + (m->loops_ms>>1)) / m->loops_ms;
       if (m->loops > MAX_TRACK_LP)
-        m->loops = MAX_TRACK_LP;
+	m->loops = MAX_TRACK_LP;
     }
 
-    m->total_fr = m->first_fr + (m->loops - 1) * m->loops_fr;
-    m->total_ms = fr_to_ms(m->total_fr, m->frq);
+    if (m->loops > 0) {
+      mb->time_ms += fr_to_ms(m->first_fr+m->loops_fr*(m->loops-1), m->frq);
+      has_time ++;
+    } else
+      m->loops = 0;
 
-    /* set start time in the disk. */
-    m->start_ms = mb->time_ms;
-
-    /* Advance disk total time. */
-    mb->time_ms += m->total_ms;
-
-    /* default mode is YM2149 (Atari ST) */
-    if (!m->hwflags.all) {
-      m->hwflags.bit.ym = 1;
-    }
-    mb->hwflags.all |= m->hwflags.all;
+    /* default mode is Atari-ST YM2149 PSG */
+    if (!m->hwflags)
+      m->hwflags |= SC68_PSG;
+    mb->hwflags |= m->hwflags;
+    has_xtd &= (m->hwflags & SC68_XTD);
 
     /* default genre */
     if (!m->tags.tag.genre.val)
-      m->tags.tag.genre.val = (m->hwflags.bit.amiga)
-        ? tagstr.amiga_chiptune
-        : tagstr.atari_st_chiptune
-        ;
+      m->tags.tag.genre.val = (m->hwflags & SC68_AGA)
+	? tagstr.amiga_chiptune
+	: tagstr.atari_st_chiptune
+	;
 
     /* default music name is album name */
     if (!m->tags.tag.title.val)
-      m->tags.tag.title.val = title;    /* inherits title  */
+      m->tags.tag.title.val = title;	/* inherits title  */
     else
-      title = m->tags.tag.title.val;    /* new inheririted title */
+      title = m->tags.tag.title.val;	/* new inheririted title */
 
     /* default artist */
     if (!m->tags.tag.artist.val) {
-      m->tags.tag.artist.val = artist;  /* inherit artist */
+      m->tags.tag.artist.val = artist;	/* inherit artist */
       if (aalias)
-        set_customtag(mb, &m->tags, tagstr.aka, aalias);
+	set_customtag(mb, &m->tags, tagstr.aka, aalias);
     } else {
       int id;
-      artist = m->tags.tag.artist.val;  /* new inherited artist */
-      aalias = (id = guess_artist_alias(mb, &m->tags), id < 0) ? 0 : m->tags.array[id].val;
+      artist = m->tags.tag.artist.val;	/* new inherited artist */
+      aalias = (id = decode_artist(mb, &m->tags), id < 0)
+	? 0 : m->tags.array[id].val;
     }
 
     /* use data from previous music */
     if (!m->data) {
-      m->data   = (char *) pdata;       /* inherit music data */
+      m->data	= (char *) pdata;	/* inherit music data */
       m->datasz = pdatasz;
     }
     if (!m->data)
       return error68("file68: track #%d has no data", i+1);
-    pdata   = m->data;                  /* new inherited music data */
+    pdata   = m->data;			/* new inherited music data */
     pdatasz = m->datasz;
   }
 
@@ -574,327 +796,77 @@ static int valid(disk68_t * mb)
   if (!mb->tags.tag.artist.val) {
     mb->tags.tag.artist.val = mb->mus[mb->def_mus].tags.tag.artist.val;
     if (i = get_customtag(&mb->mus[mb->def_mus].tags, tagstr.aka), i>=0)
-      set_customtag(mb, &mb->tags, tagstr.aka, mb->mus[mb->def_mus].tags.array[i].val);
+      set_customtag(mb, &mb->tags, tagstr.aka,
+		    mb->mus[mb->def_mus].tags.array[i].val);
   }
 
-  /* aSIDidy */
-  if (aSIDify) {
-    int j;
+  /* All tracks must have time onfo for disk tine info to be valid. */
+  if (has_time != mb->nb_mus)
+    mb->time_ms = 0;
 
-    /* Init all music in this file */
-    for (i=j=0; i<mb->nb_mus && mb->nb_mus+j<SC68_MAX_TRACK ; i++) {
-      music68_t * s = mb->mus+i;
-
-      if (!s->hwflags.bit.ym)
-        continue;                  /* not a YM track, can't aSIDify */
-
-      switch (aSIDify) {
-
-      case 1:
-        /* "safe" mode */
-        if (!s->hwflags.bit.timers   /* Don't know about timers: not safe */
-            || s->hwflags.bit.timera /* One or more timers in used: not safe */
-            || s->hwflags.bit.timerb
-            || s->hwflags.bit.timerc
-            || s->hwflags.bit.timerd)
-          break;
-
-      case 2:
-        /* "force" mode */
-
-        if (1)
-          m = s;
-        else {
-          m  = mb->mus + mb->nb_mus + j++;
-          *m = *s;
-          /* $$$ WE SHOULD CHECK FOR MALLOCATED DATA IN THE TAG SET */
-        }
-
-        m->has.asid_trk = i+1;
-        m->has.asid_tA = 'A'-'A';
-        m->has.asid_tB = 'C'-'A';
-        m->has.asid_tC = 'D'-'A';
-        m->has.asid_tX = 'B'-'A';
-        if (m != s) {
-          m->start_ms = mb->time_ms;
-          mb->time_ms += m->total_ms;
-        }
-        mb->nb_asid++;
-
-      default:
-        break;
-      }
-    }
-    mb->nb_mus += j;
-    TRACE68(file68_cat,"file68: aSID tracks -- %d/%d\n", mb->nb_asid,mb->nb_mus );
-  }
+  /* All tracks must have extended info for the disk to have it. */
+  mb->hwflags |= has_xtd;		/* all tracks must have it */
 
   return 0;
 }
 
-int file68_is_our_url(const char * url, const char * exts, int * is_remote)
+int file68_is_our(const char * uri, const char * exts, int * is_remote)
 {
-  const char * url_end, *u;
-  char protocol[16], *p;
-  int has_protocol, remote, is_our;
-
-  TRACE68(file68_cat,"file68: check url --\n",url);
-
-  is_our = remote = 0;
-  if (!url || !*url) {
-    goto exit;
-  }
-
-  /* Default supported extensions */
-  if (!exts) {
-    exts = ".sc68\0.sndh\0.snd\0";
-  }
-
-  url_end = url + strlen(url);
-  has_protocol = !url68_get_protocol(protocol, sizeof(protocol), url);
-
-  if (has_protocol) {
-    is_our = !strcmp68(protocol,"SC68");
-    if (!is_our && !strcmp68(protocol,"RSC68") && url+14<url_end) {
-      is_our = strncmp(url+8, "music/", 6);
-    }
-
-    if (is_our)  {
-      /* $$$ Not really sure; may be remote or not. The only way to
-         know is to check for the corresponding local file.
-      */
-      remote = 0;
-      goto exit;
-    }
-  }
-
-  /* Check remote for other protocol */
-  remote = !url68_local_protocol(protocol);
-
-  /* Check extension ... */
-  p = protocol+sizeof(protocol);
-  *--p = 0;
-  for (u=url_end; u > url && p > protocol; ) {
-    int c = *--u & 255;
-    if (c == '/') {
-      break;
-    }
-    *--p = c;
-    if (c == '.') {
-      if (!strcmp68(p,".GZ")) {
-        p = protocol+sizeof(protocol)-1;
-      } else {
-        break;
-      }
-    }
-  }
-
-  while (*exts) {
-    is_our = !strcmp68(p,exts);
-    if (is_our) {
-      break;
-    }
-    exts += strlen(exts)+1;
-  }
-
-exit:
-  if (is_remote) *is_remote = remote;
-  TRACE68(file68_cat, "file68: check url -- [%s]\n", ok_int(!is_our));
-  return is_our;
+  assert(!"do not use, needs a freshen up");
+  return 0;
 }
 
-/* Check if file is probable SC68 file
- * return 0:SC68-file
- */
-int file68_verify(istream68_t * is)
+static vfs68_t * uri_or_file_create(const char * uri, int mode,
+				    rsc68_info_t * info)
 {
-  int res;
-/*   const char * fname = strnull(istream68_filename(is)); */
-
-  if (!is) {
-    res = error68("file68_verify(): null pointer");
-    goto error;
-  }
-
-  res = read_header(is);
-
-  /* Verify tells it is a gzip file, so we may give it a try. */
-  if (res < 0) {
-    void * buffer = 0;
-    int len;
-
-    switch (res) {
-    case -gzip_cc:
-      if (istream68_seek_to(is,0) == 0) {
-        istream68_t * zis;
-        zis = istream68_z_create(is,ISTREAM68_OPEN_READ,
-                                 istream68_z_default_option);
-        res = -1;
-        if (!istream68_open(zis)) {
-          res = file68_verify(zis);
-        }
-        istream68_destroy(zis);
-      }
-      break;
-    case -ice_cc:
-      if (istream68_seek_to(is,0) == 0) {
-        buffer = ice68_load(is, &len);
-      }
-      break;
-    case -sndh_cc:
-      res = 0;
-      break;
-    }
-    if (buffer) {
-      res = -res;
-      res = file68_verify_mem(buffer, len);
-      free68(buffer);
-    }
-  }
-
-error:
-  return -(res < 0);
-}
-
-static istream68_t * url_or_file_create(const char * url, int mode,
-                                        rsc68_info_t * info)
-{
-  char protocol[16], tmp[512];
-  const int max = sizeof(tmp)-1;
-  istream68_t *isf = 0;
-  int has_protocol;
-  char * newname = 0;
+  vfs68_t *vfs = 0;
 
   TRACE68(file68_cat,"file68: create -- %s -- mode:%d -- with%s info\n",
-          strnull(url),mode,info?"":"out");
+	  strnull(uri),mode,info?"":"out");
 
-  if (info) {
+  if (info && !strncmp68(uri,"sc68://music/", 13)) {
     info->type = rsc68_last;
+    vfs = uri68_vfs(uri, mode, 1, &info);
+  } else {
+    vfs = uri68_vfs(uri, mode, 0);
   }
 
-  has_protocol = !url68_get_protocol(protocol, sizeof(protocol), url);
-
-  if (has_protocol) {
-
-    /* convert sc68:// -> rsc68:// */
-    if (!strcmp68(protocol, "SC68")) {
-      url += 4+3;
-      strcpy(tmp, "rsc68://music/");
-      strncpy(tmp+14, url, max-14);
-      tmp[max] = 0;
-      url = tmp;
-      strcpy(protocol,"rsc68");
-      TRACE68(file68_cat,"file68: transform url into -- %s\n",url);
-    }
-
-    if (!strcmp68(protocol, "RSC68")) {
-      return rsc68_open_url(url, mode, info);
-    }
+  if (vfs68_open(vfs) < 0) {
+    vfs68_destroy(vfs);
+    vfs = 0;
   }
 
-  isf = url68_stream_create(url, mode);
-
-  if (istream68_open(isf)) {
-    istream68_destroy(isf);
-    isf = 0;
-  }
-
-  free68(newname);
   TRACE68(file68_cat,"file68: create -- [%s,%s]\n",
-          ok_int(!isf),
-          strnull(istream68_filename(isf)));
-  return isf;
+	  ok_int(!vfs),
+	  strnull(vfs68_filename(vfs)));
+  return vfs;
 }
 
-int file68_verify_url(const char * url)
-{
-  int res;
-  istream68_t * is;
-
-/*   CONTEXT68_CHECK(context); */
-
-  is = url_or_file_create(url,1,0);
-  res = file68_verify(is);
-  istream68_destroy(is);
-
-  return -(res < 0);
-}
-
-int file68_verify_mem(const void * buffer, int len)
-{
-  int res;
-  istream68_t * is;
-
-  is = istream68_mem_create((void *)buffer,len,1);
-  res = istream68_open(is) ? -1 : file68_verify(is);
-  istream68_destroy(is);
-
-  return res;
-}
-
-/* Check if file is probable SC68 file
- * return 0:SC68-file
- */
-int file68_diskname(istream68_t * is, char *dest, int max)
-{
-  msg68_error(0,"file68: file68_diskname function is deprecated\n");
-  return -1;
-}
-
-disk68_t * file68_load_url(const char * fname)
+disk68_t * file68_load_uri(const char * fname)
 {
   disk68_t    * d;
-  istream68_t * is;
-  rsc68_info_t  info;
+  vfs68_t * is;
+  rsc68_info_t	info;
 
   TRACE68(file68_cat,"file68: load -- %s\n", strnull(fname));
 
-  is = url_or_file_create(fname, 1, &info);
+  is = uri_or_file_create(fname, 1, &info);
   d = file68_load(is);
-  istream68_destroy(is);
+  vfs68_destroy(is);
 
   if (d && info.type == rsc68_music) {
-    int i;
+    // int i;
 
     TRACE68(file68_cat,
-            "file68: load -- on the fly patch -- #%d/%d/%d\n",
-            info.data.music.track,
-            info.data.music.loop,
-            info.data.music.time);
+	    "file68: load -- on the fly patch -- #%d/%d/%d\n",
+	    info.data.music.track,
+	    info.data.music.loops,
+	    info.data.music.time_ms);
 
-    if (info.data.music.track > 0 && info.data.music.track <= d->nb_mus) {
-      d->mus[0] = d->mus[info.data.music.track-1];
-      d->mus[0].start_ms = 0;
-      d->mus[0].track = info.data.music.track;
-      d->def_mus = 0;
-      d->nb_mus  = 1;
-      d->time_ms = d->mus[0].total_ms;
-      d->hwflags.all = d->mus[0].hwflags.all;
-    }
-    if (info.data.music.loop != -1) {
-      for (i=0; i<d->nb_mus; ++i) {
-        music68_t * m = d->mus + i;
-        m->loops    = info.data.music.loop;
-        m->total_fr = m->first_fr + ( m->loops - 1 ) * m->loops_fr;
-        m->total_ms = fr_to_ms(m->total_fr, m->frq);
-      }
-    }
-    if (info.data.music.time != -1) {
-      unsigned int ms = info.data.music.time * 1000u;
-      for (i=0; i<d->nb_mus; ++i) {
-        music68_t * m = d->mus + i;
-        m->total_fr = ms_to_fr(ms, m->frq);
-        m->total_ms = ms;
-      }
-    }
-    d->time_ms = 0;
-    for (i=0; i<d->nb_mus; ++i) {
-      music68_t * m = d->mus + i;
-      m->start_ms = d->time_ms;
-      d->time_ms += m->total_ms;
-    }
+    d->force_track   = info.data.music.track;
+    d->force_loops   = info.data.music.loops;
+    d->force_ms	     = info.data.music.time_ms;
   }
-
   TRACE68(file68_cat,"file68: load -- [%s]\n", ok_int(!d));
   return d;
 }
@@ -902,18 +874,54 @@ disk68_t * file68_load_url(const char * fname)
 disk68_t * file68_load_mem(const void * buffer, int len)
 {
   disk68_t * d;
-  istream68_t * is;
+  vfs68_t * is;
 
-  is = istream68_mem_create((void *)buffer,len,1);
-  d = istream68_open(is) ? 0 : file68_load(is);
-  istream68_destroy(is);
+  is = uri68_vfs("mem:", 1, 2, buffer, len);
+  d = vfs68_open(is) ? 0 : file68_load(is);
+  vfs68_destroy(is);
 
   return d;
 }
 
-static int st_isgraph( int c )
+
+static int sndh_flags(hwflags68_t * hw, const char * b, int len)
 {
-  return c >= 32 && c < 128;
+  int k, f;
+
+  TRACE68(file68_cat,
+	  "file68: sndh -- FLAGS are '%s'\n", b);
+
+  for (f=SC68_XTD, k=0; k<len && b[k]; ++k)
+    switch (b[k]) {
+    case '~': break;			/* Ignore '~' */
+    case 'y': f |= SC68_PSG; break;
+    case 'e': f |= SC68_DMA; break;
+    case 'a': f |= SC68_MFP_TA; break;
+    case 'b': f |= SC68_MFP_TB; break;
+    case 'c': f |= SC68_MFP_TC; break;
+    case 'd': f |= SC68_MFP_TD; break;
+    case 'p': f |= SC68_AGA; break;
+    case 'l': f |= SC68_LMC; break;
+    case 's': f |= SC68_DSP; break;
+    case 't': f |= SC68_BLT; break;
+    case 'h': f |= SC68_HBL; break;
+    case 'k': break;		/* not system friendly */
+    case 'x': break;		/* reserved for SFX */
+    case 'g': break;		/* reserved for digital only */
+    case 'j': break;		/* reserved for jingles */
+    default:
+      TRACE68(file68_cat,"file68: sndh -- unexpected FLAG '%c'\n", b[k]);
+      assert(!"unexpected FLAG");
+    }
+  if (++k > len)
+    k = len;
+  *hw = f;
+  return k;
+}
+
+static int st_isupper( int c )
+{
+  return (c >= 'A' && c <= 'Z');
 }
 
 static int st_isdigit( int c )
@@ -921,37 +929,84 @@ static int st_isdigit( int c )
   return c >= '0' && c <= '9';
 }
 
-#define SNDH_RIPP_ID 0
-#define SNDH_CONV_ID 1
+static int st_istag( int c )
+{
+  return c == '!' || c == '#';
+}
 
+static int st_isgraph( int c )
+{
+  return st_isupper(c) || st_isdigit(c) || st_istag(c);
+}
+
+/* check memory range, trims space, clean control chars and returns
+ * its length */
+static int chkstr(char *b, int off, int len)
+{
+  const int max = 256, org = off;    /* limit string length to that */
+  int spc = len;		     /* fake value */
+  if (off+max < len)
+    len = off+max;			/* limit string length */
+  for (; off < len; ++off) {
+    int c = b[off];
+    if (!c) {				/* end of string */
+      if (spc+1 < len)
+	b[spc+1] = 0;		     /* trim space */
+      return off-org;		     /* return real length not trim */
+    }
+    if (c <= 32)
+      b[off] = 32;			/* remove cntl char */
+    else {
+      spc = off;			/* last non-space char */
+      if (c & 128)
+	/* TODO ? */;
+    }
+  }
+  return -1;				/* reach the limit */
+}
+
+/* @see http://sndh.atari.org/fileformat.php
+ */
 static int sndh_info(disk68_t * mb, int len)
 {
   const int unknowns_max = 8;
-  int i, vbl = 0, frq = 0, time = 0 , musicmon = 0, steonly = 0,
+  int i, vbl = 0, frq = 0/* , steonly = 0 */,
     unknowns = 0, fail = 0;
-
+  int dtag = 0, ttag = 0;
   char * b = mb->data;
   char empty_tag[4] = { 0, 0, 0, 0 };
+  struct sndh_boot boot;
 
   /* Default */
   mb->mus[0].data   = b;
   mb->mus[0].datasz = len;
-  mb->nb_mus = -1; /* Make validate failed */
-  mb->mus[0].replay = ice68_version() ? 0 : "sndh_ice"; /* native ice depacker ? */
-  mb->mus[0].tags.tag.custom[SNDH_RIPP_ID].key = tagstr.ripper;
-  mb->mus[0].tags.tag.custom[SNDH_CONV_ID].key = tagstr.converter;
 
-  i = sndh_is_magic(b, len);
+#if 1
+  mb->nb_mus = -1; /* Make validate failed */
+#else
+  mb->nb_mus = 1; /* Assume default of 1 track */
+#endif
+
+  mb->mus[0].replay = 0;
+
+  i = sndh_is_magic(b, len, &boot);
   if (!i) {
     /* should not happen since we already have tested it. */
     msg68_critical("file68: sndh -- info mising magic!\n");
     return -1;
   }
+  if (boot.data >= len) {
+    msg68_error("file68: sndh -- unable to locate music data\n");
+    return -1;
+  }
+  len = boot.data;
 
-/*   i   += 4; /\* Skip sndh_cc *\/ */
-/*   len -= 4; */
 
-  /* $$$ Hacky:
+  TRACE68(file68_cat,
+	  "file68: sndh -- init:%04x kill:%04x play:%04x data:%04x\n",
+	  boot.init, boot.kill, boot.play, boot.data);
+
+  /* HAXXX:
      Some music have 0 after values. I don't know what are
      sndh rules. May be 0 must be skipped or may be tag must be word
      aligned.
@@ -960,9 +1015,16 @@ static int sndh_info(disk68_t * mb, int len)
      some "large" unknown tag to break the parser.
   */
 
-  while (i+4 < len) {
+  for (;;) {
     char ** p;
     int j, t, s, ctypes;
+
+    /* skip zeros */
+    for ( ; i < len && !b[i] ; i++ )
+      ;
+
+    if (i+4 > len)
+      break;
 
     /* check char types for the next 4 chars */
     for (ctypes = 0, j=0; j<4; ++j) {
@@ -971,12 +1033,12 @@ static int sndh_info(disk68_t * mb, int len)
     }
 
     TRACE68(file68_cat,
-            "file68: sndh -- pos:%d/%d ctypes:%04X -- '%c%c%c%c'\n",
-            i, len, ctypes, b[i+0], b[i+1], b[i+2], b[i+3]);
+	    "file68: sndh -- pos:%d/%d ctypes:%04X -- '%c%c%c%c'\n",
+	    i, len, ctypes, b[i+0], b[i+1], b[i+2], b[i+3]);
 
-    t       = -1;                       /* offset on tag */
-    s       = -1;                       /* offset on arg */
-    p       = 0;                        /* store arg     */
+    t	    = -1;			/* offset on tag */
+    s	    = -1;			/* offset on arg */
+    p	    = 0;			/* store arg     */
 
     if (  (ctypes & 0x000F) != 0x000F ) {
       /* Not graphical ... should not be a valid tag */
@@ -993,64 +1055,176 @@ static int sndh_info(disk68_t * mb, int len)
       p = &mb->tags.tag.title.val;
     } else if (!memcmp(b+i,"RIPP",4)) {
       /* Ripper */
-      t = i; s = i += 4;
-      p = &mb->mus[0].tags.tag.custom[SNDH_RIPP_ID].val;
+      if (ttag < TAG68_ID_CUSTOM_MAX) {
+	t = i; s = i += 4;
+	mb->mus[0].tags.tag.custom[ttag].key = tagstr.ripper;
+	p = &mb->mus[0].tags.tag.custom[ttag++].val;
+      }
     } else if (!memcmp(b+i,"CONV",4)) {
       /* Converter */
-      t = i; s = i += 4;
-      p = &mb->mus[0].tags.tag.custom[SNDH_CONV_ID].val;
+      if (ttag < TAG68_ID_CUSTOM_MAX) {
+	t = i; s = i += 4;
+	mb->mus[0].tags.tag.custom[ttag].key = tagstr.converter;
+	p = &mb->mus[0].tags.tag.custom[ttag++].val;
+      }
     } else if (!memcmp(b+i, "YEAR", 4)) {
       /* year */
-      t = i; s = i += 4;
-      /* p = ... */
+      if (dtag < TAG68_ID_CUSTOM_MAX) {
+	t = i; s = i += 4;
+	mb->tags.tag.custom[dtag].key = tagstr.year;
+	p = &mb->tags.tag.custom[dtag++].val;
+      }
+#if 0 /* Does not happen probably just a typo in the sndh format doc. */
+    } else if ( (ctypes & 0x0F00) == 0x0F00 && is_year(b+i) && !b[4] ) {
+      assert(0);
+      /* match direct a YEAR */
+      if (dtag < TAG68_ID_CUSTOM_MAX) {
+	t = i; s = i += 4;
+	mb->tags.tag.custom[dtag].key = tagstr.year;
+	mb->tags.tag.custom[dtag++].val = b;
+      }
+#endif
     } else if (!memcmp(b+i,"MuMo",4)) {
       /* MusicMon ???  */
-      msg68_warning("file68: sndh -- what to do with 'MuMo' tag ?\n");
-      musicmon = 1;
-      i += 4;
-    } else if (!memcmp(b+i,"TIME",4)) {
-      int j, tracks;
-      /* Time in second */
-      if (! (tracks = mb->nb_mus) ) {
-        msg68_warning("file68: sndh -- got 'TIME' before track count\n");
-        tracks = 1;
-      }
+      msg68_warning("file68: sndh -- %s\n","what to do with 'MuMo' tag ?");
+      /* musicmon = 1; */
       t = i; i += 4;
+    } else if (!memcmp(b+i,"TIME",4)) {
+      /* Time in second */
+      int j, tracks = mb->nb_mus <= 0 ? 1 : mb->nb_mus;
+      t = i; i += 4 + (i&1);	    /* Force alignment on the table */
       for ( j = 0; j < tracks; ++j ) {
-        if (i < len-2 && j < SC68_MAX_TRACK)
-          mb->mus[j].first_ms = 1000u *
-            ( ( ( (unsigned char) b[i]) << 8 ) | (unsigned char) b[i+1] );
+	if (i < len-2 && j < SC68_MAX_TRACK)
+	  mb->mus[j].first_ms = 1000u *
+	    ( ( ( (unsigned char) b[i]) << 8 ) | (unsigned char) b[i+1] );
 	TRACE68(file68_cat,
-		"file68: sndh -- TIME #%02 -- 0x%02X%02X (%c%c) -- %u ms\n",
+		"file68: sndh -- TIME #%02d -- 0x%02X%02X (%c%c) -- %u ms\n",
 		j+1, (unsigned char)b[i], (unsigned char)b[i+1],
-		isgraph(b[i])?b[i]:'.',	isgraph(b[i+1])?b[i+1]:'.',
+		isgraph((int)(unsigned char)b[i])?b[i]:'.',
+		isgraph((int)(unsigned char)b[i+1])?b[i+1]:'.',
 		mb->mus[j].first_ms);
-        i += 2;
+	i += 2;
       }
+    } else if (!memcmp(b+i, "FLAG", 4)) {
+      /* Track features (hardware,fx...) */
+
+      int j, max=0, tracks=mb->nb_mus <= 0 ? 1 : mb->nb_mus;
+
+      t = i;
+
+      /* Disambiguate FLAG 2 forms: unique string vs string table */
+      if ((i&1) || b[i+4] == '~') {
+	/* single string form */
+	max = i+5;
+	max += sndh_flags(&mb->hwflags, b+max, len-max);
+	for ( j = 0; j < tracks; ++j )
+	  mb->mus[j].hwflags = mb->hwflags;
+      } else {
+	/* multiple string form */
+	for ( j = 0; j < tracks; ++j ) {
+	  music68_t * m = mb->mus+j;
+	  int k, off = WPeekBE(b+i+4+j*2);
+	  k = i+off;
+	  k += sndh_flags(&m->hwflags, b+k, len-k);
+	  if (k > max)
+	    max = k;
+	}
+      }
+      i = max;
 
     } else if ( !memcmp(b+i,"##",2) && ( (ctypes & 0xC00) == 0xC00 ) ) {
       mb->nb_mus = ( b[i+2] - '0' ) * 10 + ( b[i+3] - '0' );
+      /* assert(0); */
       t = i; i += 4;
+    } else if ( ( !memcmp(b+i,"!#",2) || !memcmp(b+i,"#!",2) )
+		&& ( (ctypes & 0xC00) == 0xC00 ) ) {
+      mb->def_mus = ( b[i+2] - '0' ) * 10 + ( b[i+3] - '0' ) - 1;
+      t = i; i += 4;
+    } else if (!memcmp(b+i,"!#SN",4) || !memcmp(b+i,"#!SN",4)) {
+      /* track names (which it is ? The doc uses both ! */
+      int torg, tend, j, max=0, tracks = mb->nb_mus <= 0 ? 1 : mb->nb_mus;
+
+      torg = t = i;	     /* tag offset can be unaligned */
+      i += 4 + (i&1);	     /* the table however has to be aligned */
+      tend = i+tracks*2;     /* offset end of table */
+
+      if (tend >= len) {
+	i = len; continue;	       /* mark the end */
+      }
+
+      /* FIXME: normally (according to the documentation) the subname
+       * table are offset relative the tag itself. However in some
+       * files they are obviously relative to the end of the offset
+       * table. Those are most probably faulty files, but I'll keep
+       * loading them by guessing the offset is wrong since it points
+       * in middle of the offset table instead of an actual string. */
+      for (j = 0; j < tracks; ++j) {
+	int off = WPeekBE(b + i + j*2); /* string offset */
+	if (t+off < tend) {
+	  TRACE68(file68_cat,
+		  "file68: sndh -- faulty !#SN (table:%u-%u string#%d:%u)\n",
+		  t,tend,j+1,t+off);
+	  torg = tend;	   /* origin is the end of the offset table */
+	  break;
+	}
+      }
+
+      /* Now we can start the real thing ! */
+      for (j = 0; j < tracks; ++j, i+=2) {
+	int off = WPeekBE(b + i);	/* string offset */
+	off += torg;			/* add table origin */
+	if ( (unsigned int) off >= (unsigned int) len ) {
+	  /* This is bad !!! the string is outside! */
+	  TRACE68(file68_cat,
+		  "file68: sndh -- !#SN[%02d] @%d out of range\n",j+1,off);
+	  assert(!"subsong name offset out of range");
+	} else {
+	  int l = chkstr(b, off, len);
+	  if (l >= 0) {
+	    mb->mus[j].tags.tag.title.val = b + off;
+	    TRACE68(file68_cat,
+		    "file68: sndh -- !#SN[%02d] @%d:+%d -- '%s' \n",
+		    j+1, off, l, mb->mus[j].tags.tag.title.val);
+	    off += l+1;
+	    if (off > max)
+	      max = off;
+	  } else {
+	    TRACE68(file68_cat,
+		    "file68: sndh -- !#SN[%02d] @%d overflow\n",
+		    j+1, off);
+	    max = len;
+	  }
+	}
+      }
+      /* Position on the last sub name and skip zeros. */
+      for (i = max; i < len && !b[i] ; i++ )
+	;
+      TRACE68(file68_cat,
+	      "file68: sndh -- !#SN @%d-%d\n", t, i);
     } else if ( !memcmp(b+i,"!V",2) && ( (ctypes & 0xC00) == 0xC00 ) ) {
       vbl = ( b[i+2] - '0' ) * 10 + ( b[i+3] - '0' );
       i += 4;
+#if 0
+      /* Deprecated / Unknown anyway */
     } else if (!memcmp(b+i,"**",2)) {
       /* FX + string 2 char ??? */
       msg68_warning("file68: sndh -- what to do with tag ? -- '**%c%c'\n",
-                    b[i+2], b[i+3]);
+		    b[i+2], b[i+3]);
       i += 4;
-    } else if ( b[i] == 'T' && b[i+1] >= 'A' && b[i+1] <= 'D') {
+#endif
+    } else if ( b[i] == 'T' && b[i+1] >= 'A' && b[i+1] <= 'D'
+		&& ( (ctypes & 0xC00) == 0xC00 ) ) {
       t = i; s = i += 2;
       myatoi(b, i, len, &frq);
     } else if( memcmp( b + i, empty_tag, 4 ) == 0 ||
-               memcmp( b + i, "HDNS", 4 ) == 0 ) {
+	       memcmp( b + i, "HDNS", 4 ) == 0 ) {
       t = i;
       i = len;
     } else {
       /* skip until next 0 byte, as long as it's inside the tag area */
       i += 4;
       while( *(b + i) != 0 && i < len ) {
-        i++;
+	i++;
       }
     }
 
@@ -1058,101 +1232,84 @@ static int sndh_info(disk68_t * mb, int len)
       /* Unkwown tag, finish here. */
       ++unknowns;
       TRACE68(file68_cat,
-              "file68: sndh -- not a tag at offset %d -- %02X%02X%02X%02X\n",
-              i, b[i]&255, b[i+1]&255, b[i+2]&255, b[i+3]&255);
+	      "file68: sndh -- not a tag at offset %d -- %02X%02X%02X%02X\n",
+	      i, b[i]&255, b[i+1]&255, b[i+2]&255, b[i+3]&255);
       ++i;
 
       if (fail || unknowns >= unknowns_max) {
-        i = len;
+	i = len;
       }
 
     } else {
       /* Well known tag */
 
       TRACE68(file68_cat,
-              "file68: sndh -- got TAG -- '%c%c%c%c'\n",
-              b[t], b[t+1], b[t+2], b[t+3]);
+	      "file68: sndh -- got TAG -- '%c%c%c%c'\n",
+	      b[t], b[t+1], b[t+2], b[t+3]);
       unknowns = 0; /* Reset successive unkwown. */
 
       if (s >= 0) {
-        int j, k;
-        for ( j = s, k = s - 1; j < len && b[j]; ++j) {
-          if ( b[j] < 32 ) b[j] = 32;
-          else k = j;                   /* k is last non space char */
-        }
-
-        if (k+1 < len) {
-          b[k+1] = 0;                   /* Strip triling space */
-          i = k+2;
-          if (p)
-            *p = b+s;                     /* store tag */
-          else
-            TRACE68(file68_cat,"file68: sndh -- not storing -- '%s'\n",
-                    b+s);
-
-          /* HAXXX: using name can help determine STE needs */
-          if (p == &mb->tags.tag.title.val)
-            steonly = 0
-              || !!strstr(mb->tags.tag.title.val,"STE only") 
-              || !!strstr(mb->tags.tag.title.val,"(STe)")
-              || !!strstr(mb->tags.tag.title.val,"(STE)")
-              ;
-
-          TRACE68(file68_cat,
-                  "file68: sndh -- got ARG -- '%s'\n",
-                  b+s);
-
-        }
-
-        /* skip the trailing null chars */
-        for ( ; i < len && !b[i] ; i++ )
-          ;
+	int l = chkstr(b, s, len);
+	if (l < 0) {
+	  TRACE68(file68_cat,
+		  "file68: sndh -- string out of range @%d\n", s);
+	  i = len;
+	} else {
+	  TRACE68(file68_cat,
+		  "file68: sndh -- %s ARG -- '%s'\n",
+		  p ? "store" : "got", b+s);
+	  if (p)
+	    *p = b+s;			/* store tag */
+	  i = s + l + 1;
+	}
       }
-
     }
   }
 
   if (mb->nb_mus <= 0) {
-    TRACE68(file68_cat, "file68: sndh -- %d track; assuming 1 track\n", mb->nb_mus);
+    TRACE68(file68_cat,
+	    "file68: sndh -- %d track; assuming 1 track\n", mb->nb_mus);
     mb->nb_mus = 1;
   }
 
   if (mb->nb_mus > SC68_MAX_TRACK) {
     mb->nb_mus = SC68_MAX_TRACK;
   }
-  time *= 1000u;
 
   for (i=0; i<mb->nb_mus; ++i) {
-    mb->mus[i].d0    = i+1;
+    mb->mus[i].d0    = 0; /* i+1 set by valid() */
     mb->mus[i].loops = 0;
     mb->mus[i].frq   = frq ? frq : vbl;
-    mb->mus[i].hwflags.bit.ym  = 1;
-    mb->mus[i].hwflags.bit.ste = steonly;
+    if (!(mb->mus[i].hwflags & SC68_XTD)) {
+      /* Did not have the 'FLAG' tag, fallback to YM+STE */
+      mb->mus[i].hwflags |= SC68_PSG | SC68_DMA | SC68_LMC;
+    }
   }
   return 0;
 }
 
-int file68_tag_count(disk68_t * mb, int track)
+int file68_tag_count(const disk68_t * mb, int track)
 {
   int cnt = -1;
 
   if (mb && track >= 0 && track <= mb->nb_mus) {
     int idx;
-    tagset68_t * tags = !track ? &mb->tags : &mb->mus[track-1].tags;
+    tagset68_t * tags = (tagset68_t *)
+      (!track ? &mb->tags : &mb->mus[track-1].tags); /* /!\ discard const */
     for (idx = cnt = TAG68_ID_CUSTOM; idx<TAG68_ID_MAX; ++idx)
       if (tags->array[idx].key && tags->array[idx].val) {
-        if (cnt != idx) {
-          tags->array[cnt].key = tags->array[idx].key;
-          tags->array[cnt].val = tags->array[idx].val;
-        }
-        ++cnt;
+	if (cnt != idx) {
+	  tags->array[cnt].key = tags->array[idx].key;
+	  tags->array[cnt].val = tags->array[idx].val;
+	}
+	++cnt;
       }
   }
   return cnt;
 }
 
 int file68_tag_enum(const disk68_t * mb, int track, int idx,
-                    const char ** key, const char ** val)
+		    const char ** key, const char ** val)
 {
   const char * k = 0, * v = 0;
 
@@ -1173,25 +1330,55 @@ int file68_tag_enum(const disk68_t * mb, int track, int idx,
   return -!(k && v);
 }
 
-const char * file68_tag_get(const disk68_t * mb, int track, const char * key)
+static const char * get_tag(const disk68_t * mb, int track, const char * key)
 {
   const char * val = 0;
-  if (mb) {
-    const tagset68_t * tags = 0;
-    if (!track)
-      tags = &mb->tags;
-    else if (track <= mb->nb_mus)
-      tags = &mb->mus[track-1].tags;
-    if (tags) {
-      int i = get_customtag(tags, key);
-      if (i >= 0)
-        val = tags->array[i].val;
-    }
+  const tagset68_t * tags;
+
+  assert(is_disk(mb));
+  assert(!track || in_range(mb,track));
+  assert(key);
+
+  if (!track)
+    tags = &mb->tags;
+  else if (in_range(mb, track))
+    tags = &mb->mus[track-1].tags;
+  else
+    tags = 0;
+
+  if (tags) {
+    int i = get_customtag(tags, key);
+    if (i >= 0)
+      val = tags->array[i].val;
   }
   return val;
 }
 
-const char * file68_tag_set(disk68_t * mb, int track, const char * key, const char * val)
+
+const char * file68_tag_get(const disk68_t * mb, int track, const char * key)
+{
+  return (key && is_disk(mb) && (!track || in_range(mb,track)))
+    ? get_tag(mb, track, key)
+    : 0
+    ;
+}
+
+char * file68_tag(const disk68_t * mb, int track, const char * key)
+{
+  const char * val = 0;
+
+  if (key && is_disk(mb) && (!track || in_range(mb,track))) {
+    val = get_tag(mb, track, key);
+    if (!val) {
+      /* $$$ TODO */
+    }
+  }
+
+  return strdup68(val);
+}
+
+const char * file68_tag_set(disk68_t * mb, int track,
+			    const char * key, const char * val)
 {
   const char * ret = 0;
 
@@ -1205,9 +1392,9 @@ const char * file68_tag_set(disk68_t * mb, int track, const char * key, const ch
     if (tags) {
       int i = set_customtag(mb, tags, key, val);
       if (i >= 0)
-        ret = tags->array[i].val;
+	ret = tags->array[i].val;
       else
-        ret = 0;
+	ret = 0;
     }
   }
 
@@ -1223,33 +1410,38 @@ static void free_tags(disk68_t * mb, tagset68_t *tags)
   }
 }
 
-void file68_free(disk68_t * disk)
+void file68_free(const disk68_t * const_disk)
 {
-  if (disk) {
+  disk68_t * disk = (disk68_t *)const_disk;
+
+  if (is_disk(disk)) {
     const int max = disk->nb_mus;
     int i;
 
     free_tags(disk, &disk->tags);
 
     for (i=0; i<max; ++i) {
+      free_string(disk, disk->mus[i].replay);
       free_tags(disk, &disk->mus[i].tags);
       if (disk->mus[i].data) {
-        int j;
-        free_string(disk, disk->mus[i].data);
-        for (j=max-1; j>=i; --j) {
-          if ( disk->mus[j].data == disk->mus[i].data )
-            disk->mus[j].data   = 0;
-          disk->mus[j].datasz = 0;
-        }
-        disk->mus[i].data = 0;
-        disk->mus[i].datasz = 0;
+	int j;
+	free_string(disk, disk->mus[i].data);
+	for (j=max-1; j>=i; --j) {
+	  if (disk->mus[j].replay == disk->mus[i].replay)
+	    disk->mus[j].replay = 0;
+	  if ( disk->mus[j].data == disk->mus[i].data )
+	    disk->mus[j].data	= 0;
+	  disk->mus[j].datasz = 0;
+	}
+	disk->mus[i].data = 0;
+	disk->mus[i].datasz = 0;
       }
     }
     if (disk->data != disk->buffer) {
-      free68(disk->data);
+      free(disk->data);
       disk->data = 0;
     }
-    free68(disk);
+    free(disk);
   }
 }
 
@@ -1257,10 +1449,13 @@ void file68_free(disk68_t * disk)
 static disk68_t * alloc_disk(int datasz)
 {
   disk68_t * mb;
-  int        room = datasz + sizeof(disk68_t) /* - sizeof(mb->buffer) always alloc extra bytes */;
+  int	     room = datasz + sizeof(disk68_t);
 
-  if (mb = calloc68(room), mb) {
+  if (mb = calloc(room,1), mb) {
     music68_t *cursix;
+
+    /* Set a little bit of magic */
+    mb->magic = SC68_DISK_ID;
 
     /* data points into buffer */
     mb->data = mb->buffer;
@@ -1289,24 +1484,26 @@ disk68_t * file68_new(int extra)
   return d;
 }
 
+
 /* Load , allocate memory and valid struct for SC68 music
  */
-disk68_t * file68_load(istream68_t * is)
+disk68_t * file68_load(vfs68_t * is)
 {
   disk68_t *mb = 0;
   int len;
+  unsigned int hash = 0, *h = &hash;
   int chk_size;
   int opened = 0;
   music68_t *cursix;
   tagset68_t * tags;
   char *b;
-  const char *fname = istream68_filename(is);
+  const char *fname = vfs68_filename(is);
   const char *errorstr = 0;
 
   fname = strnevernull68(fname);
 
   /* Read header and get data length. */
-  if (len = read_header(is), len < 0) {
+  if (len = read_header(is, h), len < 0) {
     /* Verify tells it is a gzip or unice file, so we may give it a try.
      */
     if (1) {
@@ -1314,56 +1511,56 @@ disk68_t * file68_load(istream68_t * is)
       int l;
       switch (len) {
       case -gzip_cc:
-        /* gzipped */
-        if (istream68_seek_to(is,0) == 0) {
-          istream68_t * zis;
-          zis=istream68_z_create(is,ISTREAM68_OPEN_READ,
-                                 istream68_z_default_option);
-          if (!istream68_open(zis)) {
-            mb = file68_load(zis);
-          }
-          istream68_destroy(zis);
-          if (mb) {
-            goto already_valid;
-          }
-        }
-        break;
+	/* gzipped */
+	if (vfs68_seek_to(is,0) == 0) {
+	  vfs68_t * zis;
+	  zis=vfs68_z_create(is,VFS68_OPEN_READ,
+				 vfs68_z_default_option);
+	  if (!vfs68_open(zis)) {
+	    mb = file68_load(zis);
+	  }
+	  vfs68_destroy(zis);
+	  if (mb) {
+	    goto already_valid;
+	  }
+	}
+	break;
 
       case -ice_cc:
-        if (istream68_seek_to(is,0) == 0) {
-          buffer = ice68_load(is, &l);
-        }
-        break;
+	if (vfs68_seek_to(is,0) == 0) {
+	  buffer = file68_ice_load(is, &l);
+	}
+	break;
 
       case -sndh_cc:
-        if (istream68_seek_to(is,0) != 0) {
-          break;
-        }
-        len = istream68_length(is);
-        if (len <= 32 || len > 1<<21) {
-          break;
-        }
-        mb = alloc_disk(len);
-        if (!mb) {
-          errorstr = "memory allocation";
-          break;
-        }
-        mb->tags.tag.genre.val = tagstr.sndh;
-        if (istream68_read(is, mb->data, len) != len) {
-          break;
-        }
-        if (sndh_info(mb, len)) {
-          break;
-        }
-        goto validate;
+	if (vfs68_seek_to(is,0) != 0) {
+	  break;
+	}
+	len = vfs68_length(is);
+	if (len <= 32 || len > 1<<21) {
+	  break;
+	}
+	mb = alloc_disk(len);
+	if (!mb) {
+	  errorstr = "memory allocation";
+	  break;
+	}
+	mb->tags.tag.genre.val = tagstr.sndh;
+	if (isread(is, mb->data, len, h) != len) {
+	  break;
+	}
+	if (sndh_info(mb, len)) {
+	  break;
+	}
+	goto validate;
       }
 
       if (buffer) {
-        mb = file68_load_mem(buffer, l);
-        free68(buffer);
-        if (mb) {
-          return mb;
-        }
+	mb = file68_load_mem(buffer, l);
+	free(buffer);
+	if (mb) {
+	  return mb;
+	}
       }
     }
     if (!errorstr)
@@ -1378,7 +1575,7 @@ disk68_t * file68_load(istream68_t * is)
   }
   mb->tags.tag.genre.val = tagstr.sc68;
 
-  if (istream68_read(is, mb->data, len) != len) {
+  if (isread(is, mb->data, len, h) != len) {
     errorstr = "read data";
     goto error;
   }
@@ -1412,9 +1609,9 @@ disk68_t * file68_load(istream68_t * is)
     /* Start music session. */
     else if (ISCHK(chk, CH68_MUSIC)) {
       if (mb->nb_mus == SC68_MAX_TRACK) {
-        /* Can't have more than SC68_MAX_TRACK tracks */
-        len = 0;
-        break;
+	/* Can't have more than SC68_MAX_TRACK tracks */
+	len = 0;
+	break;
       }
       cursix = mb->mus + mb->nb_mus;
       /* cursix->loops    = 0;             /\* default loop        *\/ */
@@ -1429,71 +1626,80 @@ disk68_t * file68_load(istream68_t * is)
     /* Composer name */
     else if (ISCHK(chk, CH68_CNAME)) {
       if (strcmp68(b,tags->tag.artist.val))
-        set_customtag(mb, tags, tagstr.composer, b);
+	set_customtag(mb, tags, tagstr.composer, b);
     }
     /* External replay */
     else if (ISCHK(chk, CH68_REPLAY)) {
       if (!cursix) {
-        errorstr = chk;
-        goto error;
+	errorstr = chk;
+	goto error;
       }
       cursix->replay = b;
     }
     /* 68000 D0 init value */
     else if (ISCHK(chk, CH68_D0)) {
       if (!cursix) {
-        errorstr = chk;
-        goto error;
+	errorstr = chk;
+	goto error;
       }
       cursix->d0 = LPeek(b);
     }
     /* 68000 memory load address */
     else if (ISCHK(chk, CH68_AT)) {
       if (!cursix) {
-        errorstr = chk;
-        goto error;
+	errorstr = chk;
+	goto error;
       }
       cursix->a0 = LPeek(b);
     }
     /* Playing time (ms) */
     else if (ISCHK(chk, CH68_TIME)) {
+      int sec;
       if (!cursix) {
-        errorstr = chk;
-        goto error;
+	errorstr = chk;
+	goto error;
       }
-      cursix->first_ms = LPeek(b) * 1000u;
+      sec = LPeek(b);
+      /* sanity check */
+      if (sec < 0 || sec > 60*60*24)
+	sec = 0;
+      cursix->first_ms = sec * 1000u;
     }
     /* Playing time (frames) */
     else if (ISCHK(chk, CH68_FRAME)) {
       if (!cursix) {
-        errorstr = chk;
-        goto error;
+	errorstr = chk;
+	goto error;
       }
       cursix->first_fr = LPeek(b);
+      /* $$$ Workaround some buggy musics  */
+      if (cursix->first_fr >= 0x1000000u)
+	cursix->first_fr = 0;
     }
     /* Replay frequency */
     else if (ISCHK(chk, CH68_FRQ)) {
       if (!cursix) {
-        errorstr = chk;
-        goto error;
+	errorstr = chk;
+	goto error;
       }
       cursix->frq = LPeek(b);
     }
     /* Loop */
     else if (ISCHK(chk, CH68_LOOP)) {
       if (!cursix) {
-        errorstr = chk;
-        goto error;
+	errorstr = chk;
+	goto error;
       }
       cursix->loops = LPeek(b);
-      TRACE68(file68_cat, "file68: read track #%02d loop of -- *%d*\n",
-              mb->nb_mus,cursix->loops);
+      /* force sanity */
+      if (cursix->loops < -1)
+	cursix->loops = 0;
     }
     /* Loop length */
     else if (ISCHK(chk, CH68_LOOPFR)) {
       if (!cursix) {
-        errorstr = chk;
-        goto error;
+	errorstr = chk;
+	goto error;
       }
       cursix->loops_fr = LPeek(b);
       cursix->has.loop = 1;
@@ -1501,8 +1707,8 @@ disk68_t * file68_load(istream68_t * is)
     /* SFX flag */
     else if (ISCHK(chk, CH68_SFX)) {
       if (!cursix) {
-        errorstr = chk;
-        goto error;
+	errorstr = chk;
+	goto error;
       }
       cursix->has.sfx = 1;
     }
@@ -1510,20 +1716,15 @@ disk68_t * file68_load(istream68_t * is)
     else if (ISCHK(chk, CH68_TYP)) {
       int f;
       if (!cursix) {
-        errorstr = chk;
-        goto error;
+	errorstr = chk;
+	goto error;
       }
       f = LPeek(b);
-      cursix->hwflags.all = 0;
-      cursix->hwflags.bit.ym        = !! (f & SC68_YM);
-      cursix->hwflags.bit.ste       = !! (f & SC68_STE);
-      cursix->hwflags.bit.amiga     = !! (f & SC68_AMIGA);
-      cursix->hwflags.bit.stechoice = !! (f & SC68_STECHOICE);
-      cursix->hwflags.bit.timers    = !! (f & SC68_TIMERS);
-      cursix->hwflags.bit.timera    = !! (f & SC68_TIMERA);
-      cursix->hwflags.bit.timerb    = !! (f & SC68_TIMERB);
-      cursix->hwflags.bit.timerc    = !! (f & SC68_TIMERC);
-      cursix->hwflags.bit.timerd    = !! (f & SC68_TIMERD);
+
+      /* force eXTenDed if anything is set at a higher rank. */
+      if (f & ~(SC68_XTD-1))
+	f |= SC68_XTD;
+      cursix->hwflags = f;
     }
     /* meta data */
     else if (ISCHK(chk, CH68_TAG)) {
@@ -1532,14 +1733,15 @@ disk68_t * file68_load(istream68_t * is)
       val = b + strlen(b) + 1;
       TRACE68(file68_cat,"file68: got a tag '%s' '%s'\n", key, val);
       if (set_customtag(mb, tags, key, val) < 0) {
-        msg68_warning("file68: unable to set %s tag '%s' '%s'\n", cursix ? "track" : "disk", key, val);
+	msg68_warning("file68: unable to set %s tag '%s' '%s'\n",
+		      cursix ? "track" : "disk", key, val);
       }
     }
     /* music data */
     else if (ISCHK(chk, CH68_MDATA)) {
       if (!cursix) {
-        errorstr = chk;
-        goto error;
+	errorstr = chk;
+	goto error;
       }
       cursix->data = b;
       cursix->datasz = chk_size;
@@ -1558,6 +1760,7 @@ disk68_t * file68_load(istream68_t * is)
   }
 
 validate:
+  mb->hash = hash;
   if (valid(mb)) {
     errorstr = "validation test";
     goto error;
@@ -1565,24 +1768,29 @@ validate:
 
 already_valid:
   if (opened) {
-    istream68_close(is);
+    vfs68_close(is);
   }
+
   return mb;
 
 error:
   if (opened) {
-    istream68_close(is);
+    vfs68_close(is);
   }
-  free68(mb);
-  msg68_error("file68: load '%s' failed [%s]\n", fname, errorstr ? errorstr : "no reason");
+  free(mb);
+  msg68_error("file68: load '%s' failed [%s]\n",
+	      fname, errorstr ? errorstr : "no reason");
   return 0;
 }
+
+
 
 static int get_version(const int version) {
   return version == 2 ? 2 : 1;
 }
 
-static void get_header(const int version, const char ** const header, int * const headsz)
+static void get_header(const int version,
+		       const char ** const header, int * const headsz)
 {
   switch (get_version(version)) {
   case 1:
@@ -1600,8 +1808,8 @@ static void get_header(const int version, const char ** const header, int * cons
 
 /* save CHUNK and data */
 /* $$$ NEW: Add auto 16-bit alignement. */
-static int save_chunk(istream68_t * os,
-                      const char * chunk, const void * data, int size)
+static int save_chunk(vfs68_t * os,
+		      const char * chunk, const void * data, int size)
 {
   static char zero[4] = {0,0,0,0};
   chunk68_t chk;
@@ -1611,17 +1819,17 @@ static int save_chunk(istream68_t * os,
   memcpy(chk.id + 2, chunk, 2);
   align = size & 1;
   LPoke(chk.size, size + align);
-  if (istream68_write(os, &chk, (int)sizeof(chunk68_t)) != sizeof(chunk68_t)) {
+  if (vfs68_write(os, &chk, (int)sizeof(chunk68_t)) != sizeof(chunk68_t)) {
     goto error;
   }
   /* Special case data is 0 should happen only for SC68 total size
    * chunk.
    */
   if (size && data) {
-    if (istream68_write(os, data, size) != size) {
+    if (vfs68_write(os, data, size) != size) {
       goto error;
     }
-    if (align && istream68_write(os, zero, align) != align) {
+    if (align && vfs68_write(os, zero, align) != align) {
       goto error;
     }
   }
@@ -1632,8 +1840,8 @@ error:
 }
 
 /* save CHUNK and string (only if non-0 & lenght>0) */
-static int save_string(istream68_t * os,
-                       const char * chunk, const char * str)
+static int save_string(vfs68_t * os,
+		       const char * chunk, const char * str)
 {
   int len;
 
@@ -1644,15 +1852,15 @@ static int save_string(istream68_t * os,
 }
 
 /* save CHUNK and string (only if non-0 & lenght>0) */
-static int save_noname(istream68_t * os,
-                       const char * chunk, const char * str)
+static int save_noname(vfs68_t * os,
+		       const char * chunk, const char * str)
 {
   return save_string(os, chunk, not_noname(str));
 }
 
 /* save CHUNK & string str ( only if oldstr!=str & lenght>0 ) */
-static int save_differstr(istream68_t * os,
-                          const char *chunk, char *str, char *oldstr)
+static int save_differstr(vfs68_t * os,
+			  const char *chunk, char *str, char *oldstr)
 {
   int len;
 
@@ -1666,7 +1874,7 @@ static int save_differstr(istream68_t * os,
 }
 
 /* save CHUNK and 4 bytes Big Endian integer */
-static int save_number(istream68_t * os, const char * chunk, int n)
+static int save_number(vfs68_t * os, const char * chunk, int n)
 {
   char number[4];
 
@@ -1674,26 +1882,32 @@ static int save_number(istream68_t * os, const char * chunk, int n)
   return save_chunk(os, chunk, number, 4);
 }
 
-/* save CHUNK and number (only if n!=0) */
-static int save_nonzero(istream68_t * os, const char * chunk, int n)
+static int save_if(vfs68_t * os, const char * chunk, int cond, int n)
 {
-  return !n ? 0 : save_number(os, chunk, n);
+  return cond ? save_number(os, chunk, n) : 0;
 }
 
-int file68_save_url(const char * fname, const disk68_t * mb,
-                    int version, int gzip)
+/* save CHUNK and number (only if n != 0) */
+static int save_nonzero(vfs68_t * os, const char * chunk, int n)
 {
-  istream68_t * os;
+  return save_if(os, chunk, n, n);
+}
+
+int file68_save_uri(const char * fname, const disk68_t * mb,
+		    int version, int gzip)
+{
+  vfs68_t * os;
   int err;
 
-  os = url_or_file_create(fname, 2, 0);
+  os = uri_or_file_create(fname, 2, 0);
   err = file68_save(os, mb, version, gzip);
-  istream68_destroy(os);
+  vfs68_destroy(os);
 
   return err;
 }
 
-static int save_tags(istream68_t *os, const tagset68_t * tags, int start, const char ** skip)
+static int save_tags(vfs68_t *os, const tagset68_t * tags,
+		     int start, const char ** skip)
 {
   int i, max = 0, err = 0;
   char * tmp = 0;
@@ -1704,25 +1918,26 @@ static int save_tags(istream68_t *os, const tagset68_t * tags, int start, const 
     /* Skip those tags. */
     if (skip) {
       const char ** skip_tag;
-      for (skip_tag = skip; *skip_tag && strcmp68(*skip_tag, tags->array[i].key); skip_tag++)
-        ;
+      for (skip_tag = skip;
+	   *skip_tag && strcmp68(*skip_tag, tags->array[i].key); skip_tag++)
+	;
       if (*skip_tag)
-        continue;
+	continue;
     }
 
     if (tags->array[i].key && (keylen = strlen(tags->array[i].key)) &&
-        tags->array[i].val && (vallen = strlen(tags->array[i].val))) {
+	tags->array[i].val && (vallen = strlen(tags->array[i].val))) {
       int len = keylen + vallen + 2;
       if (len > max) {
-        char * new = realloc(tmp, len);
-        if (!new) continue;
-        tmp = new;
-        max = len;
+	char * new = realloc(tmp, len);
+	if (!new) continue;
+	tmp = new;
+	max = len;
       }
-      memcpy(tmp         ,tags->array[i].key, keylen+1);
+      memcpy(tmp	 ,tags->array[i].key, keylen+1);
       memcpy(tmp+keylen+1,tags->array[i].val, vallen+1);
       if (err = save_chunk(os, CH68_TAG, tmp, len), err)
-        break;
+	break;
     }
   }
   free(tmp);
@@ -1730,45 +1945,42 @@ static int save_tags(istream68_t *os, const tagset68_t * tags, int start, const 
 }
 
 int file68_save_mem(const char * buffer, int len, const disk68_t * mb,
-                    int version, int gzip)
+		    int version, int gzip)
 {
-  istream68_t * os;
+  vfs68_t * vfs;
   int err;
 
-  os = istream68_mem_create((char *)buffer, len, 2);
-  err = file68_save(os, mb, version, gzip);
-  istream68_destroy(os);
+  vfs = uri68_vfs("mem:", 2, 2, buffer, len);
+  err = file68_save(vfs, mb, version, gzip);
+  vfs68_destroy(vfs);
 
   return err;
 }
 
-static const char * save_sc68(istream68_t * os, const disk68_t * mb, int len, int version);
+static const char * save_sc68(vfs68_t * os, const disk68_t * mb,
+			      int len, int version);
 
 /* Save disk into file. */
-int file68_save(istream68_t * os, const disk68_t * mb, int version, int gzip)
+int file68_save(vfs68_t * os, const disk68_t * mb, int version, int gzip)
 {
   int len;
   const char * fname  = 0;
   const char * errstr = 0;
-  istream68_t * null_os = 0;
-  istream68_t * org_os  = 0;
+  vfs68_t * null_os = 0;
+  vfs68_t * org_os  = 0;
 
   const char * header;
   int headsz;
 
   get_header(version, &header, &headsz);
 
-  if (!os) {
-    /* mia ??? */
-  }
-
   /* Get filename (for error message) */
-  fname = istream68_filename(os);
+  fname = vfs68_filename(os);
 
   /* Create a null stream to calculate total size.
      Needed by gzip stream that can't seek back. */
-  null_os = istream68_null_create(fname);
-  if (istream68_open(null_os)) {
+  null_os = uri68_vfs("null:", 3, 0);
+  if (vfs68_open(null_os)) {
     errstr = "open";
   } else {
     errstr = save_sc68(null_os, mb, 0, version);
@@ -1776,7 +1988,7 @@ int file68_save(istream68_t * os, const disk68_t * mb, int version, int gzip)
   if (errstr) {
     goto error;
   }
-  len = istream68_length(null_os) - headsz;
+  len = vfs68_length(null_os) - headsz;
   if (len <= 0) {
     errstr = "invalid stream length";
     goto error;
@@ -1784,14 +1996,14 @@ int file68_save(istream68_t * os, const disk68_t * mb, int version, int gzip)
 
   /* Wrap to gzip stream */
   if (gzip) {
-    istream68_z_option_t gzopt;
+    vfs68_z_option_t gzopt;
 
     org_os = os;
-    gzopt = istream68_z_default_option;
+    gzopt = vfs68_z_default_option;
     gzopt.level = gzip;
-    gzopt.name  = 0;
-    os = istream68_z_create(org_os, 2, gzopt);
-    if (istream68_open(os)) {
+    gzopt.name	= 0;
+    os = vfs68_z_create(org_os, 2, gzopt);
+    if (vfs68_open(os)) {
       errstr = "open";
       goto error;
     }
@@ -1802,31 +2014,35 @@ int file68_save(istream68_t * os, const disk68_t * mb, int version, int gzip)
 error:
   if (org_os) {
     /* Was gzipped: clean-up */
-    istream68_destroy(os);
+    vfs68_destroy(os);
   }
-  istream68_destroy(null_os);
+  vfs68_destroy(null_os);
 
   return errstr
     ? error68("file68: %s error -- %s",errstr,fname)
     : 0;
 }
 
-static const char * save_sc68(istream68_t * os, const disk68_t * mb, int len, int version)
+static const char * save_sc68(vfs68_t * os, const disk68_t * mb,
+			      int len, int version)
 {
   const char * errstr = 0;
+  int headsz, imus, opened = 0;
 
-  int opened = 0;
-
-  const music68_t * mus;
-  char * mname, * aname, * cname, * data;
-
+  char * mname, * aname, /* * cname, */ * data;
   const char * header;
-  int headsz;
 
   get_header(version, &header, &headsz);
 
+  /* Check vfs */
   if (!os) {
     errstr = "null stream";
+    goto error;
+  }
+
+  /* Check disk */
+  if (!is_disk(mb)) {
+    errstr = "not a sc68 disk";
     goto error;
   }
 
@@ -1837,14 +2053,14 @@ static const char * save_sc68(istream68_t * os, const disk68_t * mb, int len, in
   }
 
   /* SC68 file header string */
-  if (istream68_write(os, header, headsz) != headsz) {
+  if (vfs68_write(os, header, headsz) != headsz) {
     errstr = "header write";
     goto error;
   }
   /* SC68 disk-info chunks */
   if (save_chunk(os, CH68_BASE, 0, len)
-      || save_noname  (os, CH68_FNAME,   mb->tags.tag.title.val)
-      || save_noname  (os, CH68_ANAME,   mb->tags.tag.artist.val)
+      || save_noname  (os, CH68_FNAME,	 mb->tags.tag.title.val)
+      || save_noname  (os, CH68_ANAME,	 mb->tags.tag.artist.val)
       || save_nonzero (os, CH68_DEFAULT, mb->def_mus)
       || save_tags    (os, &mb->tags, TAG68_ID_CUSTOM, 0)
     ) {
@@ -1855,27 +2071,17 @@ static const char * save_sc68(istream68_t * os, const disk68_t * mb, int len, in
   /* Reset previous value for various string */
   mname = mb->tags.tag.title.val;
   aname = mb->tags.tag.artist.val;
-  cname = data = 0;
-  for (mus = mb->mus; mus < mb->mus + mb->nb_mus; mus++) {
-    int flags
-      = 0
-      | (mus->hwflags.bit.ym        ? SC68_YM     : 0)
-      | (mus->hwflags.bit.ste       ? SC68_STE    : 0)
-      | (mus->hwflags.bit.amiga     ? SC68_AMIGA  : 0)
-      | (mus->hwflags.bit.stechoice ? SC68_STE    : 0)
-      | (mus->hwflags.bit.timers    ? SC68_TIMERS : 0)
-      | (mus->hwflags.bit.timera    ? SC68_TIMERA : 0)
-      | (mus->hwflags.bit.timerb    ? SC68_TIMERB : 0)
-      | (mus->hwflags.bit.timerc    ? SC68_TIMERC : 0)
-      | (mus->hwflags.bit.timerd    ? SC68_TIMERD : 0)
-      ;
+  /* cname =  */data = 0;
+  for (imus = 0; imus < mb->nb_mus; ++imus) {
+    const music68_t * const mus = mb->mus + imus;
+    const int flags = mus->hwflags;
 
     /* Save track-name, author, composer, replay */
     if (0
-        || save_chunk(os, CH68_MUSIC, 0, 0) == -1
-        || save_differstr(os, CH68_MNAME, mus->tags.tag.title.val,  mname)
-        || save_differstr(os, CH68_ANAME, mus->tags.tag.artist.val, aname)
-        || save_tags(os, &mus->tags, TAG68_ID_CUSTOM, 0) /* skip title and artist */
+	|| save_chunk(os, CH68_MUSIC, 0, 0) == -1
+	|| save_differstr(os, CH68_MNAME, mus->tags.tag.title.val,  mname)
+	|| save_differstr(os, CH68_ANAME, mus->tags.tag.artist.val, aname)
+	|| save_tags(os, &mus->tags, TAG68_ID_CUSTOM, 0) /* skip title/artist */
       ) {
       errstr = "chunk write";
       goto error;
@@ -1889,18 +2095,15 @@ static const char * save_sc68(istream68_t * os, const disk68_t * mb, int len, in
 
     /* Save play parms */
     if (0
-        || save_string (os, CH68_REPLAY, mus->replay)
-        || save_nonzero(os, CH68_D0,     mus->d0)
-        || save_nonzero(os, CH68_AT,    !mus->has.pic     * mus->a0)
-        || save_nonzero(os, CH68_FRQ,    (mus->frq != 50) * mus->frq)
-        || save_nonzero(os, CH68_FRAME,  mus->has.time    * mus->first_fr)
-        || save_nonzero(os, CH68_LOOP,   mus->has.loop * (mus->loops > 1) * mus->loops)
-        || ( mus->has.loop &&
-             save_number(os, CH68_LOOPFR,  mus->loops_fr) )
-        || save_number (os, CH68_TYP,    flags)
-        || ( mus->has.sfx &&
-             save_chunk(os, CH68_SFX, 0, 0) )
-      ) {
+	|| save_string (os, CH68_REPLAY, mus->replay)
+	|| save_if(os, CH68_D0,	    mus->d0!=imus+1, mus->d0)
+	|| save_if(os, CH68_AT,	   !mus->has.pic,    mus->a0)
+	|| save_if(os, CH68_FRQ,    mus->frq != 50,  mus->frq)
+	|| save_if(os, CH68_FRAME,  mus->has.time,   mus->first_fr)
+	|| save_if(os, CH68_LOOP,   mus->has.loop,   mus->loops)
+	|| save_if(os, CH68_LOOPFR, mus->has.loop,   mus->loops_fr)
+	|| save_number (os, CH68_TYP, flags)
+	|| save_if(os, CH68_SFX, mus->has.sfx, 0) ) {
       errstr = "chunk write";
       goto error;
     }
@@ -1908,8 +2111,8 @@ static const char * save_sc68(istream68_t * os, const disk68_t * mb, int len, in
     /* Save music data */
     if (mus->data && mus->data != data) {
       if (save_chunk(os, CH68_MDATA, mus->data, mus->datasz)) {
-        errstr = "chunk write";
-        goto error;
+	errstr = "chunk write";
+	goto error;
       }
       data = mus->data;
     }
@@ -1923,7 +2126,7 @@ static const char * save_sc68(istream68_t * os, const disk68_t * mb, int len, in
 
 error:
   if (opened) {
-    istream68_close(os);
+    vfs68_close(os);
   }
   return errstr;
 }
