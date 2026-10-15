@@ -1,27 +1,29 @@
 /*
- *            sc68 - MicroWire - STE soundchip emulator
- *             Copyright (C) 2001-2010 Benjamin Gerard
- *           <benjihan -4t- users.sourceforge -d0t- net>
+ * @file    mwemul.c
+ * @brief   MicroWire/LMC emulator (STE sound)
+ * @author  http://sourceforge.net/users/benjihan
  *
- * This  program is  free  software: you  can  redistribute it  and/or
- * modify  it under the  terms of  the GNU  General Public  License as
- * published by the Free Software  Foundation, either version 3 of the
+ * Copyright (c) 1998-2016 Benjamin Gerard
+ *
+ * This program is free software: you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation, either version 3 of the
  * License, or (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful, but
- * WITHOUT  ANY  WARRANTY;  without   even  the  implied  warranty  of
- * MERCHANTABILITY or  FITNESS FOR A PARTICULAR PURPOSE.   See the GNU
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have  received a copy of the  GNU General Public License
+ * You should have received a copy of the GNU General Public License
  * along with this program.
- * If not, see <http://www.gnu.org/licenses/>.
  *
- * $Id: mwemul.c 202 2011-10-16 01:14:21Z benjihan $
+ * If not, see <http://www.gnu.org/licenses/>.
  *
  */
 
-/** @todo
+/**
+ * @todo
  *
  * - Check overflow in mix routine.
  * - Verify STE / YM volume ratio
@@ -33,32 +35,33 @@
 #ifdef HAVE_CONFIG_H
 # include "config.h"
 #endif
+#include "io68_private.h"
 
-#ifdef HAVE_CONFIG_OPTION68_H
-# include "config_option68.h"
-#else
-# include "default_option68.h"
-#endif
+#include "default.h"
 #include "mwemul.h"
 
 #include "emu68/assert68.h"
-#include <sc68/msg68.h>
+#include <sc68/file68_msg.h>
 
 #ifndef DEBUG_MW_O
 # define DEBUG_MW_O 0
 #endif
+
+/* static */
 int mw_cat = msg68_DEFAULT;
+
+#define MWHD "ste-mw : "
 
 /* #define MW_CALCUL_TABLE 1 */
 
-#define MW_N_DECIBEL 121
+enum {
+  MW_N_DECIBEL = 121,
+  MW_MIX_FIX   = 10,
+  MW_STE_MULT  = ((1<<MW_MIX_FIX)/4),
+  MW_YM_MULT   = ((1<<MW_MIX_FIX)-MW_STE_MULT)
+};
 
-#define MW_MIX_FIX 10
-
-#define MW_STE_MULT ((1<<MW_MIX_FIX)/4)
-#define MW_YM_MULT  ((1<<MW_MIX_FIX)-MW_STE_MULT)
-
-#ifndef MW_CALCUL_TABLE
+/* $$$/XXX THIS IS WRONG AND NEEDS TO BE FIXED */
 
 static const int Db_alone[MW_N_DECIBEL] = {
   0x40000,0x32d64,0x28619,0x20137,0x197a9,0x143d1,0x10137,0xcc50,
@@ -103,55 +106,6 @@ static const int Db_mix12[MW_N_DECIBEL] = {
 
 static void init_volume(void) { }
 
-#else
-
-# include <math.h>   /* $$$ Calcul DB table */
-# include <stdio.h>  /* $$$ For display table */
-
-static int Db_alone[MW_N_DECIBEL];
-static int Db_mix[MW_N_DECIBEL];
-static int Db_mix12[MW_N_DECIBEL];
-
-#define LN_10_OVER_10 0.230258509299
-
-/*
-
-  A,B signal intensity
-  1.Db = 10*LOG( A/B ) = 10*LN(A/B)/LN(10)
-  => A = B * EXP( Decibel*LN(10)/10 )
-  => A = B * R
-  with R=EXP( Decibel*LN(10)/10 )
-
-  R1,R2 rate of 2 signal for D1,D2 in decibel
-  A = B*R1*R2  <=> B*R3
-  with R3 = rate for (D1+D2) decibel
-
-*/
-
-static u32 calc_volume(s32 decibel, u32 mult)
-{
-  double r;
-  r = exp( (double)decibel*LN_10_OVER_10 );
-  r *= (double)mult;
-  return (u32)r;
-}
-
-static void init_volume(void)
-{
-  int i;
-
-  fprintf(stderr, "\n");
-  for(i=0; i<MW_N_DECIBEL; i++) {
-    Db_alone[i] = calc_volume(-i,256<<MW_MIX_FIX);
-    Db_mix[i]   = calc_volume(-i,MW_STE_MULT*256);
-    Db_mix12[i] = calc_volume(-i-12,MW_STE_MULT*256);
-    fprintf(stderr, "AAA:%x\n", Db_alone[i]);
-    fprintf(stderr, "BBB:%x\n", Db_mix[i]);
-    fprintf(stderr, "CCC:%x\n", Db_mix12[i]);
-  }
-}
-
-#endif
 
 static mw_parms_t default_parms;
 
@@ -179,7 +133,7 @@ int mw_engine(mw_t * const mw, int engine)
     break;
 
   default:
-    msg68_warning("microwire: invalid engine -- %d\n", engine);
+    msg68_warning(MWHD "invalid engine -- %d\n", engine);
 
   case MW_ENGINE_DEFAULT:
     engine = default_parms.engine;
@@ -187,7 +141,7 @@ int mw_engine(mw_t * const mw, int engine)
   case MW_ENGINE_SIMPLE:
   case MW_ENGINE_LINEAR:
     *(mw ? &mw->engine : &default_parms.engine) = engine;
-    msg68(mw_cat, "microwire: %s engine -- *%s*\n",
+    msg68(mw_cat, MWHD "%s engine -- *%s*\n",
           mw ? "select" : "default",
           mw_engine_name(engine));
     break;
@@ -212,17 +166,13 @@ int mw_sampling_rate(mw_t * const mw, int hz)
     hz = default_parms.hz;
 
   default:
-    if (hz < SAMPLING_RATE_MIN) {
-      msg68_warning("microwire: sampling rate out of range -- %dhz\n", hz);
-      hz = SAMPLING_RATE_MIN;
-    }
-    if (hz > SAMPLING_RATE_MAX) {
-      msg68_warning("microwire: sampling rate out of range -- %dhz\n", hz);
-      hz = SAMPLING_RATE_MAX;
-    }
+    if (hz < SPR_MIN)
+      hz = SPR_MIN;
+    else if (hz > SPR_MAX)
+      hz = SPR_MAX;
     *(mw ? &mw->hz : &default_parms.hz) = hz;
-    msg68(mw_cat, "microwire: %s sampling rate -- *%dhz*\n",
-               mw ? "select" : "default", hz);
+    TRACE68(mw_cat, MWHD "%s sampling rate -- *%dhz*\n",
+            mw ? "select" : "default", hz);
     break;
   }
   return hz;
@@ -230,10 +180,10 @@ int mw_sampling_rate(mw_t * const mw, int hz)
 
 /* ,-----------------------------------------------------------------.
  * | Set master volume   0=-80 Db, 40=0 Db                           |
- * | Set left volume     0=-40 Db, 40=0 Db                           |
- * | Set right volume    0=-40 Db, 40=0 Db                           |
- * | Set high frequency  0=-12 Db, 40=12 Db                          |
- * | Set low  frequency  0=-12 Db, 40=12 Db                          |
+ * | Set left volume     0=-40 Db, 20=0 Db                           |
+ * | Set right volume    0=-40 Db, 20=0 Db                           |
+ * | Set trebble         0=-12 Db, 6=0 Db, 12=12 Db                          |
+ * | Set bass  0=-12 Db, 40=12 Db                          |
  * | Set mixer type : 0=-12 Db 1=YM+STE 2=STE-only 3=reserved        |
  * `-----------------------------------------------------------------'
  */
@@ -255,10 +205,10 @@ int mw_lmc_mixer(mw_t * const mw, int n)
     if (n != 3) {
       mw->db_conv = table[n];
     } else {
-      msg68_warning("microwire: invalid LMC mixer mode -- 3\n");
+      msg68_warning(MWHD "invalid LMC mixer mode -- %d\n", n);
     }
   }
-  TRACE68(mw_cat,"microwire: LMC mixer mode -- *%s*\n",
+  TRACE68(mw_cat, MWHD "LMC mixer mode -- *%s*\n",
           mixermode[mw->lmc.mixer]);
   return n;
 }
@@ -271,8 +221,8 @@ int mw_lmc_master(mw_t * const mw, int n)
   } else {
     if (n <  0) n = 0;
     if (n > 40) n = 40;
-    mw->lmc.master = 80 - (n << 1 );
-    TRACE68(mw_cat,"microwire: LMC -- master -- *-%02ddB*\n", mw->lmc.master);
+    mw->lmc.master = 80 - (n << 1);
+    TRACE68(mw_cat, MWHD "LMC -- master -- *-%02ddB*\n", mw->lmc.master);
   }
   return n;
 }
@@ -287,9 +237,9 @@ static int lmc_lr(mw_t * const mw, const int lr, int n)
   } else {
     if (n <  0) n = 0;
     if (n > 20) n = 20;
-    *pval = 40 - ( n << 1 );
+    *pval = 40 - (n << 1);
     mw->lmc.lr = ( mw->lmc.left + mw->lmc.right ) >> 1;
-    TRACE68(mw_cat,"microwire: LMC -- %s channel -- *-%02ddB*\n",
+    TRACE68(mw_cat, MWHD "LMC -- %s channel -- *-%02ddB*\n",
             lr ? "left" : "right", *pval);
   }
   return n;
@@ -316,7 +266,7 @@ static int lmc_hl(mw_t * const mw, const int hl, int n)
     if (n <  0) n = 0;
     if (n > 12) n = 12;
     *pval = 12 - n;
-    TRACE68(mw_cat,"microwire: LMC -- %s pass filter -- *-%02ddB*\n",
+    TRACE68(mw_cat, MWHD "LMC -- %s pass filter -- *-%02ddB*\n",
             hl ? "high" : "low", *pval);
   }
   return n;
@@ -335,9 +285,9 @@ int mw_lmc_low(mw_t * const mw, int n)
 static int command_dispatcher(mw_t * const mw, int n)
 {
   const int c = n & 0700;
-  n -= c;
+  n &= 077;
 
-  TRACE68(mw_cat,"microwire: dispatch -- %o:%02x\n", c>>6, n);
+  TRACE68(mw_cat, MWHD "dispatch -- %o:%02x\n", c>>6, (unsigned)n);
   switch(c) {
   case 0000:
     mw_lmc_mixer(mw, n&3);
@@ -358,7 +308,7 @@ static int command_dispatcher(mw_t * const mw, int n)
     mw_lmc_left(mw, n&31);
     break;
   default:
-    TRACE68(mw_cat,"microwire: unknown command -- %04o\n", c);
+    TRACE68(mw_cat, MWHD "unknown command -- %o:%02x\n", c>>6, (unsigned)n);
     return -1;
   }
   return 0;
@@ -366,46 +316,46 @@ static int command_dispatcher(mw_t * const mw, int n)
 
 int mw_command(mw_t * const mw)
 {
-  uint_t ctrl, data;
+  uint_t ctrl, data, comm, bits, mask;
 
-  if (!mw) {
+  if (!mw)
     return -1;
-  }
 
   ctrl = ( mw->map[MW_CTRL] << 8 ) + mw->map[MW_CTRL+1];
   data = ( mw->map[MW_DATA] << 8 ) + mw->map[MW_DATA+1];
 
-  TRACE68(mw_cat,"microwire: shifting -- %04x:%04x\n", ctrl, data);
+  /* Clear data, keep control.
+   * Normally data is shifted left until it clears whereas control
+   * rotated left until it's back to its orginal value.
+   */
+  mw->map[MW_DATA] = mw->map[MW_DATA+1] = 0;
 
-  /* Find first address */
-  for(; ctrl && ( ctrl & 0xC000 ) != 0xC000; ctrl<<=1, data<<=1)
-    ;
+  TRACE68(mw_cat, MWHD "shifting -- %04x/%04x\n", data, ctrl);
 
-  if (!ctrl) {
-    TRACE68(mw_cat,"%s","microwire: address -- not found\n");
+  for (bits=comm=0, mask=0x8000; bits != 11 && mask; mask >>= 1)
+    if (ctrl & mask) {
+      comm = (comm << 1) | !!(data & mask);
+      ++bits;
+    }
+  if (bits != 11) {
+    msg68_warning(MWHD "missing bits -- %04x/%04x\n", data, ctrl);
+    assert(bits == 11);
     return -1;
-  } else {
-    const uint_t addr = ( data >> 14 ) & 3;
-    assert( ( ctrl & 0xC000 ) == 0xC000);
-    TRACE68(mw_cat,"microwire: address -- %d\n", addr);
-    if ( addr != 2 )
-      return -1;
+  }
+  if (mask && (ctrl & (mask-1))) {
+    msg68_warning(MWHD "too many bits -- %04x/%04x\n", data, ctrl);
+    assert(0);
   }
 
-  for (ctrl<<=2, data<<=2; ctrl && ( ctrl & 0xFF80 ) != 0xFF80;
-       ctrl<<=1, data<<=1)
-    ;
-
-  if (ctrl) {
-    const uint_t cmd = (data >>7 ) & 0x1ff;
-    assert( ( ctrl & 0xFF80 ) == 0xFF80 );
-    TRACE68(mw_cat,"microwire: command -- %04o\n", cmd);
-    return command_dispatcher(mw, cmd);
-  } else {
-    TRACE68(mw_cat,"%s","microwire: command -- not found\n");
+  if ( (comm & 03000) != 02000 ) {
+    msg68_warning(MWHD "wrong address (%d) -- %04x/%04x\n",
+                  comm>>9, data,ctrl);
+    assert(0);
+    return -1;
   }
 
-  return -1;
+  return
+    command_dispatcher(mw, comm & 0777);
 }
 
 
@@ -417,11 +367,11 @@ int mw_command(mw_t * const mw)
 static void lmc_reset(mw_t * const mw)
 {
   mw_lmc_mixer(mw,MW_MIXER_BOTH);
-  mw_lmc_master(mw,40);
-  mw_lmc_left(mw,20);
-  mw_lmc_right(mw,20);
-  mw_lmc_high(mw,12);
-  mw_lmc_low(mw,12);
+  mw_lmc_master(mw,40);                 /* 0db */
+  mw_lmc_left(mw,20);                   /* 0db */
+  mw_lmc_right(mw,20);                  /* 0db */
+  mw_lmc_high(mw,6);                    /* 0db */
+  mw_lmc_low(mw,6);                     /* 0db */
 }
 
 int mw_reset(mw_t * const mw)
@@ -434,7 +384,7 @@ int mw_reset(mw_t * const mw)
   mw->ct = mw->end = 0;
   lmc_reset(mw);
 
-  msg68(mw_cat,"microwire: chip reset\n");
+  TRACE68(mw_cat, MWHD "%s\n", "chip reset");
   return 0;
 }
 
@@ -444,7 +394,7 @@ int mw_setup(mw_t * const mw,
              mw_setup_t * const setup)
 {
   if (!mw || !setup || !setup->mem) {
-    msg68_error("microwire: invalid parameter\n");
+    msg68_error(MWHD "invalid parameter\n");
     return -1;
   }
 
@@ -459,8 +409,8 @@ int mw_setup(mw_t * const mw,
   mw->log2mem = setup->log2mem;
   mw->ct_fix  = ( sizeof(mwct_t) << 3 ) - mw->log2mem;
 
-  msg68(mw_cat,"microwire: %d-bit memory, %d-bit precision\n",
-        setup->log2mem, mw->ct_fix);
+  TRACE68(mw_cat, MWHD "%d-bit memory, %d-bit precision\n",
+          setup->log2mem, mw->ct_fix);
   mw_reset(mw);
 
   return 0;
@@ -474,11 +424,11 @@ int mw_setup(mw_t * const mw,
 int mw_init(int * argc, char ** argv)
 {
   if (mw_cat == msg68_DEFAULT)
-    mw_cat = msg68_cat("mw","microwire emulator", DEBUG_MW_O);
+    mw_cat = msg68_cat("ste","STE sound (DMA/Microwire/LMC1992)", DEBUG_MW_O);
 
   /* Setup defaults */
   default_parms.engine = MW_ENGINE_LINEAR;
-  default_parms.hz     = SAMPLING_RATE_DEF;
+  default_parms.hz     = SPR_DEF;
 
   /* Init volume table */
   init_volume();
@@ -555,8 +505,9 @@ out:
   mw->end = end;
 }
 
+/* $$$ TODO: STe volume balance correction. */
 #define _VOL(LR) \
-  (mw->db_conv[mw->lmc.master+mw->lmc.LR] * 0xC0 >> 8)
+  (mw->db_conv[mw->lmc.master+mw->lmc.LR] >> 1)
 
 static void mix_ste(mw_t * const mw, s32 *b, int n)
 {
@@ -680,7 +631,7 @@ static void mix_ste(mw_t * const mw, s32 *b, int n)
 }
 
 /* ,-----------------------------------------------------------------.
- * |                      Microwire process                         |
+ * |                      STE sound process                          |
  * `-----------------------------------------------------------------'
  */
 
