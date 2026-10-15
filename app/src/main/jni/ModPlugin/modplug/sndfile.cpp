@@ -6,8 +6,8 @@
 */
 
 #include <math.h> //for GCCFIX
-#include <libmodplug/stdafx.h>
-#include <libmodplug/sndfile.h>
+#include "libmodplug/stdafx.h"
+#include "libmodplug/sndfile.h"
 
 #define MMCMP_SUPPORT
 
@@ -19,9 +19,8 @@ extern BOOL MMCMP_Unpack(LPCBYTE *ppMemFile, LPDWORD pdwMemLength);
 extern void AMSUnpack(const char *psrc, UINT inputlen, char *pdest, UINT dmax, char packcharacter);
 extern WORD MDLReadBits(DWORD &bitbuf, UINT &bitnum, LPBYTE &ibuf, CHAR n);
 extern int DMFUnpack(LPBYTE psample, LPBYTE ibuf, LPBYTE ibufmax, UINT maxlen);
-//extern DWORD ITReadBits(DWORD &bitbuf, UINT &bitnum, LPBYTE &ibuf, CHAR n);
-extern void ITUnpack8Bit(signed char *pSample, DWORD dwLen, LPBYTE lpMemFile, DWORD dwMemLength, BOOL b215);
-extern void ITUnpack16Bit(signed char *pSample, DWORD dwLen, LPBYTE lpMemFile, DWORD dwMemLength, BOOL b215);
+extern DWORD ITUnpack8Bit(signed char *pSample, DWORD dwLen, LPBYTE lpMemFile, DWORD dwMemLength, DWORD channels, BOOL b215);
+extern DWORD ITUnpack16Bit(signed char *pSample, DWORD dwLen, LPBYTE lpMemFile, DWORD dwMemLength, DWORD channels, BOOL b215);
 
 
 #define MAX_PACK_TABLES		3
@@ -45,15 +44,9 @@ static const signed char UnpackTable[MAX_PACK_TABLES][16] =
 //////////////////////////////////////////////////////////
 // CSoundFile
 
-
-CSoundFile::CSoundFile() : m_nBufferCount(0), m_nCurrentPattern(0),
-		m_nDefaultGlobalVolume(0), m_nDefaultSpeed(0), m_nDefaultTempo(0), m_nFrameDelay(0), m_nGlobalFadeMaxSamples(0),
-		m_nGlobalFadeSamples(0), m_nGlobalVolume(0), m_nInitialRepeatCount(0), m_nMaxOrderPosition(0), m_nMixStat(0),
-		m_nMusicSpeed(0), m_nMusicTempo(0), m_nNextPattern(0), m_nNextRow(0), m_nOldGlbVolSlide(0), m_nPattern(0),
-		m_nPatternDelay(0), m_nRestartPos(0), m_nRow(0), m_nSongPreAmp(0), m_nTickCount(0), m_nTotalCount(0)
+CSoundFile::CSoundFile()
 //----------------------
 {
-
 	m_nType = MOD_TYPE_NONE;
 	m_dwSongFlags = 0;
 	m_nChannels = 0;
@@ -109,6 +102,7 @@ BOOL CSoundFile::Create(LPCBYTE lpStream, DWORD dwMemLength)
 	m_nFrameDelay = 0;
 	m_nNextRow = 0;
 	m_nRow = 0;
+	m_nNextStartRow = 0;
 	m_nPattern = 0;
 	m_nCurrentPattern = 0;
 	m_nNextPattern = 0;
@@ -173,7 +167,7 @@ BOOL CSoundFile::Create(LPCBYTE lpStream, DWORD dwMemLength)
 #ifdef MMCMP_SUPPORT
 		if (bMMCmp)
 		{
-			GlobalFreePtr(lpStream);
+			free((void*)lpStream);
 			lpStream = NULL;
 		}
 #endif
@@ -234,7 +228,7 @@ BOOL CSoundFile::Create(LPCBYTE lpStream, DWORD dwMemLength)
 		if (pins->nGlobalVol > 64) pins->nGlobalVol = 64;
 	}
 	// Check invalid instruments
-	while ((m_nInstruments > 0) && (!Headers[m_nInstruments])) 
+	while ((m_nInstruments > 0) && (!Headers[m_nInstruments]))
 		m_nInstruments--;
 	// Set default values
 	if (m_nSongPreAmp < 0x20) m_nSongPreAmp = 0x20;
@@ -250,6 +244,7 @@ BOOL CSoundFile::Create(LPCBYTE lpStream, DWORD dwMemLength)
 	m_nTickCount = m_nMusicSpeed;
 	m_nNextRow = 0;
 	m_nRow = 0;
+	m_nNextStartRow = 0;
 	if ((m_nRestartPos >= MAX_ORDERS) || (Order[m_nRestartPos] >= MAX_PATTERNS)) m_nRestartPos = 0;
 	// Load plugins
 	if (gpMixPluginCreateProc)
@@ -359,7 +354,7 @@ void CSoundFile::FreePattern(LPVOID pat)
 signed char* CSoundFile::AllocateSample(UINT nbytes)
 //-------------------------------------------
 {
-	signed char * p = (signed char *)GlobalAllocPtr(GHND, (nbytes+39) & ~7);
+	signed char * p = (signed char *)calloc(1, (nbytes+39) & ~7);
 	if (p) p += 16;
 	return p;
 }
@@ -368,9 +363,8 @@ signed char* CSoundFile::AllocateSample(UINT nbytes)
 void CSoundFile::FreeSample(LPVOID p)
 //-----------------------------------
 {
-	if (p)
-	{
-		GlobalFreePtr(((LPSTR)p)-16);
+	if (p) {
+		free((char*)p - 16);
 	}
 }
 
@@ -684,6 +678,7 @@ void CSoundFile::SetCurrentPos(UINT nPos)
 	}
 	m_nNextPattern = nPattern;
 	m_nNextRow = nRow;
+	m_nNextStartRow = 0;
 	m_nTickCount = m_nMusicSpeed;
 	m_nBufferCount = 0;
 	m_nPatternDelay = 0;
@@ -712,7 +707,7 @@ void CSoundFile::SetCurrentOrder(UINT nPos)
 	} else
 	{
 		m_nNextPattern = nPos;
-		m_nRow = m_nNextRow = 0;
+		m_nRow = m_nNextRow = m_nNextStartRow = 0;
 		m_nPattern = 0;
 		m_nTickCount = m_nMusicSpeed;
 		m_nBufferCount = 0;
@@ -776,13 +771,11 @@ UINT CSoundFile::GetSaveFormats() const
 {
 	UINT n = 0;
 	if ((!m_nSamples) || (!m_nChannels) || (m_nType == MOD_TYPE_NONE)) return 0;
-	switch(m_nType)
-	{
-	case MOD_TYPE_MOD:	n |= MOD_TYPE_MOD;
-	/* no break */
-	case MOD_TYPE_S3M:	n |= MOD_TYPE_S3M;
-	/* no break */
-	}
+	if (m_nType & MOD_TYPE_MOD)
+		n |= MOD_TYPE_MOD;
+	if (m_nType & MOD_TYPE_S3M)
+		n |= MOD_TYPE_S3M;
+	// Can always save to XM & IT
 	n |= MOD_TYPE_XM | MOD_TYPE_IT;
 	if (!m_nInstruments)
 	{
@@ -797,7 +790,8 @@ UINT CSoundFile::GetSampleName(UINT nSample,LPSTR s) const
 //--------------------------------------------------------
 {
         char sztmp[40] = "";      // changed from CHAR
-	memcpy(sztmp, m_szNames[nSample],32);
+	if (nSample < MAX_SAMPLES)
+		memcpy(sztmp, m_szNames[nSample], 32);
 	sztmp[31] = 0;
 	if (s) strcpy(s, sztmp);
 	return strlen(sztmp);
@@ -1102,11 +1096,12 @@ UINT CSoundFile::WriteSample(FILE *f, MODINSTRUMENT *pins, UINT nFlags, UINT nMa
 UINT CSoundFile::ReadSample(MODINSTRUMENT *pIns, UINT nFlags, LPCSTR lpMemFile, DWORD dwMemLength)
 //------------------------------------------------------------------------------
 {
-	UINT len = 0, mem = pIns->nLength+6;
+	UINT len = 0, mem;
 
 	// Disable >2Gb samples,(preventing buffer overflow in AllocateSample)
 	if ((!pIns) || ((int)pIns->nLength < 4) || (!lpMemFile)) return 0;
 	if (pIns->nLength > MAX_SAMPLE_LENGTH) pIns->nLength = MAX_SAMPLE_LENGTH;
+	mem = pIns->nLength+6;
 	pIns->uFlags &= ~(CHN_16BIT|CHN_STEREO);
 	if (nFlags & RSF_16BIT)
 	{
@@ -1156,7 +1151,7 @@ UINT CSoundFile::ReadSample(MODINSTRUMENT *pIns, UINT nFlags, LPCSTR lpMemFile, 
 	case RS_ADPCM4:
 		{
 			len = (pIns->nLength + 1) / 2;
-			if (len > dwMemLength - 16) break;
+			if (len > dwMemLength - 16 || dwMemLength < 16) break;
 			memcpy(CompressionTable, lpMemFile, 16);
 			lpMemFile += 16;
 			signed char *pSample = pIns->pSample;
@@ -1313,9 +1308,26 @@ UINT CSoundFile::ReadSample(MODINSTRUMENT *pIns, UINT nFlags, LPCSTR lpMemFile, 
 		len = dwMemLength;
 		if (len < 4) break;
 		if ((nFlags == RS_IT2148) || (nFlags == RS_IT2158))
-			ITUnpack8Bit(pIns->pSample, pIns->nLength, (LPBYTE)lpMemFile, dwMemLength, (nFlags == RS_IT2158));
+			ITUnpack8Bit(pIns->pSample, pIns->nLength, (LPBYTE)lpMemFile, dwMemLength, 1, (nFlags == RS_IT2158));
 		else
-			ITUnpack16Bit(pIns->pSample, pIns->nLength, (LPBYTE)lpMemFile, dwMemLength, (nFlags == RS_IT21516));
+			ITUnpack16Bit(pIns->pSample, pIns->nLength, (LPBYTE)lpMemFile, dwMemLength, 1, (nFlags == RS_IT21516));
+		break;
+
+	case RS_IT2148 | RSF_STEREO:
+	case RS_IT21416 | RSF_STEREO:
+	case RS_IT2158 | RSF_STEREO:
+	case RS_IT21516 | RSF_STEREO:
+		len = dwMemLength;
+		if (len < 4) break;
+		if ((nFlags == (RS_IT2148 | RSF_STEREO)) || (nFlags == (RS_IT2158 | RSF_STEREO)))
+		{
+			DWORD offset = ITUnpack8Bit(pIns->pSample, pIns->nLength, (LPBYTE)lpMemFile, dwMemLength, 2, (nFlags == (RS_IT2158 | RSF_STEREO)));
+			ITUnpack8Bit(pIns->pSample + 1, pIns->nLength, (LPBYTE)lpMemFile + offset, dwMemLength - offset, 2, (nFlags == (RS_IT2158 | RSF_STEREO)));
+		} else
+		{
+			DWORD offset = ITUnpack16Bit(pIns->pSample, pIns->nLength, (LPBYTE)lpMemFile, dwMemLength, 2, (nFlags == (RS_IT21516 | RSF_STEREO)));
+			ITUnpack16Bit(pIns->pSample + 2, pIns->nLength, (LPBYTE)lpMemFile + offset, dwMemLength - offset, 2, (nFlags == (RS_IT21516 | RSF_STEREO)));
+		}
 		break;
 
 #ifndef MODPLUG_BASIC_SUPPORT
@@ -1368,28 +1380,30 @@ UINT CSoundFile::ReadSample(MODINSTRUMENT *pIns, UINT nFlags, LPCSTR lpMemFile, 
 		{
 			const char *psrc = lpMemFile;
 			char packcharacter = lpMemFile[8], *pdest = (char *)pIns->pSample;
-			len += bswapLE32(*((LPDWORD)(lpMemFile+4)));
-			if (len > dwMemLength) len = dwMemLength;
+			UINT smplen = bswapLE32(*((LPDWORD)(lpMemFile+4)));
+			if (smplen > dwMemLength - 9) smplen = dwMemLength - 9;
+			len += smplen;
 			UINT dmax = pIns->nLength;
 			if (pIns->uFlags & CHN_16BIT) dmax <<= 1;
-			AMSUnpack(psrc+9, len-9, pdest, dmax, packcharacter);
+			AMSUnpack(psrc+9, smplen, pdest, dmax, packcharacter);
 		}
 		break;
 
 	// PTM 8bit delta to 16-bit sample
 	case RS_PTM8DTO16:
 		{
+			UINT j;
 			len = pIns->nLength * 2;
 			if (len > dwMemLength) break;
 			int8_t *pSample = (int8_t *)pIns->pSample;
 			int8_t delta8 = 0;
-			for (UINT j=0; j<len; j++)
+			for (j=0; j<len; j++)
 			{
 				delta8 += lpMemFile[j];
 				*pSample++ = delta8;
 			}
 			uint16_t *pSampleW = (uint16_t *)pIns->pSample;
-			for (UINT j=0; j<len; j+=2)   // swaparoni!
+			for (j=0; j<len; j+=2)   // swaparoni!
 			{
 				uint16_t rawSample = *pSampleW;
 			        *pSampleW++ = bswapLE16(rawSample);
@@ -1408,8 +1422,9 @@ UINT CSoundFile::ReadSample(MODINSTRUMENT *pIns, UINT nFlags, LPCSTR lpMemFile, 
 			DWORD bitbuf = bswapLE32(*((DWORD *)ibuf));
 			UINT bitnum = 32;
 			BYTE dlt = 0, lowbyte = 0;
+			LPBYTE ibufend = (LPBYTE)lpMemFile + dwMemLength - 1;
 			ibuf += 4;
-			for (UINT j=0; j<pIns->nLength; j++)
+			for (UINT j=0; j<pIns->nLength && ibuf < ibufend; j++)
 			{
 				BYTE hibyte;
 				BYTE sign;
@@ -1421,8 +1436,10 @@ UINT CSoundFile::ReadSample(MODINSTRUMENT *pIns, UINT nFlags, LPCSTR lpMemFile, 
 				} else
 				{
 					hibyte = 8;
-					while (!MDLReadBits(bitbuf, bitnum, ibuf, 1)) hibyte += 0x10;
-					hibyte += MDLReadBits(bitbuf, bitnum, ibuf, 4);
+					while (ibuf < ibufend && !MDLReadBits(bitbuf, bitnum, ibuf, 1))
+						hibyte += 0x10;
+					if (ibuf < ibufend)
+						hibyte += MDLReadBits(bitbuf, bitnum, ibuf, 4);
 				}
 				if (sign) hibyte = ~hibyte;
 				dlt += hibyte;
@@ -1654,8 +1671,7 @@ void CSoundFile::AdjustSampleLoop(MODINSTRUMENT *pIns)
 DWORD CSoundFile::TransposeToFrequency(int transp, int ftune)
 //-----------------------------------------------------------
 {
-
-#ifdef MSC_VER
+#if defined(_MSC_VER) && defined(_M_IX86)
 	const float _fbase = 8363;
 	const float _factor = 1.0f/(12.0f*128.0f);
 	int result;
@@ -1695,8 +1711,7 @@ DWORD CSoundFile::TransposeToFrequency(int transp, int ftune)
 int CSoundFile::FrequencyToTranspose(DWORD freq)
 //----------------------------------------------
 {
-
-#ifdef MSC_VER
+#if defined(_MSC_VER) && defined(_M_IX86)
 	const float _f1_8363 = 1.0f / 8363.0f;
 	const float _factor = 128 * 12;
 	LONG result;
@@ -1769,8 +1784,11 @@ void CSoundFile::CheckCPUUsage(UINT nCPU)
 BOOL CSoundFile::SetPatternName(UINT nPat, LPCSTR lpszName)
 //---------------------------------------------------------
 {
-        char szName[MAX_PATTERNNAME] = "";   // changed from CHAR
+        char szName[MAX_PATTERNNAME] = "";
+	// check input arguments
 	if (nPat >= MAX_PATTERNS) return FALSE;
+	if (lpszName == NULL) return(FALSE);
+
 	if (lpszName) lstrcpyn(szName, lpszName, MAX_PATTERNNAME);
 	szName[MAX_PATTERNNAME-1] = 0;
 	if (!m_lpszPatternNames) m_nPatternNames = 0;
@@ -1778,7 +1796,7 @@ BOOL CSoundFile::SetPatternName(UINT nPat, LPCSTR lpszName)
 	{
 		if (!lpszName[0]) return TRUE;
 		UINT len = (nPat+1)*MAX_PATTERNNAME;
-		char *p = new char[len];   // changed from CHAR
+		char *p = new char[len];
 		if (!p) return FALSE;
 		memset(p, 0, len);
 		if (m_lpszPatternNames)
@@ -1904,4 +1922,3 @@ BOOL CSoundFile::DestroySample(UINT nSample)
 }
 
 #endif // MODPLUG_FASTSOUNDLIB
-
