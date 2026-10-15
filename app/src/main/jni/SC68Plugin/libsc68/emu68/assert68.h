@@ -1,16 +1,15 @@
 /**
- * @ingroup   emu68_lib
+ * @ingroup   lib_emu68
  * @file      emu68/assert68.h
  * @brief     assert feature header.
- * @date      2009/06/12
  * @author    Benjamin Gerard
- *
+ * @date      2009/06/12
  */
 
-/* $Id$ */
+/* Copyright (c) 1998-2016 Benjamin Gerard */
 
-#ifndef _EMU68_ASSERT68_H_
-#define _EMU68_ASSERT68_H_
+#ifndef EMU68_ASSERT68_H
+#define EMU68_ASSERT68_H
 
 #ifdef HAVE_LIMITS_H
 # include <limits.h>
@@ -26,11 +25,7 @@
 #endif
 
 #ifndef EMU68_BREAK
-# ifndef DEBUG
-#  define EMU68_BREAK 1                 /* NOT debug mode */
-# else 
-#  define EMU68_BREAK 0                 /*     debug mode */
-# endif
+# define EMU68_BREAK 1                  /**< Don't break anymore */
 #endif
 
-#endif /* #ifndef _EMU68_ASSERT68_H_ */
+#endif
