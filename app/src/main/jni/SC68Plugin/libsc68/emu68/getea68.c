@@ -1,37 +1,45 @@
 /*
- *       emu68 - get 68000 addressing mode effective address
- *             Copyright (C) 2001-2009 Benjamin Gerard
- *           <benjihan -4t- users.sourceforge -d0t- net>
+ * @file    emu68/getea68.c
+ * @brief   get 68000 addressing mode effective address
+ * @author  http://sourceforge.net/users/benjihan
  *
- * This  program is  free  software: you  can  redistribute it  and/or
- * modify  it under the  terms of  the GNU  General Public  License as
- * published by the Free Software  Foundation, either version 3 of the
+ * Copyright (c) 1998-2016 Benjamin Gerard
+ *
+ * This program is free software: you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation, either version 3 of the
  * License, or (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful, but
- * WITHOUT  ANY  WARRANTY;  without   even  the  implied  warranty  of
- * MERCHANTABILITY or  FITNESS FOR A PARTICULAR PURPOSE.   See the GNU
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have  received a copy of the  GNU General Public License
+ * You should have received a copy of the GNU General Public License
  * along with this program.
+ *
  * If not, see <http://www.gnu.org/licenses/>.
  *
  */
-
-/* $Id: getea68.c 116 2009-06-18 14:09:54Z benjihan $ */
 
 #ifdef HAVE_CONFIG_H
 # include "config.h"
 #endif
 
+#include "emu68_private.h"
 #include "error68.h"
 #include "assert68.h"
+#include "excep68.h"
 #include "mem68.h"
+
+EMU68_EXTERN
+void exception68(emu68_t * const emu68, const int vector, const int level);
 
 static addr68_t ea_error(emu68_t * const emu68, const int reg)
 {
   assert(EMU68_BREAK);
+  /* $$$ must trigger an exception just not sure which exactly */
+  exception68(emu68, ADRERR_VECTOR, -1);
   return 0;
 }
 
@@ -218,4 +226,3 @@ addr68_t (* const get_eal68[8])(emu68_t * const, const int) =
   ea_inmANl,ea_indAN,ea_inANXI,
   ea_mode7l,
 };
-
