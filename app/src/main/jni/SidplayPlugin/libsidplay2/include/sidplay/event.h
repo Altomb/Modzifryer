@@ -26,16 +26,13 @@ typedef uint_fast32_t event_clock_t;
 typedef enum {EVENT_CLOCK_PHI1 = 0, EVENT_CLOCK_PHI2 = 1} event_phase_t;
 #define EVENT_CONTEXT_MAX_PENDING_EVENTS 0x100
 
-class EventScheduler;
-typedef EventScheduler EventContext;
-
 class SID_EXTERN Event
 {
     friend class EventScheduler;
 
 private:
     const char * const  m_name;
-    EventContext *m_context;
+    class EventContext *m_context;
     event_clock_t       m_clk;
 
     /* This variable is set by the event context
@@ -74,11 +71,30 @@ public:
         m_callback(callback) {}
 };
 
-// Private Event Context Object (The scheduler)
-class EventScheduler: public Event
+// Public Event Context
+class EventContext
 {
     friend class Event;
 
+protected:
+    virtual void cancel   (Event &event) = 0;
+    virtual void schedule (Event &event, event_clock_t cycles, event_phase_t phase) = 0;
+
+public:
+    virtual event_clock_t getTime (event_phase_t phase) const = 0;
+    virtual event_clock_t getTime (event_clock_t clock, event_phase_t phase) const = 0;
+    virtual event_phase_t phase () const = 0;
+
+    // For backwards compatibility
+    void schedule (Event *event, event_clock_t cycles, event_phase_t phase)
+    {
+        schedule (*event, cycles, phase);
+    }
+};
+
+// Private Event Context Object (The scheduler)
+class EventScheduler: public EventContext, public Event
+{
 private:
     EventCallback<EventScheduler> m_timeWarp;
     uint  m_events;
@@ -122,8 +138,6 @@ public:
     {   return ((getTime (phase) - clock) << 1) >> 1; } // 31 bit res.
     event_phase_t phase () const { return (event_phase_t) (m_clk & 1); }
 };
-
-typedef EventScheduler EventContext;
 
 
 inline void Event::schedule (EventContext &context, event_clock_t cycles,
