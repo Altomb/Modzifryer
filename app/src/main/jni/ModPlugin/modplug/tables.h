@@ -4,8 +4,8 @@
  * Authors: Olivier Lapicque <olivierl@jps.net>
  */
 
-#include <libmodplug/stdafx.h>
-#include <libmodplug/sndfile.h>
+#include "libmodplug/stdafx.h"
+#include "libmodplug/sndfile.h"
 
 #ifndef MODPLUG_FASTSOUNDLIB
 //#pragma data_seg(".tables")
@@ -373,4 +373,3 @@ static const int SpectrumSinusTable[256*2] =
 	-24, -23, -22, -22, -21, -20, -20, -19, -18, -17, -17, -16, -15, -14, -14, -13, 
 	-12, -11, -10, -10, -9, -8, -7, -7, -6, -5, -4, -3, -3, -2, -1, 0, 
 };
-
