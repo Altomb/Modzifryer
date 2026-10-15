@@ -177,6 +177,7 @@ tasks.configureEach { task ->
 dependencies {
     implementation 'androidx.core:core:1.19.0'
     implementation 'androidx.viewpager:viewpager:1.0.0'
+    implementation 'androidx.appcompat:appcompat:1.7.0'
     implementation 'androidx.preference:preference:1.2.1'
 
     implementation files('libs/htmlcleaner-2.2.jar')
