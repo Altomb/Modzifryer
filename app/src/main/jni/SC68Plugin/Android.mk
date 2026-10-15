@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
- 
+
 LOCAL_PATH := $(call my-dir)
 
 include $(CLEAR_VARS)
@@ -21,16 +21,86 @@ LOCAL_MODULE    := sc68
 
 LOCAL_SRC_FILES := SC68Plugin.cpp
 
-MY_SOURCES := \
-	$(wildcard $(LOCAL_PATH)/libsc68/*.c) \
-	$(wildcard $(LOCAL_PATH)/libsc68/**/*.c) \
-	$(wildcard $(LOCAL_PATH)/file68/**/*.c) \
-	$(wildcard $(LOCAL_PATH)/unice68/*.c)
+# --- libsc68 ---------------------------------------------------------------
+LOCAL_SRC_FILES += \
+	libsc68/src/api68.c \
+	libsc68/src/conf68.c \
+	libsc68/src/libsc68.c \
+	libsc68/src/mixer68.c \
+	libsc68/emu68/emu68.c \
+	libsc68/emu68/error68.c \
+	libsc68/emu68/getea68.c \
+	libsc68/emu68/inst68.c \
+	libsc68/emu68/ioplug68.c \
+	libsc68/emu68/mem68.c \
+	libsc68/emu68/line0_68.c \
+	libsc68/emu68/line1_68.c \
+	libsc68/emu68/line2_68.c \
+	libsc68/emu68/line3_68.c \
+	libsc68/emu68/line4_68.c \
+	libsc68/emu68/line5_68.c \
+	libsc68/emu68/line6_68.c \
+	libsc68/emu68/line7_68.c \
+	libsc68/emu68/line8_68.c \
+	libsc68/emu68/line9_68.c \
+	libsc68/emu68/lineA_68.c \
+	libsc68/emu68/lineB_68.c \
+	libsc68/emu68/lineC_68.c \
+	libsc68/emu68/lineD_68.c \
+	libsc68/emu68/lineE_68.c \
+	libsc68/emu68/lineF_68.c \
+	libsc68/emu68/table68.c \
+	libsc68/io68/io68.c \
+	libsc68/io68/mfp_io.c \
+	libsc68/io68/mfpemul.c \
+	libsc68/io68/mw_io.c \
+	libsc68/io68/mwemul.c \
+	libsc68/io68/paula_io.c \
+	libsc68/io68/paulaemul.c \
+	libsc68/io68/shifter_io.c \
+	libsc68/io68/ym_envel.c \
+	libsc68/io68/ym_blep.c \
+	libsc68/io68/ym_dump.c \
+	libsc68/io68/ym_io.c \
+	libsc68/io68/ym_puls.c \
+	libsc68/io68/ymemul.c \
+	libsc68/dial68/dial68.c
 
-LOCAL_SRC_FILES += $(MY_SOURCES:$(LOCAL_PATH)/%=%)
+# --- file68 ----------------------------------------------------------------
+LOCAL_SRC_FILES += \
+	file68/src/endian68.c \
+	file68/src/error68.c \
+	file68/src/file68.c \
+	file68/src/gzip68.c \
+	file68/src/ice68.c \
+	file68/src/init68.c \
+	file68/src/msg68.c \
+	file68/src/option68.c \
+	file68/src/registry68.c \
+	file68/src/rsc68.c \
+	file68/src/string68.c \
+	file68/src/timedb68.c \
+	file68/src/uri68.c \
+	file68/src/vfs68_ao.c \
+	file68/src/vfs68_curl.c \
+	file68/src/vfs68.c \
+	file68/src/vfs68_fd.c \
+	file68/src/vfs68_file.c \
+	file68/src/vfs68_mem.c \
+	file68/src/vfs68_null.c \
+	file68/src/vfs68_z.c
 
-LOCAL_C_INCLUDES := $(LOCAL_PATH) $(LOCAL_PATH)/libsc68 \
+# --- unice68 ---------------------------------------------------------------
+LOCAL_SRC_FILES += \
+	unice68/unice68_unpack.c \
+	unice68/unice68_version.c
+
+LOCAL_C_INCLUDES := $(LOCAL_PATH) \
+	$(LOCAL_PATH)/libsc68 \
 	$(LOCAL_PATH)/libsc68/sc68 \
+	$(LOCAL_PATH)/libsc68/emu68 \
+	$(LOCAL_PATH)/libsc68/io68 \
+	$(LOCAL_PATH)/libsc68/dial68 \
 	$(LOCAL_PATH)/file68 \
 	$(LOCAL_PATH)/file68/sc68 \
 	$(LOCAL_PATH)/unice68
