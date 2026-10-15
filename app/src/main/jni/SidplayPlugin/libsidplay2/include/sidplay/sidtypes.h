@@ -49,9 +49,6 @@ typedef struct
 {
     sid_fc_t       cutoff[0x800];
     uint_least16_t points;
-#ifdef RESID_DISTORTION_PATCH
-    int            distortion_enable, rate, headroom, opmin, opmax;
-#endif
 } sid_filter_t;
 #define sid_filter_t sid_filter_t
 
