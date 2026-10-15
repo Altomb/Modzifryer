@@ -3,9 +3,7 @@
  * @brief   Atari ST shifter I/O plugin (50/60hz and resolution)
  * @author  http://sourceforge.net/users/benjihan
  *
- * Copyright (C) 1998-2011 Benjamin Gerard
- *
- * Time-stamp: <2011-10-06 14:13:26 ben>
+ * Copyright (c) 1998-2016 Benjamin Gerard
  *
  * This program is free software: you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -27,6 +25,7 @@
 #ifdef HAVE_CONFIG_H
 # include "config.h"
 #endif
+#include "io68_private.h"
 
 #include "emu68/struct68.h"
 
