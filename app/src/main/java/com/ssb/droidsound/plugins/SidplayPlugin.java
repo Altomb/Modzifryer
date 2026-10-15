@@ -120,7 +120,7 @@ public class SidplayPlugin extends DroidSoundPlugin {
 	
 	@Override
 	public String getVersion() {
-		return "libsidplay 2.1.1+20060528.ccr";
+		return "libsidplay 2.1.1+20120122.ccr";
 	}
 
 }
