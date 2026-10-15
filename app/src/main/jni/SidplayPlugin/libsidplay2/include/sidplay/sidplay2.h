@@ -18,46 +18,50 @@
 #ifndef _sidplay2_h_
 #define _sidplay2_h_
 
-#include "sidtypes.h"
-#include "SidTune.h"
-#include "sidbuilder.h"
+#include <sidplay/sidtypes.h>
+#include <sidplay/sidunknown.h>
+#include <sidplay/SidTune.h>
+#include <sidplay/sidbuilder.h>
 
 
-// Private Sidplayer
-namespace SIDPLAY2_NAMESPACE
+class ISidplay2: public ISidUnknown
 {
-    class Player;
-}
-
-class SID_EXTERN sidplay2
-{
-private:
-    SIDPLAY2_NAMESPACE::Player &sidplayer;
-
 public:
-    sidplay2 ();
-    virtual ~sidplay2 ();
+    static const Iid &iid () {
+        SIDIID(0x25ef79eb, 0x8de6, 0x4076, 0x9c6b, 0xa9f9, 0x570f3a4b);
+    }
 
-    const sid2_config_t &config (void) const;
-    const sid2_info_t   &info   (void) const;
+    static SID_EXTERN ISidUnknown *create ();
 
-    int            config       (const sid2_config_t &cfg);
-    const char    *error        (void) const;
-    int            fastForward  (uint percent);
-    int            load         (SidTune *tune);
-    void           pause        (void);
-    uint_least32_t play         (void *buffer, uint_least32_t length);
-    sid2_player_t  state        (void) const;
-    void           stop         (void);
-    void           debug        (bool enable, FILE *out);
+    virtual const sid2_config_t &config (void) const = 0;
+    virtual const sid2_info_t   &info   (void) const = 0;
+
+    virtual int            config       (const sid2_config_t &cfg) = 0;
+    virtual const char    *error        (void) const = 0;
+    virtual int            fastForward  (uint percent) = 0;
+    virtual int            load         (SidTune *tune) = 0;
+    virtual void           pause        (void) = 0;
+    virtual uint_least32_t play         (void *buffer, uint_least32_t length) = 0;
+    virtual sid2_player_t  state        (void) const = 0;
+    virtual void           stop         (void) = 0;
+    virtual void           debug        (bool enable, FILE *out) = 0;
+};
+
+class ISidTimer: public ISidUnknown
+{
+public:
+    static const Iid &iid () {
+        SIDIID(0xba2f0dd8, 0xdafb, 0x4aea, 0xb09a, 0x8aa9, 0xd335b36b);
+    }
 
     // Timer functions with respect to resolution returned by timebase
-    uint_least32_t timebase (void) const;
-    uint_least32_t time     (void) const;
-    uint_least32_t mileage  (void) const;
-
-    operator bool()  const { return (&sidplayer ? true: false); }
-    bool operator!() const { return (&sidplayer ? false: true); }
+    virtual uint_least32_t mileage  (void) const = 0;
+//    virtual void           schedule (Event &event, event_clock_t ticks) = 0;
+    virtual uint_least32_t timebase (void) const = 0;
+    virtual uint_least32_t time     (void) const = 0;
 };
+
+// Old name
+typedef ISidplay2 sidplay2;
 
 #endif // _sidplay2_h_
