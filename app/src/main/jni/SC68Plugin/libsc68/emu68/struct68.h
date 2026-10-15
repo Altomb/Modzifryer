@@ -1,29 +1,28 @@
 /**
- * @ingroup   emu68_lib
+ * @ingroup   lib_emu68
  * @file      emu68/struct68.h
+ * @brief     Struture definitions header.
  * @author    Benjamin Gerard
  * @date      1999-03-13
- * @brief     Struture definitions header.
- *
  */
 
-/* $Id: struct68.h 202 2011-10-16 01:14:21Z benjihan $ */
+/* Copyright (c) 1998-2016 Benjamin Gerard */
 
-/* Copyright (C) 1998-2010 Benjamin Gerard */
-
-#ifndef _EMU68_STRUCT68_H_
-#define _EMU68_STRUCT68_H_
+#ifndef EMU68_STRUCT68_H
+#define EMU68_STRUCT68_H
 
 #include "type68.h"
 
-/** @addtogroup emu68_lib_types
- *  @{
+/**
+ * @addtogroup lib_emu68_types
+ * @{
  */
 
-/** IO no pending interruption return value.
+/**
+ * IO no pending interruption return value.
  *
- *    The next_int function of IO plugin must return IO68_NO_INT when no
- *    interruption has been triggered.
+ *   The next_int function of IO plugin must return IO68_NO_INT when
+ *   no interruption has been triggered.
  */
 #define IO68_NO_INT (0x80000000)
 
@@ -34,32 +33,41 @@
 #define MEMMSK68 (emu68->memmsk)
 
 
-/** @name  Memory access caller type
- *  @{
+/**
+ * @name  Memory access caller type
+ * @{
  */
 
 /** Write memory function. */
 typedef void (*memwfunc68_t)(emu68_t * const);
+
 /** Write IO chip function. */
 typedef void (*iomemfunc68_t)(io68_t * const);
 
-/** @} */
+/**
+ * @}
+ */
 
 /** First level (16 lines) decoder function. */
 typedef void (linefunc68_t)(emu68_t * const, int, int);
 
 #ifndef EMU68_MONOLITIC
+/** @nodoc */
 # define DECL_LINE68(N)                                 \
   void N(emu68_t * const emu68, int reg9, int reg0)
+/** @nodoc */
 # define DECL_STATIC_LINE68(N) static DECL_LINE68(N)
 #else
+/** @nodoc */
 # define DECL_LINE68(N)                                         \
   static void N(emu68_t * const emu68, int reg9, int reg0)
+/** @nodoc */
 # define DECL_STATIC_LINE68(N) DECL_LINE68(N)
 #endif
 
 
-/**  68K interruption exception structure.
+/**
+ * 68K interruption exception structure.
  */
 typedef struct
 {
@@ -69,10 +77,11 @@ typedef struct
 } interrupt68_t;
 
 
-/** IO emulator plugin structure.
+/**
+ * IO emulator plugin structure.
  *
- *    All 68K IO must have a filled io68_t structure to be warm plug
- *    or unplug with ioplug interface.
+ *   All 68K IO must have a filled io68_t structure to be warm plug or
+ *   unplug with ioplug interface.
  *
  */
 struct io68_s
@@ -106,7 +115,8 @@ struct io68_s
 };
 
 
-/** 68K internal registers.
+/**
+ * 68K internal registers.
  */
 typedef struct
 {
@@ -117,43 +127,51 @@ typedef struct
   int sr;                      /**< 68K Status Register.     */
 } reg68_t;
 
-#define REG68_D0_IDX 000
-#define REG68_D1_IDX 001
-#define REG68_D2_IDX 002
-#define REG68_D3_IDX 003
-#define REG68_D4_IDX 004
-#define REG68_D5_IDX 005
-#define REG68_D6_IDX 006
-#define REG68_D7_IDX 007
-#define REG68_DN_IDX(N) (N&7)
+/**
+ * 68k register index.
+ * @{
+ */
+enum emu68_regidx_e {
+  REG68_D0_IDX,                /**< D0 register index.  */
+  REG68_D1_IDX,                /**< D1 register index.  */
+  REG68_D2_IDX,                /**< D2 register index.  */
+  REG68_D3_IDX,                /**< D3 register index.  */
+  REG68_D4_IDX,                /**< D4 register index.  */
+  REG68_D5_IDX,                /**< D5 register index.  */
+  REG68_D6_IDX,                /**< D6 register index.  */
+  REG68_D7_IDX,                /**< D7 register index.  */
+  REG68_A0_IDX,                /**< A0 register index.  */
+  REG68_A1_IDX,                /**< A1 register index.  */
+  REG68_A2_IDX,                /**< A2 register index.  */
+  REG68_A3_IDX,                /**< A3 register index.  */
+  REG68_A4_IDX,                /**< A4 register index.  */
+  REG68_A5_IDX,                /**< A5 register index.  */
+  REG68_A6_IDX,                /**< A6 register index.  */
+  REG68_A7_IDX,                /**< A7 register index.  */
+  REG68_US_IDX,                /**< USP register index. */
+  REG68_PC_IDX,                /**< PC register index.  */
+  REG68_SR_IDX,                /**< SR register index.  */
+};
 
-#define REG68_A0_IDX 010
-#define REG68_A1_IDX 011
-#define REG68_A2_IDX 012
-#define REG68_A3_IDX 013
-#define REG68_A4_IDX 014
-#define REG68_A5_IDX 015
-#define REG68_A6_IDX 016
-#define REG68_A7_IDX 017
-#define REG68_AN_IDX(N) (8+(N&7))
+#define REG68_DN_IDX(N) (REG68_D0_IDX+(N&7)) /**< Dn register index.  */
+#define REG68_AN_IDX(N) (REG68_A0_IDX+(N&7)) /**< An register index.  */
+/**
+ * @}
+ */
 
-#define REG68_US_IDX 020
-#define REG68_PC_IDX 021
-#define REG68_SR_IDX 022
-
-/** Exception trapping handler.
+/**
+ * Exception trapping handler.
  *
- *    The emu68_handler_t handler is called by EMU68 when an exception
- *    occurs. It does include interruption triggered by IO chip as
- *    well as software exception like TRACE, ILLEGAL, ZERO DIVIDE,
- *    CHK, TRAP, RESET ... and special emulator interrupts.
+ *   The emu68_handler_t handler is called by EMU68 when an exception
+ *   occurs. It does include interruption triggered by IO chip as well
+ *   as software exception like TRACE, ILLEGAL, ZERO DIVIDE, CHK,
+ *   TRAP, RESET ... and special emulator interrupts.
  *
  *  @param  emu68   emulator instance
  *  @param  vector  exception vector number
  *  @param  cookie  user-data pointer
- *  @return Execution break request (return non 0 to ask for a break)
 */
-typedef int (*emu68_handler_t)(emu68_t* const emu68, int vector, void * cookie);
+typedef void (*emu68_handler_t)(emu68_t* const emu68, int vector, void * cookie);
 
 /** Breakpoint definition. */
 typedef struct {
@@ -167,10 +185,14 @@ struct emu68_s {
   char name[32];                        /**< Identifier.            */
 
   /* Error. */
-  char err[128][4];                     /**< Error message stack.   */
+  char err[4][128];                     /**< Error message stack.   */
   int  nerr;                            /**< Error counter.         */
 
   reg68_t   reg;                     /**< 68000 internal registers. */
+
+  int       inst_pc;               /**< PC of executed instruction. */
+  int       inst_sr;               /**< SR of executed instruction. */
+
   cycle68_t cycle;                   /**< Internal cycle counter.   */
   uint68_t  clock;                   /**< Master clock frequency.   */
 
@@ -178,7 +200,7 @@ struct emu68_s {
   emu68_handler_t   handler;         /**< Exception trap handler.   */
   void            * cookie;          /**< User data.                */
 
-  int status;                           /**< Execution status.      */
+  int      status;                      /**< Execution status.      */
   uint68_t instructions;                /**< Instruction countdown. */
   addr68_t finish_sp;                   /**< Finish Stack Pointer.  */
 
@@ -186,21 +208,31 @@ struct emu68_s {
   int      nio;                       /**< # IO plug in IO-list.    */
   io68_t * iohead;                    /**< Head of IO-list.         */
   io68_t * interrupt_io;              /**< Current interuptible IO. */
-  io68_t * mapped_io[256];
+  io68_t * mapped_io[256];            /**< IO areas.                */
+  io68_t * memio;                     /**< IO to access memory.     */
+  io68_t   ramio; /**< IO used only in debug mode (access control). */
+  io68_t   errio; /**< IO used for invalid address in debug mode.   */
+  io68_t   nopio; /**< IO used for invalid address in normal mode.  */
 
   /* Memory access. */
   addr68_t bus_addr;        /**< bus address for memory access.     */
   int68_t  bus_data;        /**< bus data for memory access.        */
-  int      framechk;        /**< ORed chk change for current frame. */
-  u8     * chk;             /**< Access-Control-Memory buffer.      */
 
-  emu68_bp_t breakpoints[16];           /**< Hardware breakpoints.  */
+  int      frm_chk_fl;      /**< ORed chk change for current frame. */
+  struct {
+    unsigned pc;                        /**< Pc register value  */
+    unsigned ad;                        /**< Addr               */
+    int      fl;                        /**< Flags.             */
+  } fst_chk /**< first check. */, lst_chk /**< last check. */;
+  u8       * chk;           /**< Access-Control-Memory buffer.      */
+
+  emu68_bp_t breakpoints[31];           /**< Hardware breakpoints.  */
 
   /* Onboard memory. */
   addr68_t memmsk;     /**< Onboard memory mask (2^log2mem-1).      */
   int      log2mem;    /**< Onboard memory buffer size (2^log2mem). */
   u8       mem[32];    /**< Onboard memory buffer.
-                            @notice Must be last in struct.         */
+                            @note   Must be last in struct.         */
 };
 
 static inline
@@ -219,14 +251,14 @@ void inl_addcycle68(emu68_t * const emu68, const cycle68_t n)
 #endif
 }
 
-#ifndef CUSTOM_ALLOC
+#ifndef emu68_alloc
 # include <stdlib.h>
-# define emu68_alloc(size) malloc(size)
-# define emu68_free(size)  free(size)
+# define emu68_alloc(size) malloc(size) /**< used instead of malloc(). */
+# define emu68_free(size)  free(size)   /**< used instead of free().   */
 #endif
 
 /**
- *  @}
+ * @}
  */
 
-#endif /* #ifndef _EMU68_STRUCT68_H_ */
+#endif
