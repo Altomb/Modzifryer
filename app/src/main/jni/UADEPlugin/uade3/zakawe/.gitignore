@@ -1,0 +1,10 @@
+*~
+*.lo
+*.o
+*.so
+*.dylib
+*.dll
+*.exe
+*-test
+header-test.c
+Makefile
