@@ -1,11 +1,14 @@
 package com.ssb.droidsound.utils;
 
+import android.app.Activity;
 import android.view.View;
 
 import androidx.core.graphics.Insets;
 import androidx.core.view.OnApplyWindowInsetsListener;
 import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
+import androidx.core.view.WindowInsetsControllerCompat;
 
 /**
  * Window insets handling for edge-to-edge windows.
@@ -45,5 +48,19 @@ public final class SystemBars {
 		});
 
 		ViewCompat.requestApplyInsets(view);
+	}
+
+	/**
+	 * Selects dark or light system bar icons to stay visible over the app's
+	 * contents. {@code light(true)} draws dark icons for a light background.
+	 */
+	public static void setLightSystemBars(Activity activity, boolean light) {
+		WindowInsetsControllerCompat controller =
+				WindowCompat.getInsetsController(activity.getWindow(), activity.getWindow().getDecorView());
+		if (controller == null) {
+			return;
+		}
+		controller.setAppearanceLightStatusBars(light);
+		controller.setAppearanceLightNavigationBars(light);
 	}
 }

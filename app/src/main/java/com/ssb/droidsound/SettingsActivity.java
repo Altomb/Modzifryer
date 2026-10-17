@@ -3,15 +3,19 @@ package com.ssb.droidsound;
 import java.util.List;
 
 import android.app.AlertDialog;
+import android.app.Activity;
 import android.app.Dialog;
+import android.content.Context;
 import android.content.DialogInterface;
 import android.content.DialogInterface.OnMultiChoiceClickListener;
 import android.content.SharedPreferences;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager.NameNotFoundException;
 import android.os.Bundle;
+import android.os.Handler;
 
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.preference.ListPreference;
 import androidx.preference.Preference;
 import androidx.preference.PreferenceCategory;
 import androidx.preference.PreferenceFragmentCompat;
@@ -41,6 +45,13 @@ public class SettingsActivity extends AppCompatActivity implements
 	private boolean doFullScan;
 	private SharedPreferences prefs;
 	private String modsDir;
+
+	@Override
+	protected void attachBaseContext(Context newBase) {
+		// SettingsTheme is a DayNight theme; force the night mode when the user
+		// selected an explicit color scheme so this screen matches the player.
+		super.attachBaseContext(ColorScheme.wrap(newBase));
+	}
 
 	@Override
 	protected void onCreate(Bundle savedInstanceState) {
@@ -165,6 +176,31 @@ public class SettingsActivity extends AppCompatActivity implements
 					public boolean onPreferenceClick(Preference preference) {
 						Log.d(TAG, "Rescan database");
 						getActivity().showDialog(R.string.scan_db);
+						return true;
+					}
+				});
+			}
+
+			// Recreate this screen when the color scheme changes so the new
+			// scheme is visible right away. The post() keeps the restart out of
+			// the preference dialog's own fragment transaction.
+			ListPreference colorScheme = findPreference(ColorScheme.PREF_KEY);
+			if (colorScheme != null) {
+				colorScheme.setOnPreferenceChangeListener(new Preference.OnPreferenceChangeListener() {
+					@Override
+					public boolean onPreferenceChange(Preference preference, Object newValue) {
+						if (!String.valueOf(newValue).equals(
+								prefs.getString(ColorScheme.PREF_KEY, ColorScheme.SYSTEM))) {
+							final Activity activity = getActivity();
+							if (activity != null) {
+								new Handler().post(new Runnable() {
+									@Override
+									public void run() {
+										activity.recreate();
+									}
+								});
+							}
+						}
 						return true;
 					}
 				});

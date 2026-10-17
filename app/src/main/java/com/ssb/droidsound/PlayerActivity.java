@@ -148,6 +148,9 @@ public class PlayerActivity extends Activity  {
 	private SearchCursor searchCursor;
 	private SharedPreferences prefs;
 
+	/** Scheme the activity was built with, used to detect changes in onResume(). */
+	private String activeScheme;
+
 	private int searchDirDepth;
 
 	private File modsDir;
@@ -537,11 +540,25 @@ public class PlayerActivity extends Activity  {
 	}
 
 	@Override
+	protected void attachBaseContext(Context newBase) {
+		// Force the day/night configuration when the user picked an explicit
+		// scheme; "system" leaves it alone so it follows the Android setting.
+		super.attachBaseContext(ColorScheme.wrap(newBase));
+	}
+
+	@Override
 	public void onCreate(Bundle savedInstanceState) {
 
 		// final UncaughtExceptionHandler oldHandler =
 		// Thread.getDefaultUncaughtExceptionHandler();
 		// Thread.setDefaultUncaughtExceptionHandler()
+
+		// Dialogs use the activity theme, so pick the light variant when the
+		// light scheme is selected. Must happen before super.onCreate().
+		activeScheme = ColorScheme.get(this);
+		if (ColorScheme.isLight(this)) {
+			setTheme(android.R.style.Theme_Light_NoTitleBar);
+		}
 
 		super.onCreate(savedInstanceState);
 		Log.d(TAG, "#### onCreate()");
@@ -618,7 +635,7 @@ public class PlayerActivity extends Activity  {
 		if(!themeDir.exists())
 			themeDir.mkdir();
 
-		String defaultCss = Utils.readAsset(this, "gui.css");
+		String defaultCss = Utils.readAsset(this, ColorScheme.isLight(this) ? "gui-light.css" : "gui.css");
 		tm.loadTheme(this, new File(themeDir, "gui.css"), defaultCss);
 
 		playScreen = new PlayScreen(state, player, this);
@@ -627,6 +644,9 @@ public class PlayerActivity extends Activity  {
 		// The title strip sits at the very top and the transport controls at the
 		// very bottom, so both are hidden behind the system bars without this.
 		SystemBars.padForSystemBars(findViewById(R.id.player_root));
+		// Keep the system bar icons visible over the CSS theme (dark icons on
+		// the light scheme, light icons on the original dark one).
+		SystemBars.setLightSystemBars(this, ColorScheme.isLight(this));
 		setupNormal();
 		
 		playListView.init();
@@ -1526,7 +1546,15 @@ public class PlayerActivity extends Activity  {
 		player.setOption(PlayerService.OPTION_CYCLE_SUBTUNES, prefs.getBoolean("subtunes", false) ? "on" : "off");
 
 		state.playerSwitch = prefs.getBoolean("openplayer", true);
-		
+
+		// The Settings screen is a separate activity, so a scheme change reaches
+		// this one in onResume(). Recreate (at the end, so the service binding
+		// above stays paired with onPause's unbind) to rebuild the CSS theme and
+		// the day/night resource configuration.
+		if(!activeScheme.equals(ColorScheme.get(this))) {
+			recreate();
+		}
+
 	}
 
 	@Override

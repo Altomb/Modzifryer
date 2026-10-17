@@ -47,6 +47,18 @@
 <string name="name_link">Link name (http://)</string>
 <string name="settings">Settings</string>
 
+<string-array name="color_scheme_opts">
+	<item>Follow system setting</item>
+	<item>Original (dark)</item>
+	<item>Light (black on white)</item>
+</string-array>
+
+<string-array name="color_scheme_vals">
+	<item>system</item>
+	<item>dark</item>
+	<item>light</item>
+</string-array>
+
 <string name="next">Next</string>
 <string name="prev">Previous</string>
 <string name="stop">Stop</string>

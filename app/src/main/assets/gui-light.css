@@ -1,0 +1,272 @@
+
+/************************************** DROIDSOUND GUI FAKE CSS *********************************************/
+
+/* This first part of the CSS is used to theme the android GUI. It is NOT compatible with real css. */
+/* Light scheme: black text on white, with darker versions of the original colors so they stay
+   readable on a white background. */
+
+/* Application default colors */
+root {
+	background-color : #ffffff;	
+	text-color : #000000;
+}
+
+/* Top view flipper */
+flipper {
+	hilight-color : #000000;	
+	text-color : #666666;
+	footer-color : #0078a8;
+}
+
+/* Browser header (Displaying current directory) */
+browser-header {
+	color: #000000;
+	background: -webkit-linear-gradient(top, #dbe9fb, #8ab6e8);
+	padding-left: 2dp;	
+}
+
+browser-header.title {
+	font-weight:bold;
+	font-size:"28sp";
+}
+
+browser-header.subtitle {
+	font-size: "16sp";
+}
+
+/* Search header (Displaying current search) */
+search-header {
+	color: #000000;
+	background: -webkit-linear-gradient(top, #f8d7d3, #e08b82);
+	padding-left: 2dp;	
+}
+
+search-header.title {
+	font-weight:bold;
+	font-size:28sp;
+}
+
+search-header.subtitle {
+	font-size:16sp;
+}
+
+/* Separating line between play info and controls */
+control-separator {
+	background-color: #0078a8;
+	height: 2dp;
+}
+ 
+/* Play controls */
+ 
+ 
+/* Parent (default) settings for all play controls */
+controls {
+	font : "fonts/led.ttf";
+	color : #303060;
+	font-size : 24dp;
+}
+
+controls.seconds {
+}
+
+controls.total {
+}
+
+controls.subtunes {
+}
+
+controls.shuffle {
+	color : #1c7a72;
+}
+
+controls.repeat {
+	color : #1c7a72;
+}
+
+controls.plus {
+	color : #c62828;
+	font-size: 36dp;
+}
+
+controls.forward {
+	background : (img/mg_forward.png, img/mg_forward_h.png);
+}
+
+controls.back {
+	background : (img/mg_back.png, img/mg_back_h.png);
+}
+
+controls.play {
+	background : (img/mg_play.png, img/mg_play_h.png);
+}
+
+controls.stop {
+	background : (img/mg_stop.png, img/mg_stop_h.png);
+}
+
+controls.pause {
+	background : (img/mg_pause.png, img/mg_pause_h.png);
+}
+
+controls.seekbar {
+	progress-background: linear-gradient(left, #aab4c8, #cfd4dc);
+	/*thumb-image: img/mg_stop.png;*/
+}
+
+
+/* Playlist item templates;
+
+-----------------------------
+TEXT
+subtext              sidetext
+----------------------------    <-- divider
+TEXT
+subtext              sidetext
+
+	background-color: #ffffff;
+
+*/
+
+/* Default for all items */
+item {
+	
+	background : (#ffffff, #transp, #transp);
+
+
+	main.color: #000000;
+	sub.color: #595959;
+	side.color: #34406b;
+
+	main.font : "bold";
+	sub.font : "bold";
+	side.font : "bold";
+	
+	main.font-size: "24sp";
+	sub.font-size : "14sp";
+	side.font-size : "10sp";
+
+	main.padding-left: 0dp;
+	sub.padding-left: 0dp;
+
+	divider: #c0c0c0;
+
+}
+
+/* Settings for specific file types */
+
+item.folder {
+	main.font-size: "20sp";
+	main.color : #8a6d00;
+	icon.image : "icons/gflat_folder.png";
+}
+
+item.network {
+	main.font-size: "20sp";
+	main.color : #8a6d00;
+	icon.image : "icons/gflat_net_folder.png";
+}
+
+item.archive {
+	main.font-size: "20sp";
+	main.color : #8a6d00;
+	icon.image : "icons/gflat_package.png";
+}
+
+item.media {
+	main.font-size: "20sp";
+	main.color : #a15c00;
+	icon.image : "icons/gflat_mus_folder.png";
+}
+
+item.csdb {
+	main.font-size: "20sp";
+	main.color : #a15c00;
+	icon.image : "icons/gflat_bag.png";
+}
+
+item.filesys {
+	main.font-size: "20sp";
+	main.color : #a15c00;
+	icon.image : "icons/gflat_folder.png";
+}
+
+
+item.playlist {
+	icon.image : "icons/gflat_note3.png";
+}
+
+item.favorites {
+	icon.image : "icons/gflat_heart.png";
+}
+
+item:online {
+	main.color : #b03030;
+}
+
+item:hilight {
+	main.color : #000000;	
+	background : (#dce6f5, #transp, #transp);
+}
+
+
+/************************************** WEB CSS FOR TEMPLATES *********************************************/
+
+/*
+background: linear-gradient(left, #ffffff, #888888);
+ This is used by a real webview - use any webkit compatible css */
+
+body {
+	color: #000000;
+	background-color: #ffffff;
+	margin:0;
+	padding:0;
+}
+
+.song-header {
+	color: #000000;
+	background-color: #8ab6e8;
+	background: -webkit-linear-gradient(top, #dbe9fb, #8ab6e8);
+	padding-left: 2dp;	
+	height: 4.3em; 
+}
+
+
+.title {
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	overflow: hidden;
+	font-weight:bold;
+	font-size:16pt; 
+	padding-left: 4pt;
+	padding-top: 4pt;
+}
+
+.subtitle {
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	overflow: hidden; 
+	padding-left: 4pt;
+	padding-bottom: 4pt;
+	padding-top: 4pt;
+}
+
+.infotitle {
+	color: #000000;
+	background-color: #eeeeee;
+	height: 2px;
+}
+
+.heading {
+	color: #8a6d00;
+	font-weight:bold;
+}
+
+.content {
+	text-shadow: 1px 1px 2px #ffffff;
+}
+
+.comment {
+	color: #3355cc;
+	white-space: pre-wrap;
+	font-family: monospace;
+}

@@ -1,6 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
         android:key="main_prefs">
+    <ListPreference
+            android:key="color_scheme"
+            android:title="Color scheme"
+            android:defaultValue="system"
+            android:summary="Interface colors; the default follows the Android day/night setting"
+            android:entries="@array/color_scheme_opts"
+            android:entryValues="@array/color_scheme_vals"
+            />
     <CheckBoxPreference
             android:key="openplayer"
             android:title="Switch to Player"
