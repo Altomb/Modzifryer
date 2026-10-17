@@ -32,16 +32,16 @@
 #include "printer.h"
 
 
-void machine_printer_setup_context(struct machine_context_s *machine_context)
+void machine_printer_setup_context(struct machine_context_s *machine_ctx)
 {
-
 }
 
 int machine_printer_resources_init(void)
 {
     if (printer_serial_init_resources() < 0
-        || printer_userport_init_resources() < 0)
+        || printer_userport_init_resources() < 0) {
         return -1;
+    }
     return 0;
 }
 
@@ -51,26 +51,15 @@ void machine_printer_resources_shutdown(void)
 
 int machine_printer_cmdline_options_init(void)
 {
-    if (printer_serial_init_cmdline_options() < 0
-        || printer_userport_init_cmdline_options() < 0)
-        return -1;
-    return 0;
-}
-
-static void cbm2printer_userport_set_busy(unsigned int b)
-{
-    if (b != 0)
-        ciacore_set_flag(machine_context.cia1);
+    return printer_serial_init_cmdline_options();
 }
 
 void machine_printer_init(void)
 {
     printer_serial_init();
-    printer_userport_init(cbm2printer_userport_set_busy);
 }
 
 void machine_printer_shutdown(void)
 {
     printer_serial_shutdown();
 }
-

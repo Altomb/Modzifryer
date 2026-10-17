@@ -3,7 +3,7 @@
  *
  * Written by
  *  Ettore Perazzoli <ettore@comm2000.it>
- *  André Fachat <fachat@physik.tu-chemnitz.de>
+ *  Andre Fachat <fachat@physik.tu-chemnitz.de>
  *  Andreas Boose <viceteam@t-online.de>
  *
  * Multiple memory configuration support originally by
@@ -51,7 +51,7 @@
 #include "vic20rom.h"
 
 
-static log_t vic20_snapshot_log = LOG_ERR;
+static log_t vic20_snapshot_log = LOG_DEFAULT;
 
 /************************************************************************/
 
@@ -62,37 +62,40 @@ static log_t vic20_snapshot_log = LOG_ERR;
 #define VIC20MEM_DUMP_VER_MINOR   1
 #define SNAP_MEM_MODULE_NAME      "VIC20MEM"
 
-/*
- * UBYTE        CONFIG          Bit 0: 1 = expansion block 0 RAM enabled
- *                                  1: 1 = expansion block 1 RAM enabled
- *                                  2: 1 = expansion block 2 RAM enabled
- *                                  3: 1 = expansion block 3 RAM enabled
- *                                  5: 1 = expansion block 5 RAM enabled
- *
- * UBYTE        cpu_last_data
- * UBYTE        v_bus_last_data
- * UBYTE        v_bus_last_high
- * ARRAY        RAM0            1k RAM $0000-$03ff
- * ARRAY        RAM1            4k RAM $1000-$1fff
- * ARRAY        BLK0            3k RAM $0400-$0fff (if blk 0 RAM enabled)
- * ARRAY        BLK1            8k RAM $2000-$3fff (if blk 1 RAM enabled)
- * ARRAY        BLK2            8k RAM $4000-$5fff (if blk 2 RAM enabled)
- * ARRAY        BLK3            8k RAM $6000-$7fff (if blk 3 RAM enabled)
- * ARRAY        BLK5            8k RAM $A000-$Bfff (if blk 5 RAM enabled)
- *
- */
 
+/* VIC20MEM 1.1 snapshot module format:
+
+   type  | name            |version| description
+   -------------------------------------
+   UBYTE | CONFIG          |       | Bit 0: 1 = expansion block 0 RAM enabled
+         |                 |       |     1: 1 = expansion block 1 RAM enabled
+         |                 |       |     2: 1 = expansion block 2 RAM enabled
+         |                 |       |     3: 1 = expansion block 3 RAM enabled
+         |                 |       |     5: 1 = expansion block 5 RAM enabled
+   UBYTE | cpu_last_data   | 1.1+  |
+   UBYTE | v_bus_last_data | 1.1+  |
+   UBYTE | v_bus_last_high | 1.1+  |
+   ARRAY | RAM0            |       | 1k RAM $0000-$03ff
+   ARRAY | RAM1            |       | 4k RAM $1000-$1fff
+   ARRAY | BLK0            |       | 3k RAM $0400-$0fff (if blk 0 RAM enabled)
+   ARRAY | BLK1            |       | 8k RAM $2000-$3fff (if blk 1 RAM enabled)
+   ARRAY | BLK2            |       | 8k RAM $4000-$5fff (if blk 2 RAM enabled)
+   ARRAY | BLK3            |       | 8k RAM $6000-$7fff (if blk 3 RAM enabled)
+   ARRAY | BLK5            |       | 8k RAM $A000-$Bfff (if blk 5 RAM enabled)
+
+   Note: since 1.1, the color ram is saved in the VIC-I snapshot!
+*/
 
 static int mem_write_ram_snapshot_module(snapshot_t *p)
 {
     snapshot_module_t *m;
-    BYTE config;
+    uint8_t config;
 
     config = (ram_block_0_enabled ? 1 : 0)
-                | (ram_block_1_enabled ? 2 : 0)
-                | (ram_block_2_enabled ? 4 : 0)
-                | (ram_block_3_enabled ? 8 : 0)
-                | (ram_block_5_enabled ? 32 : 0) ;
+             | (ram_block_1_enabled ? 2 : 0)
+             | (ram_block_2_enabled ? 4 : 0)
+             | (ram_block_3_enabled ? 8 : 0)
+             | (ram_block_5_enabled ? 32 : 0);
 
     m = snapshot_module_create(p, SNAP_MEM_MODULE_NAME,
                                VIC20MEM_DUMP_VER_MAJOR,
@@ -133,9 +136,9 @@ static int mem_write_ram_snapshot_module(snapshot_t *p)
 
 static int mem_read_ram_snapshot_module(snapshot_t *p)
 {
-    BYTE vmajor, vminor;
+    uint8_t vmajor, vminor;
     snapshot_module_t *m;
-    BYTE config;
+    uint8_t config;
 
     m = snapshot_module_open(p, SNAP_MEM_MODULE_NAME, &vmajor, &vminor);
     if (m == NULL) {
@@ -191,49 +194,44 @@ static int mem_read_ram_snapshot_module(snapshot_t *p)
 #define VIC20ROM_DUMP_VER_MINOR   1
 #define SNAP_ROM_MODULE_NAME      "VIC20ROM"
 
-/*
- * UBYTE        CONFIG          Bit 0: 1 = ROM block $2*** enabled
- *                                  1: 1 = ROM block $3*** enabled
- *                                  2: 1 = ROM block $4*** enabled
- *                                  3: 1 = ROM block $5*** enabled
- *                                  4: 1 = ROM block $6*** enabled
- *                                  5: 1 = ROM block $7*** enabled
- *                                  6: 1 = ROM block $A*** enabled
- *                                  7: 1 = ROM block $B*** enabled
- *
- * ARRAY        KERNAL          8k KERNAL ROM $e000-$ffff
- * ARRAY        BASIC           8k BASIC ROM $c000-$dfff
- * ARRAY        CHARGEN         4k CHARGEN ROM
- * ARRAY        BLK1A           4k ROM $2*** (if CONFIG & 1)
- * ARRAY        BLK1B           4k ROM $3*** (if CONFIG & 2)
- * ARRAY        BLK3A           4k ROM $6*** (if CONFIG & 16)
- * ARRAY        BLK3B           4k ROM $7*** (if CONFIG & 32)
- * ARRAY        BLK5A           4k ROM $A*** (if CONFIG & 64)
- * ARRAY        BLK5B           4k ROM $B*** (if CONFIG & 128)
- *
- * ARRAY        BLK2A           4k ROM $4*** (if CONFIG & 4)
- * ARRAY        BLK2B           4k ROM $5*** (if CONFIG & 8)
- */
+/* VIC20ROM 1.1 snapshot module format:
+
+   type  | name            |version| description
+   -------------------------------------
+   UBYTE | CONFIG          |       | Bit 0: 1 = ROM block $2*** enabled
+         |                 |       |     1: 1 = ROM block $3*** enabled
+         |                 |       |     2: 1 = ROM block $4*** enabled
+         |                 |       |     3: 1 = ROM block $5*** enabled
+         |                 |       |     4: 1 = ROM block $6*** enabled
+         |                 |       |     5: 1 = ROM block $7*** enabled
+         |                 |       |     6: 1 = ROM block $A*** enabled
+         |                 |       |     7: 1 = ROM block $B*** enabled
+   ARRAY | KERNAL          |       | 8k KERNAL ROM $e000-$ffff
+   ARRAY | BASIC           |       | 8k BASIC ROM $c000-$dfff
+   ARRAY | CHARGEN         |       | 4k CHARGEN ROM
+   ARRAY | BLK1A           |       | 4k ROM $2*** (if CONFIG & 1)
+   ARRAY | BLK1B           |       | 4k ROM $3*** (if CONFIG & 2)
+   ARRAY | BLK3A           |       | 4k ROM $6*** (if CONFIG & 16)
+   ARRAY | BLK3B           |       | 4k ROM $7*** (if CONFIG & 32)
+   ARRAY | BLK5A           |       | 4k ROM $A*** (if CONFIG & 64)
+   ARRAY | BLK5B           |       | 4k ROM $B*** (if CONFIG & 128)
+   ARRAY | BLK2A           | 1.1+  | 4k ROM $4*** (if CONFIG & 4)
+   ARRAY | BLK2B           | 1.1+  | 4k ROM $5*** (if CONFIG & 8)
+*/
 
 
 static int mem_write_rom_snapshot_module(snapshot_t *p, int save_roms)
 {
     snapshot_module_t *m;
-    int trapfl;
 
     if (!save_roms) {
         return 0;
     }
 
-    m = snapshot_module_create(p, SNAP_ROM_MODULE_NAME,
-                          VIC20MEM_DUMP_VER_MAJOR, VIC20MEM_DUMP_VER_MINOR);
+    m = snapshot_module_create(p, SNAP_ROM_MODULE_NAME, VIC20MEM_DUMP_VER_MAJOR, VIC20MEM_DUMP_VER_MINOR);
     if (m == NULL) {
         return -1;
     }
-
-    /* disable traps before saving the ROM */
-    resources_get_int("VirtualDevices", &trapfl);
-    resources_set_int("VirtualDevices", 0);
 
     /* old cart system config bits.  all zero = no roms */
     SMW_B(m, 0x00);
@@ -245,20 +243,44 @@ static int mem_write_rom_snapshot_module(snapshot_t *p, int save_roms)
 
     SMW_BA(m, vic20memrom_chargen_rom, 0x1000);
 
-    /* enable traps again when necessary */
-    resources_set_int("VirtualDevices", trapfl);
-
     snapshot_module_close(m);
 
     return 0;
 }
 
+#define NUM_TRAP_DEVICES 9  /* FIXME: is there a better constant ? */
+static int trapfl[NUM_TRAP_DEVICES];
+static int trapdevices[NUM_TRAP_DEVICES + 1] = { 1, 4, 5, 6, 7, 8, 9, 10, 11, -1 };
+
+static void get_trapflags(void)
+{
+    int i;
+    for(i = 0; trapdevices[i] != -1; i++) {
+        resources_get_int_sprintf("TrapDevice%d", &trapfl[i], trapdevices[i]);
+    }
+}
+
+static void clear_trapflags(void)
+{
+    int i;
+    for(i = 0; trapdevices[i] != -1; i++) {
+        resources_set_int_sprintf("TrapDevice%d", 0, trapdevices[i]);
+    }
+}
+
+static void restore_trapflags(void)
+{
+    int i;
+    for(i = 0; trapdevices[i] != -1; i++) {
+        resources_set_int_sprintf("TrapDevice%d", trapfl[i], trapdevices[i]);
+    }
+}
+
 static int mem_read_rom_snapshot_module(snapshot_t *p)
 {
-    BYTE vmajor, vminor;
+    uint8_t vmajor, vminor;
     snapshot_module_t *m;
-    BYTE config;
-    int trapfl;
+    uint8_t config;
 
     m = snapshot_module_open(p, SNAP_ROM_MODULE_NAME, &vmajor, &vminor);
     if (m == NULL) {
@@ -271,8 +293,8 @@ static int mem_read_rom_snapshot_module(snapshot_t *p)
     }
 
     /* disable traps before loading the ROM */
-    resources_get_int("VirtualDevices", &trapfl);
-    resources_set_int("VirtualDevices", 0);
+    get_trapflags();
+    clear_trapflags();
 
     /* old cart system ROMs (ignored) */
     SMR_B(m, &config);
@@ -292,7 +314,7 @@ static int mem_read_rom_snapshot_module(snapshot_t *p)
                 "represent\nthe state before loading the snapshot!");
 
     /* enable traps again when necessary */
-    resources_set_int("VirtualDevices", trapfl);
+    restore_trapflags();
 
     snapshot_module_close(m);
 
@@ -320,4 +342,3 @@ int vic20_snapshot_read_module(snapshot_t *m)
     }
     return 0;
 }
-

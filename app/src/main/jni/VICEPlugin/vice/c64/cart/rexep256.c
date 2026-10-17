@@ -33,10 +33,10 @@
 #define CARTRIDGE_INCLUDE_SLOTMAIN_API
 #include "c64cartsystem.h"
 #undef CARTRIDGE_INCLUDE_SLOTMAIN_API
-#include "c64export.h"
 #include "c64mem.h"
 #include "cartio.h"
 #include "cartridge.h"
+#include "export.h"
 #include "monitor.h"
 #include "rexep256.h"
 #include "snapshot.h"
@@ -79,15 +79,15 @@
 
 /* ---------------------------------------------------------------------*/
 
-static WORD rexep256_eprom[8];
-static BYTE rexep256_eprom_roml_bank_offset[8];
-static BYTE regval = 0;
+static uint16_t rexep256_eprom[8];
+static uint8_t rexep256_eprom_roml_bank_offset[8];
+static uint8_t regval = 0;
 
 /* ---------------------------------------------------------------------*/
 
-static void rexep256_io2_store(WORD addr, BYTE value)
+static void rexep256_io2_store(uint16_t addr, uint8_t value)
 {
-    BYTE eprom_bank, test_value, eprom_part = 0;
+    uint8_t eprom_bank, test_value, eprom_part = 0;
 
     if ((addr & 0xff) == 0xa0) {
         regval = value;
@@ -111,13 +111,13 @@ static void rexep256_io2_store(WORD addr, BYTE value)
             eprom_part = test_value;
         }
 
-        cart_romlbank_set_slotmain(rexep256_eprom_roml_bank_offset[eprom_bank]+eprom_part+1);
+        cart_romlbank_set_slotmain(rexep256_eprom_roml_bank_offset[eprom_bank] + eprom_part + 1);
     }
 }
 
 /* I'm unsure whether the register is write-only,
    but in this case it is assumed to be. */
-static BYTE rexep256_io2_read(WORD addr)
+static uint8_t rexep256_io2_read(uint16_t addr)
 {
     if ((addr & 0xff) == 0xc0) {
         cart_set_port_exrom_slotmain(0);
@@ -130,7 +130,7 @@ static BYTE rexep256_io2_read(WORD addr)
     return 0;
 }
 
-static BYTE rexep256_io2_peek(WORD addr)
+static uint8_t rexep256_io2_peek(uint16_t addr)
 {
     return regval;
 }
@@ -138,53 +138,55 @@ static BYTE rexep256_io2_peek(WORD addr)
 static int rexep256_dump(void)
 {
     mon_out("Socket: %d, bank: %d\n",
-	        regval & 7,
-			(regval & 0x30) >> 4);
-	return 0;
+            regval & 7,
+            (regval & 0x30) >> 4);
+    return 0;
 }
 
 /* ---------------------------------------------------------------------*/
 
 static io_source_t rexep256_device = {
-    CARTRIDGE_NAME_REX_EP256,
-    IO_DETACH_CART,
-    NULL,
-    0xdf00, 0xdfff, 0xff,
-    0, /* read is never valid */
-    rexep256_io2_store,
-    rexep256_io2_read,
-    rexep256_io2_peek,
-    rexep256_dump,
-    CARTRIDGE_REX_EP256,
-    0,
-    0
+    CARTRIDGE_NAME_REX_EP256, /* name of the device */
+    IO_DETACH_CART,           /* use cartridge ID to detach the device when involved in a read-collision */
+    IO_DETACH_NO_RESOURCE,    /* does not use a resource for detach */
+    0xdf00, 0xdfff, 0xff,     /* range for the device, regs:$dfa0/$dfc0/$dfe0 */
+    0,                        /* read is never valid, regs are write only */
+    rexep256_io2_store,       /* store function */
+    NULL,                     /* NO poke function */
+    rexep256_io2_read,        /* read function */
+    rexep256_io2_peek,        /* peek function */
+    rexep256_dump,            /* device state information dump function */
+    CARTRIDGE_REX_EP256,      /* cartridge ID */
+    IO_PRIO_NORMAL,           /* normal priority, device read needs to be checked for collisions */
+    0,                        /* insertion order, gets filled in by the registration function */
+    IO_MIRROR_NONE            /* NO mirroring */
 };
 
 static io_source_list_t *rexep256_list_item = NULL;
 
-static const c64export_resource_t export_res = {
-    CARTRIDGE_NAME_REX_EP256, 1, 0, NULL, &rexep256_device, CARTRIDGE_REX_EP256
+static const export_resource_t export_res = {
+    CARTRIDGE_NAME_REX_EP256, 0, 1, NULL, &rexep256_device, CARTRIDGE_REX_EP256
 };
 
 /* ---------------------------------------------------------------------*/
 
 void rexep256_config_init(void)
 {
-    cart_config_changed_slotmain(0, 0, CMODE_READ);
+    cart_config_changed_slotmain(CMODE_8KGAME, CMODE_8KGAME, CMODE_READ);
     cart_romlbank_set_slotmain(0);
 }
 
-void rexep256_config_setup(BYTE *rawcart)
+void rexep256_config_setup(uint8_t *rawcart)
 {
     memcpy(roml_banks, rawcart, 0x42000);
-    cart_config_changed_slotmain(0, 0, CMODE_READ);
+    cart_config_changed_slotmain(CMODE_8KGAME, CMODE_8KGAME, CMODE_READ);
     cart_romlbank_set_slotmain(0);
 }
 
 /* ---------------------------------------------------------------------*/
 static int rexep256_common_attach(void)
 {
-    if (c64export_add(&export_res) < 0) {
+    if (export_add(&export_res) < 0) {
         return -1;
     }
     rexep256_list_item = io_source_register(&rexep256_device);
@@ -192,7 +194,7 @@ static int rexep256_common_attach(void)
 }
 
 /* FIXME: handle the various combinations / possible file lengths */
-int rexep256_bin_attach(const char *filename, BYTE *rawcart)
+int rexep256_bin_attach(const char *filename, uint8_t *rawcart)
 {
     if (util_file_load(filename, rawcart, 0x2000, UTIL_FILE_LOAD_SKIP_ADDRESS) < 0) {
         return -1;
@@ -200,7 +202,7 @@ int rexep256_bin_attach(const char *filename, BYTE *rawcart)
     return rexep256_common_attach();
 }
 
-int rexep256_crt_attach(FILE *fd, BYTE *rawcart)
+int rexep256_crt_attach(FILE *fd, uint8_t *rawcart)
 {
     crt_chip_header_t chip;
     int rexep256_total_size = 0;
@@ -252,63 +254,87 @@ int rexep256_crt_attach(FILE *fd, BYTE *rawcart)
 
 void rexep256_detach(void)
 {
-    c64export_remove(&export_res);
+    export_remove(&export_res);
     io_source_unregister(rexep256_list_item);
     rexep256_list_item = NULL;
 }
 
 /* ---------------------------------------------------------------------*/
 
-#define CART_DUMP_VER_MAJOR   0
-#define CART_DUMP_VER_MINOR   0
-#define SNAP_MODULE_NAME  "CARTREXEP256"
+/* CARTREXEP256 snapshot module format:
+
+   type  | name         | version | description
+   --------------------------------------------
+   BYTE  | regval       |   0.1   | register
+   ARRAY | EPROM sizes  |   0.0+  | 8 WORDS of EPROM sizes in BYTES
+   ARRAY | ROML offsets |   0.0+  | 8 BYTES of EPROM ofsets
+   ARRAY | ROML         |   0.0+  | 270336 BYTES of ROML data
+ */
+
+static const char snap_module_name[] = "CARTREXEP256";
+#define SNAP_MAJOR   0
+#define SNAP_MINOR   1
 
 int rexep256_snapshot_write_module(snapshot_t *s)
 {
     snapshot_module_t *m;
 
-    m = snapshot_module_create(s, SNAP_MODULE_NAME,
-                          CART_DUMP_VER_MAJOR, CART_DUMP_VER_MINOR);
+    m = snapshot_module_create(s, snap_module_name, SNAP_MAJOR, SNAP_MINOR);
+
     if (m == NULL) {
         return -1;
     }
 
     if (0
-        || (SMW_WA(m, rexep256_eprom, 8) < 0)
-        || (SMW_BA(m, rexep256_eprom_roml_bank_offset, 8) < 0)
-        || (SMW_BA(m, roml_banks, 0x42000) < 0)) {
+        || SMW_B(m, regval) < 0
+        || SMW_WA(m, rexep256_eprom, 8) < 0
+        || SMW_BA(m, rexep256_eprom_roml_bank_offset, 8) < 0
+        || SMW_BA(m, roml_banks, 0x42000) < 0) {
         snapshot_module_close(m);
         return -1;
     }
 
-    snapshot_module_close(m);
-    return 0;
+    return snapshot_module_close(m);
 }
 
 int rexep256_snapshot_read_module(snapshot_t *s)
 {
-    BYTE vmajor, vminor;
+    uint8_t vmajor, vminor;
     snapshot_module_t *m;
 
-    m = snapshot_module_open(s, SNAP_MODULE_NAME, &vmajor, &vminor);
+    m = snapshot_module_open(s, snap_module_name, &vmajor, &vminor);
+
     if (m == NULL) {
         return -1;
     }
 
-    if ((vmajor != CART_DUMP_VER_MAJOR) || (vminor != CART_DUMP_VER_MINOR)) {
-        snapshot_module_close(m);
-        return -1;
+    /* Do not accept versions higher than current */
+    if (snapshot_version_is_bigger(vmajor, vminor, SNAP_MAJOR, SNAP_MINOR)) {
+        snapshot_set_error(SNAPSHOT_MODULE_HIGHER_VERSION);
+        goto fail;
+    }
+
+    /* new in 0.1 */
+    if (!snapshot_version_is_smaller(vmajor, vminor, 0, 1)) {
+        if (SMR_B(m, &regval) < 0) {
+            goto fail;
+        }
+    } else {
+        regval = 0;
     }
 
     if (0
-        || (SMR_WA(m, rexep256_eprom, 8) < 0)
-        || (SMR_BA(m, rexep256_eprom_roml_bank_offset, 8) < 0)
-        || (SMR_BA(m, roml_banks, 0x42000) < 0)) {
-        snapshot_module_close(m);
-        return -1;
+        || SMR_WA(m, rexep256_eprom, 8) < 0
+        || SMR_BA(m, rexep256_eprom_roml_bank_offset, 8) < 0
+        || SMR_BA(m, roml_banks, 0x42000) < 0) {
+        goto fail;
     }
 
     snapshot_module_close(m);
 
     return rexep256_common_attach();
+
+fail:
+    snapshot_module_close(m);
+    return -1;
 }

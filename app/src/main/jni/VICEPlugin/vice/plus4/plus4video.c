@@ -32,11 +32,6 @@
 #include "ted.h"
 #include "video.h"
 
-void machine_video_init(void)
-{
-    video_render_2x2_init();
-    video_render_pal_init();
-}
 
 int machine_video_resources_init(void)
 {
@@ -53,4 +48,3 @@ struct video_canvas_s *machine_video_canvas_get(unsigned int window)
     }
     return NULL;
 }
-

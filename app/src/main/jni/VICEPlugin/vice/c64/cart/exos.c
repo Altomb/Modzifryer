@@ -32,13 +32,13 @@
 #define CARTRIDGE_INCLUDE_SLOTMAIN_API
 #include "c64cartsystem.h"
 #undef CARTRIDGE_INCLUDE_SLOTMAIN_API
-#include "c64export.h"
 #include "c64mem.h"
 #include "c64memrom.h"
 #include "c64rom.h"
 #include "cartio.h"
 #include "cartridge.h"
 #include "exos.h"
+#include "export.h"
 #include "resources.h"
 #include "snapshot.h"
 #include "types.h"
@@ -55,28 +55,28 @@
       (the cartridge uses a clip to the inside of the computer for this)
 */
 
-static const c64export_resource_t export_res = {
-    CARTRIDGE_NAME_EXOS, 1, 1, NULL, NULL, CARTRIDGE_EXOS
+static const export_resource_t export_res = {
+    CARTRIDGE_NAME_EXOS, 1, 0, NULL, NULL, CARTRIDGE_EXOS
 };
 
 /* ---------------------------------------------------------------------*/
 
-BYTE exos_romh_read(WORD addr)
+uint8_t exos_romh_read_hirom(uint16_t addr)
 {
     return romh_banks[(addr & 0x1fff)];
 }
 
-int exos_romh_phi1_read(WORD addr, BYTE *value)
+int exos_romh_phi1_read(uint16_t addr, uint8_t *value)
 {
     return CART_READ_C64MEM;
 }
 
-int exos_romh_phi2_read(WORD addr, BYTE *value)
+int exos_romh_phi2_read(uint16_t addr, uint8_t *value)
 {
     return exos_romh_phi1_read(addr, value);
 }
 
-int exos_peek_mem(struct export_s *export, WORD addr, BYTE *value)
+int exos_peek_mem(export_t *ex, uint16_t addr, uint8_t *value)
 {
     if (addr >= 0xe000) {
         *value = romh_banks[addr & 0x1fff];
@@ -87,12 +87,12 @@ int exos_peek_mem(struct export_s *export, WORD addr, BYTE *value)
 
 void exos_config_init(void)
 {
-    cart_config_changed_slotmain(2, 3, CMODE_READ);
+    cart_config_changed_slotmain(CMODE_RAM, CMODE_ULTIMAX, CMODE_READ);
 }
 
 /* ---------------------------------------------------------------------*/
 
-void exos_config_setup(BYTE *rawcart)
+void exos_config_setup(uint8_t *rawcart)
 {
     memcpy(romh_banks, &rawcart[0], 0x2000);
     cart_config_changed_slotmain(2, 3, CMODE_READ);
@@ -102,13 +102,13 @@ void exos_config_setup(BYTE *rawcart)
 
 static int exos_common_attach(void)
 {
-    if (c64export_add(&export_res) < 0) {
+    if (export_add(&export_res) < 0) {
         return -1;
     }
     return 0;
 }
 
-int exos_bin_attach(const char *filename, BYTE *rawcart)
+int exos_bin_attach(const char *filename, uint8_t *rawcart)
 {
     if (util_file_load(filename, rawcart, 0x2000, UTIL_FILE_LOAD_SKIP_ADDRESS) < 0) {
         return -1;
@@ -117,7 +117,7 @@ int exos_bin_attach(const char *filename, BYTE *rawcart)
     return exos_common_attach();
 }
 
-int exos_crt_attach(FILE *fd, BYTE *rawcart)
+int exos_crt_attach(FILE *fd, uint8_t *rawcart)
 {
     crt_chip_header_t chip;
 
@@ -138,57 +138,66 @@ int exos_crt_attach(FILE *fd, BYTE *rawcart)
 
 void exos_detach(void)
 {
-    c64export_remove(&export_res);
+    export_remove(&export_res);
 }
 
 /* ---------------------------------------------------------------------*/
 
-#define CART_DUMP_VER_MAJOR   0
-#define CART_DUMP_VER_MINOR   0
-#define SNAP_MODULE_NAME  "CARTEXOS"
+/* CARTEXOS snapshot module format:
+
+   type  | name | description
+   --------------------------
+   ARRAY | ROMH | 8192 BYTES of ROMH data
+ */
+
+static const char snap_module_name[] = "CARTEXOS";
+#define SNAP_MAJOR   0
+#define SNAP_MINOR   0
 
 int exos_snapshot_write_module(snapshot_t *s)
 {
     snapshot_module_t *m;
 
-    m = snapshot_module_create(s, SNAP_MODULE_NAME,
-                          CART_DUMP_VER_MAJOR, CART_DUMP_VER_MINOR);
+    m = snapshot_module_create(s, snap_module_name, SNAP_MAJOR, SNAP_MINOR);
+
     if (m == NULL) {
         return -1;
     }
 
-    if (0
-        || (SMW_BA(m, romh_banks, 0x2000) < 0)) {
+    if (SMW_BA(m, romh_banks, 0x2000) < 0) {
         snapshot_module_close(m);
         return -1;
     }
 
-    snapshot_module_close(m);
-    return 0;
+    return snapshot_module_close(m);
 }
 
 int exos_snapshot_read_module(snapshot_t *s)
 {
-    BYTE vmajor, vminor;
+    uint8_t vmajor, vminor;
     snapshot_module_t *m;
 
-    m = snapshot_module_open(s, SNAP_MODULE_NAME, &vmajor, &vminor);
+    m = snapshot_module_open(s, snap_module_name, &vmajor, &vminor);
+
     if (m == NULL) {
         return -1;
     }
 
-    if ((vmajor != CART_DUMP_VER_MAJOR) || (vminor != CART_DUMP_VER_MINOR)) {
-        snapshot_module_close(m);
-        return -1;
+    /* Do not accept versions higher than current */
+    if (snapshot_version_is_bigger(vmajor, vminor, SNAP_MAJOR, SNAP_MINOR)) {
+        snapshot_set_error(SNAPSHOT_MODULE_HIGHER_VERSION);
+        goto fail;
     }
 
-    if (0
-        || (SMR_BA(m, romh_banks, 0x2000) < 0)) {
-        snapshot_module_close(m);
-        return -1;
+    if (SMR_BA(m, romh_banks, 0x2000) < 0) {
+        goto fail;
     }
 
     snapshot_module_close(m);
 
     return exos_common_attach();
+
+fail:
+    snapshot_module_close(m);
+    return -1;
 }

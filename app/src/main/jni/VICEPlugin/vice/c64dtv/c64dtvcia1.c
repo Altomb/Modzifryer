@@ -3,7 +3,7 @@
  * ($DC00).
  *
  * Written by
- *  André Fachat <fachat@physik.tu-chemnitz.de>
+ *  Andre Fachat <fachat@physik.tu-chemnitz.de>
  *  Ettore Perazzoli <ettore@comm2000.it>
  *  Andreas Boose <viceteam@t-online.de>
  *
@@ -37,6 +37,8 @@
 #include "c64cia.h"
 #include "cia.h"
 #include "interrupt.h"
+#include "joyport.h"
+#include "joystick.h"
 #include "keyboard.h"
 #include "lib.h"
 #include "log.h"
@@ -44,29 +46,25 @@
 #include "types.h"
 #include "vicii.h"
 
-#ifdef HAVE_RS232
-#include "rsuser.h"
-#endif
-
 #include "c64dtv-resources.h"
 #include "hummeradc.h"
 
-void cia1_store(WORD addr, BYTE data)
+void cia1_store(uint16_t addr, uint8_t data)
 {
     ciacore_store(machine_context.cia1, addr, data);
 }
 
-BYTE cia1_read(WORD addr)
+uint8_t cia1_read(uint16_t addr)
 {
     /* disable TOD & serial */
-    if (((addr&0xf)>=8)&&((addr&0xf)<=0xc)) {
+    if (((addr & 0xf) >= 8) && ((addr & 0xf) <= 0xc)) {
         return 0xff;
     }
 
     return ciacore_read(machine_context.cia1, addr);
 }
 
-BYTE cia1_peek(WORD addr)
+uint8_t cia1_peek(uint16_t addr)
 {
     return ciacore_peek(machine_context.cia1, addr);
 }
@@ -85,14 +83,12 @@ static void cia_restore_int(cia_context_t *cia_context, int value)
  * I/O
  */
 
-void cia1_set_extended_keyboard_rows_mask(BYTE value)
+void cia1_set_extended_keyboard_rows_mask(uint8_t value)
 {
-
 }
 
 static void pulse_ciapc(cia_context_t *cia_context, CLOCK rclk)
 {
-
 }
 
 static void pre_store(void)
@@ -112,75 +108,83 @@ static void pre_peek(void)
 
 static void do_reset_cia(cia_context_t *cia_context)
 {
-
 }
 
-static void store_ciapa(cia_context_t *cia_context, CLOCK rclk, BYTE b)
+static void store_ciapa(cia_context_t *cia_context, CLOCK rclk, uint8_t b)
 {
     unsigned int i, m;
- 
+
     for (m = 0x1, i = 0; i < 8; m <<= 1, i++) {
-        if ((keyarr[i] & 0x10) && (!(b & m)))
+        if ((keyarr[i] & 0x10) && (!(b & m))) {
             vicii_trigger_light_pen(maincpu_clk);
+        }
     }
+    store_joyport_dig(JOYPORT_2, b, 0xff);
 }
 
-static void undump_ciapa(cia_context_t *cia_context, CLOCK rclk, BYTE b)
+static void undump_ciapa(cia_context_t *cia_context, CLOCK rclk, uint8_t b)
 {
-
 }
 
-static void store_ciapb(cia_context_t *cia_context, CLOCK rclk, BYTE byte)
+static void store_ciapb(cia_context_t *cia_context, CLOCK rclk, uint8_t byte)
 {
     /* Falling edge triggers light pen.  */
-    if ((byte ^ 0x10) & cia_context->old_pb & 0x10)
+    if ((byte ^ 0x10) & cia_context->old_pb & 0x10) {
         vicii_trigger_light_pen(rclk);
+    }
+    store_joyport_dig(JOYPORT_1, byte, 0xff);
 }
 
-static void undump_ciapb(cia_context_t *cia_context, CLOCK rclk, BYTE byte)
+static void undump_ciapb(cia_context_t *cia_context, CLOCK rclk, uint8_t byte)
 {
 }
 
-static BYTE read_ciapa(cia_context_t *cia_context)
+static uint8_t read_ciapa(cia_context_t *cia_context)
 {
-    BYTE byte;
-    BYTE val = 0xff;
-    BYTE msk;
-    BYTE m;
+    uint8_t byte;
+    uint8_t val = 0xff;
+    uint8_t msk;
+    uint8_t m;
     int i;
 
-    msk = cia_context->old_pb & ~joystick_value[1];
+    msk = cia_context->old_pb & read_joyport_dig(JOYPORT_1);
 
-    for (m = 0x1, i = 0; i < 8; m <<= 1, i++)
-        if (!(msk & m))
+    for (m = 0x1, i = 0; i < 8; m <<= 1, i++) {
+        if (!(msk & m)) {
             val &= ~rev_keyarr[i];
+        }
+    }
 
     byte = (val & (cia_context->c_cia[CIA_PRA]
-           | ~(cia_context->c_cia[CIA_DDRA]))) & ~joystick_value[2];
+                   | ~(cia_context->c_cia[CIA_DDRA]))) & read_joyport_dig(JOYPORT_2);
 
     return byte;
 }
 
-static BYTE read_ciapb(cia_context_t *cia_context)
+static uint8_t read_ciapb(cia_context_t *cia_context)
 {
-    BYTE byte;
-    BYTE val = 0xff;
-    BYTE msk;
-    BYTE m;
+    uint8_t byte;
+    uint8_t val = 0xff;
+    uint8_t msk;
+    uint8_t m;
     int i;
+    uint16_t joyport_3_joystick_value;
 
-    msk = cia_context->old_pa & ~joystick_value[2];
+    msk = cia_context->old_pa & read_joyport_dig(JOYPORT_2);
 
-    for (m = 0x1, i = 0; i < 8; m <<= 1, i++)
-        if (!(msk & m))
+    for (m = 0x1, i = 0; i < 8; m <<= 1, i++) {
+        if (!(msk & m)) {
             val &= ~keyarr[i];
+        }
+    }
 
     if (c64dtv_hummer_adc_enabled && (!(msk & 1))) {
-        val &= ~(joystick_value[3] & 3);
+        joyport_3_joystick_value = get_joystick_value(JOYPORT_3);
+        val &= ~((uint8_t)joyport_3_joystick_value & 3);
     }
 
     byte = (val & (cia_context->c_cia[CIA_PRB]
-           | ~(cia_context->c_cia[CIA_DDRB]))) & ~joystick_value[1];
+                   | ~(cia_context->c_cia[CIA_DDRB]))) & read_joyport_dig(JOYPORT_1);
 
     return byte;
 }
@@ -193,13 +197,8 @@ static void read_sdr(cia_context_t *cia_context)
 {
 }
 
-static void store_sdr(cia_context_t *cia_context, BYTE byte)
+static void store_sdr(cia_context_t *cia_context, uint8_t byte)
 {
-#ifdef HAVE_RS232
-    if (rsuser_enabled) {
-        rsuser_tx_byte(byte);
-    }
-#endif
 }
 
 /* dummy function for c64keyboard.c */
@@ -210,15 +209,24 @@ void cia1_check_lightpen(void)
 void cia1_init(cia_context_t *cia_context)
 {
     ciacore_init(machine_context.cia1, maincpu_alarm_context,
-                 maincpu_int_status, maincpu_clk_guard);
+                 maincpu_int_status);
 }
 
-void cia1_setup_context(machine_context_t *machine_context)
+void cia1_set_timing(cia_context_t *cia_context, int tickspersec, int powerfreq)
+{
+    cia_context->power_freq = powerfreq;
+    cia_context->ticks_per_sec = tickspersec;
+    cia_context->todticks = 0;
+    cia_context->power_tickcounter = 0;
+    cia_context->power_ticks = 0;
+}
+
+void cia1_setup_context(machine_context_t *machine_ctx)
 {
     cia_context_t *cia;
 
-    machine_context->cia1 = lib_calloc(1,sizeof(cia_context_t));
-    cia = machine_context->cia1;
+    machine_ctx->cia1 = lib_calloc(1, sizeof(cia_context_t));
+    cia = machine_ctx->cia1;
 
     cia->prv = NULL;
     cia->context = NULL;
@@ -226,7 +234,7 @@ void cia1_setup_context(machine_context_t *machine_context)
     cia->rmw_flag = &maincpu_rmw_flag;
     cia->clk_ptr = &maincpu_clk;
 
-    cia->todticks = 100000;
+    cia1_set_timing(cia, C64_PAL_CYCLES_PER_SEC, 0);
 
     ciacore_setup_context(cia);
 

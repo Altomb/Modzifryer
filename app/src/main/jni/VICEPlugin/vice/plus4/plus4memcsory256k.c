@@ -3,7 +3,7 @@
  *
  * Written by
  *  Marco van den Heuvel <blackystardust68@yahoo.com>
- * 
+ *
  * This file is part of VICE, the Versatile Commodore Emulator.
  * See README for copyright notice.
  *
@@ -30,22 +30,22 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "cmdline.h"
+#include "cartio.h"
 #include "lib.h"
 #include "log.h"
 #include "machine.h"
 #include "mem.h"
+#include "monitor.h"
 #include "plus4mem.h"
 #include "plus4memcsory256k.h"
 #include "plus4memhannes256k.h"
 #include "resources.h"
 #include "snapshot.h"
-#include "translate.h"
 #include "types.h"
 #include "uiapi.h"
 
 
-static log_t cs256k_log = LOG_ERR;
+static log_t cs256k_log = LOG_DEFAULT;
 
 static int cs256k_activate(void);
 static int cs256k_deactivate(void);
@@ -55,11 +55,40 @@ int cs256k_enabled = 0;
 static int cs256k_block = 0xf;
 static int cs256k_segment = 3;
 
-BYTE *cs256k_ram = NULL;
+uint8_t *cs256k_ram = NULL;
 
+/* Some prototypes */
+static uint8_t cs256k_reg_read(uint16_t addr);
+static void cs256k_reg_store(uint16_t addr, uint8_t value);
+static int cs256k_dump(void);
 
-static int set_cs256k_enabled(int val, void *param)
+static io_source_t cs256k_device = {
+    "CSORY",              /* name of the device */
+    IO_DETACH_RESOURCE,   /* use resource to detach the device when involved in a read-collision */
+    "MemoryHack",         /* resource to set to '0' */
+    0xfd15, 0xfd15, 0x00, /* range for the device, reg:$fd15 */
+    1,                    /* read is always valid */
+    cs256k_reg_store,     /* store function */
+    NULL,                 /* NO poke function */
+    cs256k_reg_read,      /* read function */
+    NULL,                 /* TODO: peek function */
+    cs256k_dump,          /* chip state information dump function */
+    IO_CART_ID_NONE,      /* not a cartridge */
+    IO_PRIO_NORMAL,       /* normal priority, device read needs to be checked for collisions */
+    0,                    /* insertion order, gets filled in by the registration function */
+    IO_MIRROR_NONE        /* NO mirroring */
+};
+
+static io_source_list_t *cs256k_list_item = NULL;
+
+int set_cs256k_enabled(int value)
 {
+    int val = value ? 1 : 0;
+
+    if (val == cs256k_enabled) {
+        return 0;
+    }
+
     if (!val) {
         if (cs256k_enabled) {
             if (cs256k_deactivate() < 0) {
@@ -67,113 +96,101 @@ static int set_cs256k_enabled(int val, void *param)
             }
         }
         cs256k_enabled = 0;
-        return 0;
+        io_source_unregister(cs256k_list_item);
+        cs256k_list_item = NULL;
+        plus4_pio1_init(-1);
     } else {
         if (!cs256k_enabled) {
             if (cs256k_activate() < 0) {
                 return -1;
             }
         }
-
         cs256k_enabled = 1;
-
-        if (h256k_enabled)
-            resources_set_int("H256K", 0);
-        resources_set_int("RamSize", 256);
-
-        return 0;
+        cs256k_list_item = io_source_register(&cs256k_device);
+        plus4_pio1_init(1);
     }
-}
-
-static const resource_int_t resources_int[] = {
-    { "CS256K", 0, RES_EVENT_SAME, NULL,
-      &cs256k_enabled, set_cs256k_enabled, NULL },
-    { NULL }
-};
-
-int cs256k_resources_init(void)
-{
-    return resources_register_int(resources_int);
-}
-
-/* ------------------------------------------------------------------------- */
-
-static const cmdline_option_t cmdline_options[] =
-{
-    { "-cs256k", SET_RESOURCE, 0,
-      NULL, NULL, "CS256K", (resource_value_t)1,
-      USE_PARAM_STRING, USE_DESCRIPTION_ID,
-      IDCLS_UNUSED, IDCLS_ENABLE_CS256K_EXPANSION,
-      NULL, NULL },
-    { NULL }
-};
-
-int cs256k_cmdline_options_init(void)
-{
-  return cmdline_register_options(cmdline_options);
+    return 0;
 }
 
 /* ------------------------------------------------------------------------- */
 
 void cs256k_init(void)
 {
-  cs256k_log = log_open("CS256K");
+    cs256k_log = log_open("CS256K");
 }
 
 void cs256k_reset(void)
 {
-  cs256k_block=0xf;
-  cs256k_segment=3;
+    cs256k_block = 0xf;
+    cs256k_segment = 3;
 }
 
 static int cs256k_activate(void)
 {
-  cs256k_ram = lib_realloc((void *)cs256k_ram, (size_t)0x40000);
+    cs256k_ram = lib_realloc((void *)cs256k_ram, (size_t)0x40000);
 
-  log_message(cs256k_log, "CSORY 256K expansion installed.");
+    log_message(cs256k_log, "CSORY 256KiB expansion installed.");
 
-  cs256k_reset();
-  return 0;
+    cs256k_reset();
+    return 0;
 }
 
 static int cs256k_deactivate(void)
 {
-  lib_free(cs256k_ram);
-  cs256k_ram = NULL;
-  return 0;
+    lib_free(cs256k_ram);
+    cs256k_ram = NULL;
+    return 0;
 }
 
 void cs256k_shutdown(void)
 {
-  if (cs256k_enabled)
-    cs256k_deactivate();
+    if (cs256k_enabled) {
+        cs256k_deactivate();
+    }
 }
 
 /* ------------------------------------------------------------------------- */
 
-BYTE cs256k_reg_read(WORD addr)
+static uint8_t cs256k_reg_read(uint16_t addr)
 {
-  return 0xff;
+    return 0xff;
 }
 
-void cs256k_reg_store(WORD addr, BYTE value)
+static void cs256k_reg_store(uint16_t addr, uint8_t value)
 {
-  cs256k_block=(value&0xf);
-  cs256k_segment=(value&0xc0)>>6;
+    cs256k_block = (value & 0xf);
+    cs256k_segment = (value & 0xc0) >> 6;
 }
 
-void cs256k_store(WORD addr, BYTE value)
+void cs256k_store(uint16_t addr, uint8_t value)
 {
-  if (addr>=(cs256k_segment*0x4000) && addr<((cs256k_segment+1)*0x4000))
-    cs256k_ram[(cs256k_block*0x4000)+(addr&0x3fff)]=value;
-  else
-    mem_ram[addr]=value;
+    if (addr >= (cs256k_segment * 0x4000) && addr < ((cs256k_segment + 1) * 0x4000)) {
+        cs256k_ram[(cs256k_block * 0x4000) + (addr & 0x3fff)] = value;
+    } else {
+        mem_ram[addr] = value;
+    }
 }
 
-BYTE cs256k_read(WORD addr)
+uint8_t cs256k_read(uint16_t addr)
 {
-  if (addr>=(cs256k_segment*0x4000) && addr<((cs256k_segment+1)*0x4000))
-    return cs256k_ram[(cs256k_block*0x4000)+(addr&0x3fff)];
-  else
-    return mem_ram[addr];
+    if (addr >= (cs256k_segment * 0x4000) && addr < ((cs256k_segment + 1) * 0x4000)) {
+        return cs256k_ram[(cs256k_block * 0x4000) + (addr & 0x3fff)];
+    } else {
+        return mem_ram[addr];
+    }
+}
+
+
+void cs256k_ram_inject(uint16_t addr, uint8_t value)
+{
+    cs256k_store(addr, value);
+}
+
+static int cs256k_dump(void)
+{
+    mon_out("Segment: %d ($%04X-$%04X), block: %d\n",
+            cs256k_segment, cs256k_segment * 0x4000U,
+            (cs256k_segment * 0x4000U) + 0x3fffU, cs256k_block);
+
+    return 0;
 }

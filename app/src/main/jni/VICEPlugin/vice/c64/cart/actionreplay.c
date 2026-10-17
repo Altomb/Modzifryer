@@ -33,14 +33,19 @@
 #define CARTRIDGE_INCLUDE_SLOTMAIN_API
 #include "c64cartsystem.h"
 #undef CARTRIDGE_INCLUDE_SLOTMAIN_API
-#include "c64export.h"
+#include "c64mem.h"
 #include "cartio.h"
 #include "cartridge.h"
+#include "export.h"
+#include "log.h"
+#include "maincpu.h"
 #include "monitor.h"
+#include "ram.h"
 #include "snapshot.h"
 #include "types.h"
 #include "util.h"
 #include "crt.h"
+#include "vicii-phi1.h"
 
 /*
     Action Replay 4.2, 5, 6 (Hardware stayed the same)
@@ -64,60 +69,67 @@
         cart RAM (if enabled) or cart ROM
 */
 
+#define CART_RAM_SIZE (8 * 1024)
+
 static int ar_active;
 
 /* ---------------------------------------------------------------------*/
 
 /* some prototypes are needed */
-static BYTE actionreplay_io1_peek(WORD addr);
-static void actionreplay_io1_store(WORD addr, BYTE value);
-static BYTE actionreplay_io2_read(WORD addr);
-static BYTE actionreplay_io2_peek(WORD addr);
-static void actionreplay_io2_store(WORD addr, BYTE value);
+static uint8_t actionreplay_io1_peek(uint16_t addr);
+static uint8_t actionreplay_io1_read(uint16_t addr);
+static void actionreplay_io1_store(uint16_t addr, uint8_t value);
+static uint8_t actionreplay_io2_read(uint16_t addr);
+static uint8_t actionreplay_io2_peek(uint16_t addr);
+static void actionreplay_io2_store(uint16_t addr, uint8_t value);
 static int actionreplay_dump(void);
 
 static io_source_t action_replay_io1_device = {
-    CARTRIDGE_NAME_ACTION_REPLAY,
-    IO_DETACH_CART,
-    NULL,
-    0xde00, 0xdeff, 0xff,
-    0,
-    actionreplay_io1_store,
-    NULL,
-    actionreplay_io1_peek,
-    actionreplay_dump,
-    CARTRIDGE_ACTION_REPLAY,
-    0,
-    0
+    CARTRIDGE_NAME_ACTION_REPLAY, /* name of the device */
+    IO_DETACH_CART,               /* use cartridge ID to detach the device when involved in a read-collision */
+    IO_DETACH_NO_RESOURCE,        /* does not use a resource for detach */
+    0xde00, 0xdeff, 0xff,         /* range for the device, address is ignored by the write functions, reg:$de00, mirrors:$de01-$deff */
+    0,                            /* read is never valid */
+    actionreplay_io1_store,       /* store function */
+    NULL,                         /* NO poke function */
+    actionreplay_io1_read,        /* read function */
+    actionreplay_io1_peek,        /* peek function */
+    actionreplay_dump,            /* device state information dump function */
+    CARTRIDGE_ACTION_REPLAY,      /* cartridge ID */
+    IO_PRIO_NORMAL,               /* normal priority, device read needs to be checked for collisions */
+    0,                            /* insertion order, gets filled in by the registration function */
+    IO_MIRROR_NONE                /* NO mirroring */
 };
 
 static io_source_t action_replay_io2_device = {
-    CARTRIDGE_NAME_ACTION_REPLAY,
-    IO_DETACH_CART,
-    NULL,
-    0xdf00, 0xdfff, 0xff,
-    0,
-    actionreplay_io2_store,
-    actionreplay_io2_read,
-    actionreplay_io2_peek,
-    actionreplay_dump,
-    CARTRIDGE_ACTION_REPLAY,
-    0,
-    0
+    CARTRIDGE_NAME_ACTION_REPLAY, /* name of the device */
+    IO_DETACH_CART,               /* use cartridge ID to detach the device when involved in a read-collision */
+    IO_DETACH_NO_RESOURCE,        /* does not use a resource for detach */
+    0xdf00, 0xdfff, 0xff,         /* range for the device, address is ignored by the read/write functions, reg:$df00, mirrors:$df01-$dfff */
+    0,                            /* validity of the read is determined by the cartridge at read time */
+    actionreplay_io2_store,       /* store function */
+    NULL,                         /* NO poke function */
+    actionreplay_io2_read,        /* read function */
+    actionreplay_io2_peek,        /* peek function */
+    actionreplay_dump,            /* device state information dump function */
+    CARTRIDGE_ACTION_REPLAY,      /* cartridge ID */
+    IO_PRIO_NORMAL,               /* normal priority, device read needs to be checked for collisions */
+    0,                            /* insertion order, gets filled in by the registration function */
+    IO_MIRROR_NONE                /* NO mirroring */
 };
 
 static io_source_list_t *action_replay_io1_list_item = NULL;
 static io_source_list_t *action_replay_io2_list_item = NULL;
 
-static const c64export_resource_t export_res = {
+static const export_resource_t export_res = {
     CARTRIDGE_NAME_ACTION_REPLAY, 1, 1, &action_replay_io1_device, &action_replay_io2_device, CARTRIDGE_ACTION_REPLAY
 };
 
 /* ---------------------------------------------------------------------*/
 
-static BYTE regvalue;
+static uint8_t regvalue;
 
-static void actionreplay_io1_store(WORD addr, BYTE value)
+static void actionreplay_io1_store(uint16_t addr, uint8_t value)
 {
     unsigned int mode = 0;
 
@@ -129,20 +141,49 @@ static void actionreplay_io1_store(WORD addr, BYTE value)
         if (value & 0x20) {
             mode |= CMODE_EXPORT_RAM;
         }
-        cart_config_changed_slotmain((BYTE)(value & 3), (BYTE)((value & 3) | (((value >> 3) & 3) << CMODE_BANK_SHIFT)), (unsigned int)(mode | CMODE_WRITE));
-
         if (value & 4) {
             ar_active = 0;
         }
+
+        /* mode 0x22 is broken in the original AR, we handle it here so we can
+           emit a warning on access */
+        if ((value & 0x23) == 0x22) {
+            cart_config_changed_slotmain(CMODE_8KGAME,
+                CMODE_8KGAME | (((value >> 3) & 3) << CMODE_BANK_SHIFT),
+                (unsigned int)(mode | CMODE_WRITE));
+        } else {
+            cart_config_changed_slotmain((uint8_t)(value & 3),
+                (uint8_t)((value & 3) | (((value >> 3) & 3) << CMODE_BANK_SHIFT)),
+                (unsigned int)(mode | CMODE_WRITE));
+        }
+
     }
 }
 
-static BYTE actionreplay_io1_peek(WORD addr)
+static uint8_t actionreplay_io1_read(uint16_t addr)
+{
+    uint8_t value;
+    /* the read is really never valid */
+    action_replay_io1_device.io_source_valid = 0;
+    if (!ar_active) {
+        return 0;
+    }
+    /* since the r/w line is not decoded, a read still changes the register,
+       to whatever was on the bus before */
+    value = vicii_read_phi1();
+    actionreplay_io1_store(addr, value);
+    log_warning(LOG_DEFAULT, "AR5: reading from 0xde%02x in IO1 area at 0x%04x, this corrupts the register.",
+                addr & 0xffu, reg_pc);
+
+    return value;
+}
+
+static uint8_t actionreplay_io1_peek(uint16_t addr)
 {
     return regvalue;
 }
 
-static BYTE actionreplay_io2_read(WORD addr)
+static uint8_t actionreplay_io2_read(uint16_t addr)
 {
     action_replay_io2_device.io_source_valid = 0;
 
@@ -174,7 +215,7 @@ static BYTE actionreplay_io2_read(WORD addr)
     return 0;
 }
 
-static BYTE actionreplay_io2_peek(WORD addr)
+static uint8_t actionreplay_io2_peek(uint16_t addr)
 {
     if (!ar_active) {
         return 0;
@@ -200,7 +241,7 @@ static BYTE actionreplay_io2_peek(WORD addr)
     return 0;
 }
 
-static void actionreplay_io2_store(WORD addr, BYTE value)
+static void actionreplay_io2_store(uint16_t addr, uint8_t value)
 {
     if (ar_active) {
         if (export_ram) {
@@ -211,28 +252,41 @@ static void actionreplay_io2_store(WORD addr, BYTE value)
 
 static int actionreplay_dump(void)
 {
-    mon_out("$8000-$9FFF/$DF00-$DFFF: %s, ROM bank: %d, EXROM line: %s, GAME line: %s, cart state: %s\n",
-            (regvalue & 0x20) ? "RAM" : "ROM",
-            (regvalue & 0x18) >> 3,
+    mon_out("EXROM line: %s, GAME line: %s, Mode: %s\n",
             (regvalue & 2) ? "high" : "low",
             (regvalue & 1) ? "low" : "high",
-            (regvalue & 4) ? "disabled" : "enabled");
-    return 0;
+            cart_config_string((uint8_t)(regvalue & 3)));
+    mon_out("ROM bank: %d, cart state: %s, reset freeze: %s\n",
+            (regvalue & 0x18) >> 3,
+            (regvalue & 4) ? "disabled" : "enabled",
+            (regvalue & 0x40) ? "yes" : "no");
+    /* FIXME: take system RAM and cart mode(s) into account here */
+    mon_out("$8000-$9FFF: %s\n", (export_ram) ? "RAM" : "ROM");
+    mon_out("$A000-$BFFF: %s\n", "ROM");
+    mon_out("$DF00-$DFFF: %s\n", (export_ram) ? "RAM" : "ROM");
+   return 0;
 }
-
 
 /* ---------------------------------------------------------------------*/
 
-BYTE actionreplay_roml_read(WORD addr)
+uint8_t actionreplay_roml_read(uint16_t addr)
 {
+    if ((regvalue & 0x23) == 0x22) {
+        log_warning(LOG_DEFAULT,
+            "AR5: reading ROML area at 0x%04x in mode $22, this causes bus contention,", addr);
+        log_warning(LOG_DEFAULT,
+            "     is unreliable, and may damage the hardware - do not do this!");
+        /* in mode 0x22 both C64 and cartridge RAM is selected */
+        return mem_read_without_ultimax(addr) | export_ram0[addr & 0x1fff];
+    }
+
     if (export_ram) {
         return export_ram0[addr & 0x1fff];
     }
-
     return roml_banks[(addr & 0x1fff) + (roml_bank << 13)];
 }
 
-void actionreplay_roml_store(WORD addr, BYTE value)
+void actionreplay_roml_store(uint16_t addr, uint8_t value)
 {
     if (export_ram) {
         export_ram0[addr & 0x1fff] = value;
@@ -241,24 +295,45 @@ void actionreplay_roml_store(WORD addr, BYTE value)
 
 /* ---------------------------------------------------------------------*/
 
+/* FIXME: this still needs to be tweaked to match the hardware */
+static RAMINITPARAM ramparam = {
+    .start_value = 255,
+    .value_invert = 2,
+    .value_offset = 1,
+
+    .pattern_invert = 0x100,
+    .pattern_invert_value = 255,
+
+    .random_start = 0,
+    .random_repeat = 0,
+    .random_chance = 0,
+};
+
+void actionreplay_powerup(void)
+{
+    ram_init_with_pattern(export_ram0, CART_RAM_SIZE, &ramparam);
+}
+
 void actionreplay_freeze(void)
 {
     ar_active = 1;
-    cart_config_changed_slotmain(3, 3, CMODE_READ | CMODE_EXPORT_RAM);
+    cart_config_changed_slotmain(CMODE_ULTIMAX, CMODE_ULTIMAX, CMODE_READ | CMODE_EXPORT_RAM);
 }
 
 void actionreplay_config_init(void)
 {
     ar_active = 1;
-    cart_config_changed_slotmain(0, 0, CMODE_READ);
+    regvalue = 0;
+    cart_config_changed_slotmain(CMODE_8KGAME, CMODE_8KGAME, CMODE_READ);
 }
 
 void actionreplay_reset(void)
 {
     ar_active = 1;
+    regvalue = 0;
 }
 
-void actionreplay_config_setup(BYTE *rawcart)
+void actionreplay_config_setup(uint8_t *rawcart)
 {
     memcpy(roml_banks, rawcart, 0x8000);
     memcpy(romh_banks, rawcart, 0x8000);
@@ -269,7 +344,7 @@ void actionreplay_config_setup(BYTE *rawcart)
 
 static int actionreplay_common_attach(void)
 {
-    if (c64export_add(&export_res) < 0) {
+    if (export_add(&export_res) < 0) {
         return -1;
     }
 
@@ -279,7 +354,7 @@ static int actionreplay_common_attach(void)
     return 0;
 }
 
-int actionreplay_bin_attach(const char *filename, BYTE *rawcart)
+int actionreplay_bin_attach(const char *filename, uint8_t *rawcart)
 {
     if (util_file_load(filename, rawcart, 0x8000, UTIL_FILE_LOAD_SKIP_ADDRESS) < 0) {
         return -1;
@@ -288,7 +363,7 @@ int actionreplay_bin_attach(const char *filename, BYTE *rawcart)
     return actionreplay_common_attach();
 }
 
-int actionreplay_crt_attach(FILE *fd, BYTE *rawcart)
+int actionreplay_crt_attach(FILE *fd, uint8_t *rawcart)
 {
     crt_chip_header_t chip;
     int i;
@@ -316,27 +391,37 @@ void actionreplay_detach(void)
     io_source_unregister(action_replay_io2_list_item);
     action_replay_io1_list_item = NULL;
     action_replay_io2_list_item = NULL;
-    c64export_remove(&export_res);
+    export_remove(&export_res);
 }
 
 /* ---------------------------------------------------------------------*/
 
-#define CART_DUMP_VER_MAJOR   0
-#define CART_DUMP_VER_MINOR   0
-#define SNAP_MODULE_NAME  "CARTAR"
+/* CARTAR snapshot module format:
+
+   type  | name   | description
+   ----------------------------
+   BYTE  | active | cartridge is active
+   ARRAY | ROML   | 32768 BYTES of ROML data
+   ARRAY | ROMH   | 32768 BYTES of ROMH data
+   ARRAY | RAM    | 8192 BYES of RAM data
+ */
+
+static const char snap_module_name[] = "CARTAR";
+#define SNAP_MAJOR   0
+#define SNAP_MINOR   0
 
 int actionreplay_snapshot_write_module(snapshot_t *s)
 {
     snapshot_module_t *m;
 
-    m = snapshot_module_create(s, SNAP_MODULE_NAME,
-                          CART_DUMP_VER_MAJOR, CART_DUMP_VER_MINOR);
+    m = snapshot_module_create(s, snap_module_name, SNAP_MAJOR, SNAP_MINOR);
+
     if (m == NULL) {
         return -1;
     }
 
     if (0
-        || (SMW_B(m, (BYTE)ar_active) < 0)
+        || (SMW_B(m, (uint8_t)ar_active) < 0)
         || (SMW_BA(m, roml_banks, 0x8000) < 0)
         || (SMW_BA(m, romh_banks, 0x8000) < 0)
         || (SMW_BA(m, export_ram0, 0x2000) < 0)) {
@@ -350,17 +435,19 @@ int actionreplay_snapshot_write_module(snapshot_t *s)
 
 int actionreplay_snapshot_read_module(snapshot_t *s)
 {
-    BYTE vmajor, vminor;
+    uint8_t vmajor, vminor;
     snapshot_module_t *m;
 
-    m = snapshot_module_open(s, SNAP_MODULE_NAME, &vmajor, &vminor);
+    m = snapshot_module_open(s, snap_module_name, &vmajor, &vminor);
+
     if (m == NULL) {
         return -1;
     }
 
-    if ((vmajor != CART_DUMP_VER_MAJOR) || (vminor != CART_DUMP_VER_MINOR)) {
-        snapshot_module_close(m);
-        return -1;
+    /* Do not accept higher versions than current */
+    if (snapshot_version_is_bigger(vmajor, vminor, SNAP_MAJOR, SNAP_MINOR)) {
+        snapshot_set_error(SNAPSHOT_MODULE_HIGHER_VERSION);
+        goto fail;
     }
 
     if (0
@@ -368,11 +455,14 @@ int actionreplay_snapshot_read_module(snapshot_t *s)
         || (SMR_BA(m, roml_banks, 0x8000) < 0)
         || (SMR_BA(m, romh_banks, 0x8000) < 0)
         || (SMR_BA(m, export_ram0, 0x2000) < 0)) {
-        snapshot_module_close(m);
-        return -1;
+        goto fail;
     }
 
     snapshot_module_close(m);
 
     return actionreplay_common_attach();
+
+fail:
+    snapshot_module_close(m);
+    return -1;
 }

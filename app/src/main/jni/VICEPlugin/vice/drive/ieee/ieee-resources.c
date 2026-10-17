@@ -43,72 +43,118 @@ static char *dos_rom_name_1001 = NULL;
 static char *dos_rom_name_2040 = NULL;
 static char *dos_rom_name_3040 = NULL;
 static char *dos_rom_name_4040 = NULL;
+static char *dos_rom_name_9000 = NULL;
 
 static int set_dos_rom_name_2040(const char *val, void *param)
 {
-    if (util_string_set(&dos_rom_name_2040, val))
+    int reload = ((val != NULL) && (dos_rom_name_2040 != NULL));
+
+    if (util_string_set(&dos_rom_name_2040, val)) {
         return 0;
+    }
+
+    if (reload) {
+        return driverom_reload(DRIVE_TYPE_2040);
+    }
 
     return ieeerom_load_2040();
 }
 
 static int set_dos_rom_name_3040(const char *val, void *param)
 {
-    if (util_string_set(&dos_rom_name_3040, val))
+    int reload = ((val != NULL) && (dos_rom_name_3040 != NULL));
+
+    if (util_string_set(&dos_rom_name_3040, val)) {
         return 0;
+    }
+
+    if (reload) {
+        return driverom_reload(DRIVE_TYPE_3040);
+    }
 
     return ieeerom_load_3040();
 }
 
 static int set_dos_rom_name_4040(const char *val, void *param)
 {
-    if (util_string_set(&dos_rom_name_4040, val))
+    int reload = ((val != NULL) && (dos_rom_name_4040 != NULL));
+
+    if (util_string_set(&dos_rom_name_4040, val)) {
         return 0;
+    }
+
+    if (reload) {
+        return driverom_reload(DRIVE_TYPE_4040);
+    }
 
     return ieeerom_load_4040();
 }
 
 static int set_dos_rom_name_1001(const char *val, void *param)
 {
-    if (util_string_set(&dos_rom_name_1001, val))
+    int reload = ((val != NULL) && (dos_rom_name_1001 != NULL));
+
+    if (util_string_set(&dos_rom_name_1001, val)) {
         return 0;
+    }
+
+    if (reload) {
+        return driverom_reload(DRIVE_TYPE_1001);
+    }
 
     return ieeerom_load_1001();
 }
 
+static int set_dos_rom_name_9000(const char *val, void *param)
+{
+    int reload = ((val != NULL) && (dos_rom_name_9000 != NULL));
+
+    if (util_string_set(&dos_rom_name_9000, val)) {
+        return 0;
+    }
+
+    if (reload) {
+        return driverom_reload(DRIVE_TYPE_9000);
+    }
+
+    return ieeerom_load_9000();
+}
+
 static int set_dos_rom_name_2031(const char *val, void *param)
 {
-    if (util_string_set(&dos_rom_name_2031, val))
+    int reload = ((val != NULL) && (dos_rom_name_2031 != NULL));
+
+    if (util_string_set(&dos_rom_name_2031, val)) {
         return 0;
+    }
+
+    if (reload) {
+        return driverom_reload(DRIVE_TYPE_2031);
+    }
 
     return ieeerom_load_2031();
 }
 
 static const resource_string_t resources_string[] = {
-    { "DosName2031", "dos2031", RES_EVENT_NO, NULL,
+    { "DosName2031", DRIVE_ROM2031_NAME, RES_EVENT_NO, NULL,
       /* FIXME: should be same but names may differ */
       &dos_rom_name_2031, set_dos_rom_name_2031, NULL },
-    { "DosName2040", "dos2040", RES_EVENT_NO, NULL,
+    { "DosName2040", DRIVE_ROM2040_NAME, RES_EVENT_NO, NULL,
       &dos_rom_name_2040, set_dos_rom_name_2040, NULL },
-    { "DosName3040", "dos3040", RES_EVENT_NO, NULL,
+    { "DosName3040", DRIVE_ROM3040_NAME, RES_EVENT_NO, NULL,
       &dos_rom_name_3040, set_dos_rom_name_3040, NULL },
-    { "DosName4040", "dos4040", RES_EVENT_NO, NULL,
+    { "DosName4040", DRIVE_ROM4040_NAME, RES_EVENT_NO, NULL,
       &dos_rom_name_4040, set_dos_rom_name_4040, NULL },
-    { "DosName1001", "dos1001", RES_EVENT_NO, NULL,
+    { "DosName1001", DRIVE_ROM1001_NAME, RES_EVENT_NO, NULL,
       &dos_rom_name_1001, set_dos_rom_name_1001, NULL },
-    { NULL }
-};
-
-static const resource_int_t resources_int[] = {
-    { NULL }
+    { "DosName9000", DRIVE_ROM9000_NAME, RES_EVENT_NO, NULL,
+      &dos_rom_name_9000, set_dos_rom_name_9000, NULL },
+    RESOURCE_STRING_LIST_END
 };
 
 int ieee_resources_init(void)
 {
-    if (resources_register_string(resources_string) < 0)
-        return -1;
-
-    return resources_register_int(resources_int);
+    return resources_register_string(resources_string);
 }
 
 void ieee_resources_shutdown(void)
@@ -118,4 +164,5 @@ void ieee_resources_shutdown(void)
     lib_free(dos_rom_name_2040);
     lib_free(dos_rom_name_3040);
     lib_free(dos_rom_name_4040);
+    lib_free(dos_rom_name_9000);
 }

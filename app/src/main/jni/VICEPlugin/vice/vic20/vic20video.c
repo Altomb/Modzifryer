@@ -33,11 +33,6 @@
 #include "video.h"
 
 
-void machine_video_init(void)
-{
-    video_render_pal_init();
-}
-
 int machine_video_resources_init(void)
 {
     if (video_resources_init() < 0) {
@@ -49,9 +44,9 @@ int machine_video_resources_init(void)
 
 struct video_canvas_s *machine_video_canvas_get(unsigned int window)
 {
-    if (window == 0)
+    if (window == 0) {
         return vic_get_canvas();
+    }
 
     return NULL;
 }
-

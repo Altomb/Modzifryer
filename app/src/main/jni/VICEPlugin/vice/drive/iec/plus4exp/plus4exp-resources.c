@@ -30,60 +30,97 @@
 
 #include "drive.h"
 #include "drivemem.h"
+#include "init.h"
 #include "lib.h"
 #include "plus4exp-resources.h"
 #include "resources.h"
+#include "uiapi.h"
+#include "userport.h"
 
 
 static void set_drive_ram(unsigned int dnr)
 {
-    drive_t *drive = drive_context[dnr]->drive;
+    diskunit_context_t *unit = diskunit_context[dnr];
 
-    if (drive->type != DRIVE_TYPE_1570 && drive->type != DRIVE_TYPE_1571
-        && drive->type != DRIVE_TYPE_1571CR)
+    if ((unit->type != DRIVE_TYPE_1570) &&
+        (unit->type != DRIVE_TYPE_1571) &&
+        (unit->type != DRIVE_TYPE_1571CR)) {
         return;
+    }
 
-    drivemem_init(drive_context[dnr], drive->type);
+    drivemem_init(unit);
 
     return;
 }
 
 static int set_drive_parallel_cable(int val, void *param)
 {
-    drive_t *drive = drive_context[vice_ptr_to_uint(param)]->drive;
+    diskunit_context_t *unit = diskunit_context[vice_ptr_to_uint(param)];
+    int userport_device = -1;
 
-    if (val != DRIVE_PC_NONE && val != DRIVE_PC_STANDARD)
-        return -1;
+    switch (val) {
+        case DRIVE_PC_NONE:
+        case DRIVE_PC_STANDARD:
+            break;
+        default:
+            return -1;
+    }
 
-    drive->parallel_cable = val;
+    unit->parallel_cable = val;
     set_drive_ram(vice_ptr_to_uint(param));
+
+    /* some magic to automatically insert or remove the parallel cable into/from the user port */
+    resources_get_int("UserportDevice", &userport_device);
+
+    if ((val == DRIVE_PC_NONE) && (userport_device == USERPORT_DEVICE_DRIVE_PAR_CABLE)) {
+        int hasparcable = 0;
+        int dnr;
+        /* check if any drive has a parallel cable enabled */
+        for (dnr = 0; dnr < NUM_DISK_UNITS; dnr++) {
+            int cable;
+            resources_get_int_sprintf("Drive%iParallelCable", &cable, dnr + 8);
+            if (cable != DRIVE_PC_NONE) {
+                hasparcable = 1;
+            }
+        }
+        /* if no drive uses parallel cable, disable it in the userport settings */
+        if (hasparcable == 0) {
+            resources_set_int("UserportDevice", USERPORT_DEVICE_NONE);
+        }
+    } else if (val != DRIVE_PC_NONE) {
+        if (userport_device == USERPORT_DEVICE_NONE) {
+            resources_set_int("UserportDevice", USERPORT_DEVICE_DRIVE_PAR_CABLE);
+        } else if (userport_device != USERPORT_DEVICE_DRIVE_PAR_CABLE) {
+            if (init_main_is_done()) {
+                ui_message("Warning: the user port is already being used for another device.\n"
+                            "To be able to use the parallel cable, you must also set up the user port accordingly.");
+            }
+        }
+    }
 
     return 0;
 }
 
-
 static resource_int_t res_drive[] = {
-    { NULL, 0, RES_EVENT_SAME, NULL,
+    { NULL, DRIVE_PC_NONE, RES_EVENT_SAME, NULL,
       NULL, set_drive_parallel_cable, NULL },
-    { NULL }
+    RESOURCE_INT_LIST_END
 };
 
 int plus4exp_resources_init(void)
 {
-    unsigned int dnr;
-    drive_t *drive;
+    int dnr;
 
-    for (dnr = 0; dnr < DRIVE_NUM; dnr++) {
-        drive = drive_context[dnr]->drive;
-
+    for (dnr = 0; dnr < NUM_DISK_UNITS; dnr++) {
         res_drive[0].name = lib_msprintf("Drive%iParallelCable", dnr + 8);
-        res_drive[0].value_ptr = &(drive->parallel_cable);
-        res_drive[0].param = uint_to_void_ptr(dnr);
+        res_drive[0].value_ptr = &(diskunit_context[dnr]->parallel_cable);
+        res_drive[0].param = vice_uint_to_ptr(dnr);
 
-        if (resources_register_int(res_drive) < 0)
+        if (resources_register_int(res_drive) < 0) {
             return -1;
+        }
 
-        lib_free((char *)(res_drive[0].name));
+        lib_free(res_drive[0].name);
     }
 
     return 0;
@@ -92,4 +129,3 @@ int plus4exp_resources_init(void)
 void plus4exp_resources_shutdown(void)
 {
 }
-

@@ -27,6 +27,7 @@
 
 #include "vice.h"
 
+#ifdef HAVE_PNG
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -47,7 +48,7 @@ typedef struct gfxoutputdrv_data_s {
     char *ext_filename;
     png_structp png_ptr;
     png_infop info_ptr;
-    BYTE *data;
+    uint8_t *data;
     unsigned int line;
 } gfxoutputdrv_data_t;
 
@@ -104,18 +105,6 @@ static int pngdrv_open(screenshot_t *screenshot, const char *filename)
     png_init_io(sdata->png_ptr, sdata->fd);
     png_set_compression_level(sdata->png_ptr, Z_BEST_COMPRESSION);
 
-/*
-pngdrv.c:102: warning: ‘width’ is deprecated (declared at /usr/include/libpng14/png.h:639)
-pngdrv.c:103: warning: ‘height’ is deprecated (declared at /usr/include/libpng14/png.h:640)
-pngdrv.c:104: warning: ‘bit_depth’ is deprecated (declared at /usr/include/libpng14/png.h:651)
-pngdrv.c:105: warning: ‘color_type’ is deprecated (declared at /usr/include/libpng14/png.h:653)
-*/
-/*
-    sdata->info_ptr->width = screenshot->width;
-    sdata->info_ptr->height= screenshot->height;
-    sdata->info_ptr->bit_depth = 8;
-    sdata->info_ptr->color_type = PNG_COLOR_TYPE_RGB_ALPHA;
-*/
     png_set_IHDR(sdata->png_ptr, sdata->info_ptr, screenshot->width, screenshot->height,
                  8, PNG_COLOR_TYPE_RGB_ALPHA, PNG_INTERLACE_NONE,
                  PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
@@ -167,8 +156,8 @@ static int pngdrv_save(screenshot_t *screenshot, const char *filename)
     }
 
     for (screenshot->gfxoutputdrv_data->line = 0;
-        screenshot->gfxoutputdrv_data->line < screenshot->height;
-        (screenshot->gfxoutputdrv_data->line)++) {
+         screenshot->gfxoutputdrv_data->line < screenshot->height;
+         (screenshot->gfxoutputdrv_data->line)++) {
         pngdrv_write(screenshot);
     }
 
@@ -184,7 +173,7 @@ static FILE *pngdrv_memmap_fd;
 static char *pngdrv_memmap_ext_filename;
 static png_structp pngdrv_memmap_png_ptr;
 static png_infop pngdrv_memmap_info_ptr;
-static BYTE *pngdrv_memmap_png_data;
+static uint8_t *pngdrv_memmap_png_data;
 
 static int pngdrv_close_memmap(void)
 {
@@ -199,17 +188,17 @@ static int pngdrv_close_memmap(void)
     return 0;
 }
 
-static int pngdrv_write_memmap(int line, int x_size, BYTE *gfx, BYTE *palette)
+static int pngdrv_write_memmap(int line, int x_size, uint8_t *gfx, uint8_t *palette)
 {
     int i;
-    BYTE pixval;
+    uint8_t pixval;
 
-    for (i=0; i<x_size; i++) {
-      pixval = gfx[(line*x_size)+i];
-      pngdrv_memmap_png_data[i*4] = palette[pixval*3];
-      pngdrv_memmap_png_data[(i*4)+1] = palette[(pixval*3)+1];
-      pngdrv_memmap_png_data[(i*4)+2] = palette[(pixval*3)+2];
-      pngdrv_memmap_png_data[(i*4)+3] = 0;
+    for (i = 0; i < x_size; i++) {
+        pixval = gfx[(line * x_size) + i];
+        pngdrv_memmap_png_data[i * 4] = palette[pixval * 3];
+        pngdrv_memmap_png_data[(i * 4) + 1] = palette[(pixval * 3) + 1];
+        pngdrv_memmap_png_data[(i * 4) + 2] = palette[(pixval * 3) + 2];
+        pngdrv_memmap_png_data[(i * 4) + 3] = 0;
     }
 
     png_write_row(pngdrv_memmap_png_ptr, (png_bytep)(pngdrv_memmap_png_data));
@@ -217,7 +206,7 @@ static int pngdrv_write_memmap(int line, int x_size, BYTE *gfx, BYTE *palette)
     return 0;
 }
 
-static int pngdrv_open_memmap(const char *filename, int x_size, int y_size, BYTE *palette)
+static int pngdrv_open_memmap(const char *filename, int x_size, int y_size, uint8_t *palette)
 {
     pngdrv_memmap_png_ptr = png_create_write_struct(PNG_LIBPNG_VER_STRING, (void *)NULL, NULL, NULL);
 
@@ -254,18 +243,6 @@ static int pngdrv_open_memmap(const char *filename, int x_size, int y_size, BYTE
     png_init_io(pngdrv_memmap_png_ptr, pngdrv_memmap_fd);
     png_set_compression_level(pngdrv_memmap_png_ptr, Z_BEST_COMPRESSION);
 
-/*
-pngdrv.c:251: warning: ‘width‘ is deprecated (declared at /usr/include/libpng14/png.h:639)
-pngdrv.c:252: warning: ‘height‘ is deprecated (declared at /usr/include/libpng14/png.h:640)
-pngdrv.c:253: warning: ‘bit_depth‘ is deprecated (declared at /usr/include/libpng14/png.h:651)
-pngdrv.c:254: warning: ‘color_type‘ is deprecated (declared at /usr/include/libpng14/png.h:653)
-*/
-/*
-    pngdrv_memmap_info_ptr->width = x_size;
-    pngdrv_memmap_info_ptr->height= y_size;
-    pngdrv_memmap_info_ptr->bit_depth = 8;
-    pngdrv_memmap_info_ptr->color_type = PNG_COLOR_TYPE_RGB_ALPHA;
-*/
     png_set_IHDR(pngdrv_memmap_png_ptr, pngdrv_memmap_info_ptr, x_size, y_size,
                  8, PNG_COLOR_TYPE_RGB_ALPHA, PNG_INTERLACE_NONE,
                  PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
@@ -279,7 +256,7 @@ pngdrv.c:254: warning: ‘color_type‘ is deprecated (declared at /usr/include/
     return 0;
 }
 
-static int pngdrv_save_memmap(const char *filename, int x_size, int y_size, BYTE *gfx, BYTE *palette)
+static int pngdrv_save_memmap(const char *filename, int x_size, int y_size, uint8_t *gfx, uint8_t *palette)
 {
     int line;
 
@@ -301,6 +278,7 @@ static int pngdrv_save_memmap(const char *filename, int x_size, int y_size, BYTE
 
 static gfxoutputdrv_t png_drv =
 {
+    GFXOUTPUTDRV_TYPE_SCREENSHOT_IMAGE,
     "PNG",
     "PNG screenshot",
     "png",
@@ -315,12 +293,18 @@ static gfxoutputdrv_t png_drv =
     NULL,
     NULL
 #ifdef FEATURE_CPUMEMHISTORY
-    ,pngdrv_save_memmap
+    , pngdrv_save_memmap
 #endif
 };
 
-void gfxoutput_init_png(void)
+void gfxoutput_init_png(int help)
 {
+#if 0
+    /* why was this added? */
+    if (help) {
+        return;
+    }
+#endif
     gfxoutput_register(&png_drv);
 }
-
+#endif

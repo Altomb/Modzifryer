@@ -84,6 +84,8 @@ enum {
     ACIA_CMD_BITS_IRQ_DISABLED            = 0x02,
     ACIA_CMD_BITS_DTR_ENABLE_RECV_AND_IRQ = 0x01,
 
+    /* This bit is set only in the MOS 6551, not the Rockwell 6551 or the 65c51 versions */
+    /* ACIA_CMD_DEFAULT_AFTER_HW_RESET       = ACIA_CMD_BITS_IRQ_DISABLED */
     ACIA_CMD_DEFAULT_AFTER_HW_RESET       = 0
 };
 
@@ -119,16 +121,21 @@ enum {
     ACIA_CTRL_DEFAULT_AFTER_HW_RESET = 0
 };
 
-enum {
-    ACIA_MODE_NORMAL    = 0,  /* Normal ACIA emulation */
-    ACIA_MODE_SWIFTLINK = 1,  /* Swiftlink ACIA emulation, baud rates are doubled */
-    ACIA_MODE_TURBO232  = 2,  /* Turbo232 ACIA emulation, baud rates are doubled,
+#define ACIA_MODE_NORMAL    0  /* Normal ACIA emulation */
+#define ACIA_MODE_SWIFTLINK 1  /* Swiftlink ACIA emulation, baud rates are doubled */
+#define ACIA_MODE_TURBO232  2  /* Turbo232 ACIA emulation, baud rates are doubled,
                                  and enhanced baud rate register */
+#define ACIA_MODE_LOWEST ACIA_MODE_NORMAL
 
-    ACIA_MODE_LOWEST    = ACIA_MODE_NORMAL,
-    ACIA_MODE_HIGHEST   = ACIA_MODE_TURBO232
-};
+#define ACIA_DEVICE_1   0
+#define ACIA_DEVICE_2   1
+#define ACIA_DEVICE_3   2
+#define ACIA_DEVICE_4   3
 
-int acia_dump(void *acia_context);
+#define ACIA_INT_NONE   0
+#define ACIA_INT_NMI    1
+#define ACIA_INT_IRQ    2
+
+int acia_dump(void);
 
 #endif

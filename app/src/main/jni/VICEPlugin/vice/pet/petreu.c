@@ -3,7 +3,7 @@
  *
  * Written by
  *  Marco van den Heuvel <blackystardust68@yahoo.com>
- * 
+ *
  * This file is part of VICE, the Versatile Commodore Emulator.
  * See README for copyright notice.
  *
@@ -30,6 +30,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "cartio.h"
 #include "cmdline.h"
 #include "interrupt.h"
 #include "lib.h"
@@ -37,36 +38,58 @@
 #include "machine.h"
 #include "maincpu.h"
 #include "mem.h"
+#include "monitor.h"
 #include "petreu.h"
 #include "resources.h"
-#include "snapshot.h"
-#include "translate.h"
 #include "types.h"
 #include "util.h"
 
 /*
+ * "PET REU (RAM AND EXPANSION UNIT)"
+ *
+ * This expansion seems to be documented at
+ * http://www.cbmhardware.de/show.php?r=14&id=73/PET%20REU%20(RAM%20AND%20EXPANSION%20UNIT)
+ * and http://www.cbmhardware.de/show.php?r=14&id=72
+ *
+ * There are 2 models:
+ *
+ * Model 1: 128 KiB RAM, 1 VIA ($8800).
+ *      Port A and B supply 15 of the address bits.
+ *      CA2 and CB2 supply the other 2.
+ *
+ * Model 2: 256+ KiB RAM, 2 VIAs ($8800 and $8A00).
+ *      VIA 1 Port A and B supply 16 of the address bits.
+ *      VIA 2 Port A supplies the remaining address bits.
+ *      Maximum size would be 16 MB but we allow 2 MB max.
+ *
+ * In both cases, the selected byte can be read at $8900.
+ *
+ * The VIAs are emulated in a super-minimalist way.
+ */
+
+/*
  Offsets of the different PET REU registers
 */
-#define PETREU_REGISTER_B	0x00
-#define PETREU_REGISTER_A	0x01
-#define PETREU_DIRECTION_B	0x02
-#define PETREU_DIRECTION_A	0x03
-#define PETREU_CONTROL		0x0c
+#define PETREU_REGISTER_B       0x00    /* VIA_PRB */
+#define PETREU_REGISTER_A       0x01    /* VIA_PRA */
+#define PETREU_DIRECTION_B      0x02    /* VIA_DDRB */
+#define PETREU_DIRECTION_A      0x03    /* VIA_DDRA */
+#define PETREU_CONTROL          0x0c    /* VIA_PCR */
 
 /* PET REU registers */
-static BYTE petreu[16];
-static BYTE petreu2[16];
+static uint8_t petreu[16];
+static uint8_t petreu2[16];
 
-static BYTE petreu_bank;
+static uint8_t petreu_bank;             /* 0-3, for Model 1 */
 
 /* PET REU image.  */
-static BYTE *petreu_ram = NULL;
+static uint8_t *petreu_ram = NULL;
 
 /* old PET REU size, unused for now but reserved for
    the future 512kb/1mb/2mb versions */
-static int old_petreu_ram_size = 0;	
+static int old_petreu_ram_size = 0;
 
-static log_t petreu_log = LOG_ERR;
+static log_t petreu_log = LOG_DEFAULT;
 
 static int petreu_activate(void);
 static int petreu_deactivate(void);
@@ -76,62 +99,163 @@ static int petreu_deactivate(void);
 /* Flag: Do we enable the PET REU?  */
 int petreu_enabled;
 
-/* PET REU size, unused for now but reserved for
-   the future 512kb/1mb/2mb versions */
+/* PET REU size */
 static int petreu_size = 0;
 
-/* Size of the PET REU in KB.  */
+/* Size of the PET REU in KiB.  */
 static int petreu_size_kb = 0;
+static uint8_t petreu_bank_mask;        /* for Model 2 */
 
 /* Filename of the PET REU image.  */
 static char *petreu_filename = NULL;
 
-static int set_petreu_enabled(int val, void *param)
+/* Some prototypes are needed */
+static uint8_t read_petreu_reg(uint16_t addr);
+static uint8_t read_petreu2_reg(uint16_t addr);
+static void store_petreu_reg(uint16_t addr, uint8_t byte);
+static void store_petreu2_reg(uint16_t addr, uint8_t byte);
+static uint8_t read_petreu_ram(uint16_t addr);
+static void store_petreu_ram(uint16_t addr, uint8_t byte);
+static int petreu_dump(void);
+
+
+static io_source_t petreureg1_device = {
+    "PETREU REG 1",       /* name of the device */
+    IO_DETACH_RESOURCE,   /* use resource to detach the device when involved in a read-collision */
+    "PETREU",             /* resource to set to '0' */
+    0x8800, 0x88ff, 0x0f, /* range for the device, regs:$8800-$880f, mirrors:$8810-$88ff */
+    1,                    /* read is always valid */
+    store_petreu_reg,     /* store function */
+    store_petreu_reg,     /* poke function */
+    read_petreu_reg,      /* read function */
+    read_petreu_reg,      /* peek function */
+    petreu_dump,          /* device state information dump function */
+    IO_CART_ID_NONE,      /* not a cartridge */
+    IO_PRIO_NORMAL,       /* normal priority, device read needs to be checked for collisions */
+    0,                    /* insertion order, gets filled in by the registration function */
+    IO_MIRROR_NONE        /* NO mirroring */
+};
+
+static io_source_t petreureg2_device = {
+    "PETREU REG 2",       /* name of the device */
+    IO_DETACH_RESOURCE,   /* use resource to detach the device when involved in a read-collision */
+    "PETREU",             /* resource to set to '0' */
+    0x8a00, 0x8aff, 0x0f, /* range for the device, regs:$8a00-$8a0f, mirrors:$8a10-$8aff */
+    1,                    /* read is always valid */
+    store_petreu2_reg,    /* store function */
+    store_petreu2_reg,    /* poke function */
+    read_petreu2_reg,     /* read function */
+    read_petreu2_reg,     /* peek function */
+    petreu_dump,          /* device state information dump function */
+    IO_CART_ID_NONE,      /* not a cartridge */
+    IO_PRIO_NORMAL,       /* normal priority, device read needs to be checked for collisions */
+    0,                    /* insertion order, gets filled in by the registration function */
+    IO_MIRROR_NONE        /* NO mirroring */
+};
+
+static io_source_t petreuram_device = {
+    "PETREU RAM",         /* name of the device */
+    IO_DETACH_RESOURCE,   /* use resource to detach the device when involved in a read-collision */
+    "PETREU",             /* resource to set to '0' */
+    0x8900, 0x89ff, 0x00, /* range for the device, regs:$8900-$8900 */
+    1,                    /* read is always valid */
+    store_petreu_ram,     /* store function */
+    store_petreu_ram,     /* poke function */
+    read_petreu_ram,      /* read function */
+    read_petreu_ram,      /* peek function */
+    petreu_dump,          /* device state information dump function */
+    IO_CART_ID_NONE,      /* not a cartridge */
+    IO_PRIO_NORMAL,       /* normal priority, device read needs to be checked for collisions */
+    0,                    /* insertion order, gets filled in by the registration function */
+    IO_MIRROR_NONE        /* NO mirroring */
+};
+
+static io_source_list_t *petreu_reg_1_list_item = NULL;
+static io_source_list_t *petreu_reg_2_list_item = NULL;
+static io_source_list_t *petreu_ram_list_item = NULL;
+
+static void petreu_enable_io(void)
 {
+    petreu_reg_1_list_item = io_source_register(&petreureg1_device);
+    if (petreu_size_kb > 128) {
+        petreu_reg_2_list_item = io_source_register(&petreureg2_device);
+    } else {
+        petreu_reg_2_list_item = NULL;
+    }
+    petreu_ram_list_item = io_source_register(&petreuram_device);
+}
+
+static void petreu_disable_io(void)
+{
+    io_source_unregister(petreu_reg_1_list_item);
+    petreu_reg_1_list_item = NULL;
+    if (petreu_reg_2_list_item) {
+        io_source_unregister(petreu_reg_2_list_item);
+        petreu_reg_2_list_item = NULL;
+    }
+    io_source_unregister(petreu_ram_list_item);
+    petreu_ram_list_item = NULL;
+}
+
+static int set_petreu_enabled(int value, void *param)
+{
+    int val = value ? 1 : 0;
+
+    if (val == petreu_enabled) {
+        return 0;
+    }
+
     if (!val) {
         if (petreu_enabled) {
             if (petreu_deactivate() < 0) {
                 return -1;
             }
         }
+        petreu_disable_io();
         petreu_enabled = 0;
-        return 0;
     } else {
         if (!petreu_enabled) {
             if (petreu_activate() < 0) {
                 return -1;
             }
         }
+        petreu_enable_io();
         petreu_enabled = 1;
-        return 0;
     }
+    return 0;
 }
 
 static int set_petreu_size(int val, void *param)
 {
-    if (val == petreu_size_kb)
+    if (val == petreu_size_kb) {
         return 0;
+    }
 
     switch (val) {
-      case 128:
-      case 512:
-      case 1024:
-      case 2048:
-        break;
-      default:
-        log_message(petreu_log, "Unknown PET REU size %d.", val);
-        return -1;
+        case 128:
+        case 512:
+        case 1024:
+        case 2048:
+            break;
+        default:
+            log_message(petreu_log, "Unknown PET REU size %d.", val);
+            return -1;
     }
 
     if (petreu_enabled) {
         petreu_deactivate();
+        petreu_disable_io();
         petreu_size_kb = val;
-        petreu_size = petreu_size_kb << 10;
+        petreu_size = petreu_size_kb * 1024;
         petreu_activate();
+        petreu_enable_io();
     } else {
         petreu_size_kb = val;
-        petreu_size = petreu_size_kb << 10;
+        petreu_size = petreu_size_kb * 1024;
     }
+
+    /* Only used for Model 2: banks are 64 KiB */
+    petreu_bank_mask = (petreu_size_kb / 64) - 1;
 
     return 0;
 }
@@ -139,12 +263,14 @@ static int set_petreu_size(int val, void *param)
 static int set_petreu_filename(const char *name, void *param)
 {
     if (petreu_filename != NULL && name != NULL
-        && strcmp(name, petreu_filename) == 0)
+        && strcmp(name, petreu_filename) == 0) {
         return 0;
+    }
 
     if (name != NULL && *name != '\0') {
-        if (util_check_filename_access(name) < 0)
+        if (util_check_filename_access(name) < 0) {
             return -1;
+        }
     }
 
     if (petreu_enabled) {
@@ -161,7 +287,7 @@ static int set_petreu_filename(const char *name, void *param)
 static const resource_string_t resources_string[] = {
     { "PETREUfilename", "", RES_EVENT_NO, NULL,
       &petreu_filename, set_petreu_filename, NULL },
-    { NULL }
+    RESOURCE_STRING_LIST_END
 };
 
 static const resource_int_t resources_int[] = {
@@ -169,13 +295,14 @@ static const resource_int_t resources_int[] = {
       &petreu_enabled, set_petreu_enabled, NULL },
     { "PETREUsize", 128, RES_EVENT_SAME, NULL,
       &petreu_size_kb, set_petreu_size, NULL },
-    { NULL }
+    RESOURCE_INT_LIST_END
 };
 
 int petreu_resources_init(void)
 {
-    if (resources_register_string(resources_string) < 0)
+    if (resources_register_string(resources_string) < 0) {
         return -1;
+    }
 
     return resources_register_int(resources_int);
 }
@@ -189,32 +316,24 @@ void petreu_resources_shutdown(void)
 
 static const cmdline_option_t cmdline_options[] =
 {
-    { "-petreu", SET_RESOURCE, 0,
+    { "-petreu", SET_RESOURCE, CMDLINE_ATTRIB_NONE,
       NULL, NULL, "PETREU", (resource_value_t)1,
-      USE_PARAM_STRING, USE_DESCRIPTION_ID,
-      IDCLS_UNUSED, IDCLS_ENABLE_PETREU,
-      NULL, NULL },
-    { "+petreu", SET_RESOURCE, 0,
+      NULL, "Enable the PET Ram and Expansion Unit" },
+    { "+petreu", SET_RESOURCE, CMDLINE_ATTRIB_NONE,
       NULL, NULL, "PETREU", (resource_value_t)0,
-      USE_PARAM_STRING, USE_DESCRIPTION_ID,
-      IDCLS_UNUSED, IDCLS_DISABLE_PETREU,
-      NULL, NULL },
-    { "-petreuimage", SET_RESOURCE, 1,
+      NULL, "Disable the PET Ram and Expansion Unit" },
+    { "-petreuimage", SET_RESOURCE, CMDLINE_ATTRIB_NEED_ARGS,
       NULL, NULL, "PETREUfilename", NULL,
-      USE_PARAM_ID, USE_DESCRIPTION_ID,
-      IDCLS_P_NAME, IDCLS_SPECIFY_PETREU_NAME,
-      NULL, NULL },
-    { "-petreuramsize", SET_RESOURCE, 1,
+      "<Name>", "Specify name of PET Ram and Expansion Unit image" },
+    { "-petreuramsize", SET_RESOURCE, CMDLINE_ATTRIB_NEED_ARGS,
       NULL, NULL, "PETREUsize", NULL,
-      USE_PARAM_ID, USE_DESCRIPTION_ID,
-      IDCLS_P_SIZE_IN_KB, IDCLS_PETREU_SIZE,
-      NULL, NULL },
-    { NULL }
+      "<size in KiB>", "Size of the PET Ram and Expansion Unit. (128/512/1024/2048)" },
+    CMDLINE_LIST_END
 };
 
 int petreu_cmdline_options_init(void)
 {
-  return cmdline_register_options(cmdline_options);
+    return cmdline_register_options(cmdline_options);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -233,22 +352,24 @@ void petreu_reset(void)
 
 static int petreu_activate(void)
 {
-    if (!petreu_size)
+    if (!petreu_size) {
         return 0;
+    }
 
     petreu_ram = lib_realloc((void *)petreu_ram, (size_t)petreu_size);
 
     /* Clear newly allocated RAM.  */
-    if (petreu_size > old_petreu_ram_size)
-        memset(petreu_ram, 0, (size_t)(petreu_size - old_petreu_ram_size));
+    if (petreu_size > old_petreu_ram_size) {
+        memset(petreu_ram + old_petreu_ram_size, 0, (size_t)(petreu_size - old_petreu_ram_size));
+    }
 
     old_petreu_ram_size = petreu_size;
 
-    log_message(petreu_log, "%dKB unit installed.", petreu_size >> 10);
+    log_message(petreu_log, "%dKiB unit installed.", petreu_size >> 10);
 
     if (!util_check_null_string(petreu_filename)) {
         if (util_file_load(petreu_filename, petreu_ram, (size_t)petreu_size,
-            UTIL_FILE_LOAD_RAW) < 0) {
+                           UTIL_FILE_LOAD_RAW) < 0) {
             log_message(petreu_log, "Reading PET REU image %s failed.",
                         petreu_filename);
             if (util_file_save(petreu_filename, petreu_ram, petreu_size) < 0) {
@@ -269,8 +390,9 @@ static int petreu_activate(void)
 
 static int petreu_deactivate(void)
 {
-    if (petreu_ram == NULL)
+    if (petreu_ram == NULL) {
         return 0;
+    }
 
     if (!util_check_null_string(petreu_filename)) {
         if (util_file_save(petreu_filename, petreu_ram, petreu_size) < 0) {
@@ -299,175 +421,212 @@ void petreu_shutdown(void)
 /* This might be over-simplifying things, returning the
    value without taking timers and interrupts into
    acount, if needed I'll fix this in the future. */
-BYTE read_petreu_reg(WORD addr)
+static uint8_t read_petreu_reg(uint16_t addr)
 {
-    BYTE retval;
+    uint8_t retval;
 
     retval = petreu[addr & 0xf];
 
     return retval;
 }
 
-BYTE read_petreu2_reg(WORD addr)
+static uint8_t read_petreu2_reg(uint16_t addr)
 {
-    BYTE retval;
+    uint8_t retval;
 
-    if (petreu_size_kb!=128)
+    if (petreu_size_kb > 128) {
         retval = petreu2[addr & 0xf];
-    else
+    } else {
+        /* Read empty space */
         retval = (addr >> 8) & 0xff;
+    }
 
     return retval;
 }
 
 /* When direction bits are set to input, the corrosponding
    bits of the latches go high */
-static BYTE getrealvalue(BYTE reg, BYTE dir)
+static uint8_t getrealvalue(uint8_t reg, uint8_t dir)
 {
-  BYTE retval;
+    uint8_t retval;
 
-  retval = reg&dir;
-  retval = retval|(~dir);
-
-  return retval;
-}
-
-static BYTE get_petreu_ram(WORD addr)
-{
-    BYTE retval;
-    BYTE real_register_b_value;
-    BYTE real_register_a_value;
-
-    if (petreu[PETREU_DIRECTION_B] != 0xff
-        && petreu[PETREU_DIRECTION_B] != 0x7f)
-        real_register_b_value = getrealvalue(petreu[PETREU_REGISTER_B],
-                                             petreu[PETREU_DIRECTION_B]);
-    else
-        real_register_b_value = petreu[PETREU_REGISTER_B];
-
-    if (petreu[PETREU_DIRECTION_A] != 0xff)
-        real_register_a_value = getrealvalue(petreu[PETREU_REGISTER_A],
-                                             petreu[PETREU_DIRECTION_A]);
-    else
-        real_register_a_value = petreu[PETREU_REGISTER_A];
-
-    retval = petreu_ram[(petreu_bank << 15) + ((real_register_b_value & 0x7f)
-             << 8) + real_register_a_value];
+    retval = reg & dir;
+    retval = retval | (~dir);
 
     return retval;
 }
 
-static BYTE get_petreu2_ram(WORD addr)
+static uint8_t get_petreu_ram(uint16_t addr)
 {
-    BYTE retval;
-    BYTE real_register_b_value;
-    BYTE real_register_a_value;
-    BYTE real_bank_value;
+    uint8_t retval;
+    uint8_t real_register_b_value;
+    uint8_t real_register_a_value;
 
-    if (petreu[PETREU_DIRECTION_B] != 0xff)
+    if (petreu[PETREU_DIRECTION_B] != 0xff
+        && petreu[PETREU_DIRECTION_B] != 0x7f) {
         real_register_b_value = getrealvalue(petreu[PETREU_REGISTER_B],
                                              petreu[PETREU_DIRECTION_B]);
-    else
+    } else {
         real_register_b_value = petreu[PETREU_REGISTER_B];
+    }
 
-    if (petreu[PETREU_DIRECTION_A] != 0xff)
+    if (petreu[PETREU_DIRECTION_A] != 0xff) {
         real_register_a_value = getrealvalue(petreu[PETREU_REGISTER_A],
                                              petreu[PETREU_DIRECTION_A]);
-    else
+    } else {
         real_register_a_value = petreu[PETREU_REGISTER_A];
+    }
 
-    if (petreu2[PETREU_DIRECTION_A] != 0xff)
+    retval = petreu_ram[(petreu_bank << 15) + ((real_register_b_value & 0x7f) << 8) + real_register_a_value];
+
+    return retval;
+}
+
+static uint8_t get_petreu2_ram(uint16_t addr)
+{
+    uint8_t retval;
+    uint8_t real_register_b_value;
+    uint8_t real_register_a_value;
+    uint8_t real_bank_value;
+
+    if (petreu[PETREU_DIRECTION_B] != 0xff) {
+        real_register_b_value = getrealvalue(petreu[PETREU_REGISTER_B],
+                                             petreu[PETREU_DIRECTION_B]);
+    } else {
+        real_register_b_value = petreu[PETREU_REGISTER_B];
+    }
+
+    if (petreu[PETREU_DIRECTION_A] != 0xff) {
+        real_register_a_value = getrealvalue(petreu[PETREU_REGISTER_A],
+                                             petreu[PETREU_DIRECTION_A]);
+    } else {
+        real_register_a_value = petreu[PETREU_REGISTER_A];
+    }
+
+    if (petreu2[PETREU_DIRECTION_A] != 0xff) {
         real_bank_value = getrealvalue(petreu2[PETREU_REGISTER_A],
-                                             petreu2[PETREU_DIRECTION_A]);
-    else
+                                       petreu2[PETREU_DIRECTION_A]);
+    } else {
         real_bank_value = petreu2[PETREU_REGISTER_A];
+    }
 
-    real_bank_value=(real_bank_value&((petreu_size_kb>>4)-1));
+    real_bank_value = real_bank_value & petreu_bank_mask;
 
     retval = petreu_ram[(real_bank_value << 16) + (real_register_b_value << 8) + real_register_a_value];
 
     return retval;
 }
 
-BYTE read_petreu_ram(WORD addr)
+static uint8_t read_petreu_ram(uint16_t addr)
 {
-  if (petreu_size_kb==128)
-    return get_petreu_ram(addr);
-  else
-    return get_petreu2_ram(addr);
+    if (petreu_size_kb == 128) {
+        return get_petreu_ram(addr);
+    } else {
+        return get_petreu2_ram(addr);
+    }
 }
 
-void store_petreu_reg(WORD addr, BYTE byte)
+static void store_petreu_reg(uint16_t addr, uint8_t byte)
 {
     petreu[addr & 0xf] = byte;
-    if ((petreu[PETREU_CONTROL] & 0xe) != 0xc)
+    /* CA2 - assume 0 if set to output and 1 if set to input */
+    if ((petreu[PETREU_CONTROL] & 0xe) != 0xc) {
         petreu_bank = 2;
-    else
+    } else {
         petreu_bank = 0;
-    if ((petreu[PETREU_CONTROL] & 0xe0) != 0xc0)
+    }
+    /* CB2 - assume 0 if set to output and 1 if set to input */
+    if ((petreu[PETREU_CONTROL] & 0xe0) != 0xc0) {
         petreu_bank++;
+    }
 }
 
-void store_petreu2_reg(WORD addr, BYTE byte)
+static void store_petreu2_reg(uint16_t addr, uint8_t byte)
 {
     petreu2[addr & 0xf] = byte;
 }
 
-static void put_petreu_ram(WORD addr, BYTE byte)
+static void put_petreu_ram(uint16_t addr, uint8_t byte)
 {
-    BYTE real_register_b_value;
-    BYTE real_register_a_value;
+    uint8_t real_register_b_value;
+    uint8_t real_register_a_value;
 
     if (petreu[PETREU_DIRECTION_B] != 0xff
-        && petreu[PETREU_DIRECTION_B] != 0x7f)
+        && petreu[PETREU_DIRECTION_B] != 0x7f) {
         real_register_b_value = getrealvalue(petreu[PETREU_REGISTER_B],
                                              petreu[PETREU_DIRECTION_B]);
-    else
+    } else {
         real_register_b_value = petreu[PETREU_REGISTER_B];
+    }
 
-    if (petreu[PETREU_DIRECTION_A] != 0xff)
+    if (petreu[PETREU_DIRECTION_A] != 0xff) {
         real_register_a_value = getrealvalue(petreu[PETREU_REGISTER_A],
                                              petreu[PETREU_DIRECTION_A]);
-    else
+    } else {
         real_register_a_value = petreu[PETREU_REGISTER_A];
+    }
 
     petreu_ram[(petreu_bank << 15) + ((real_register_b_value & 0x7f) << 8)
-        + real_register_a_value] = byte;
+               + real_register_a_value] = byte;
 }
 
-static void put_petreu2_ram(WORD addr, BYTE byte)
+static void put_petreu2_ram(uint16_t addr, uint8_t byte)
 {
-    BYTE real_register_b_value;
-    BYTE real_register_a_value;
-    BYTE real_bank_value;
+    uint8_t real_register_b_value;
+    uint8_t real_register_a_value;
+    uint8_t real_bank_value;
 
-    if (petreu[PETREU_DIRECTION_B] != 0xff)
+    if (petreu[PETREU_DIRECTION_B] != 0xff) {
         real_register_b_value = getrealvalue(petreu[PETREU_REGISTER_B],
                                              petreu[PETREU_DIRECTION_B]);
-    else
+    } else {
         real_register_b_value = petreu[PETREU_REGISTER_B];
+    }
 
-    if (petreu[PETREU_DIRECTION_A] != 0xff)
+    if (petreu[PETREU_DIRECTION_A] != 0xff) {
         real_register_a_value = getrealvalue(petreu[PETREU_REGISTER_A],
                                              petreu[PETREU_DIRECTION_A]);
-    else
+    } else {
         real_register_a_value = petreu[PETREU_REGISTER_A];
+    }
 
-    if (petreu2[PETREU_DIRECTION_A] != 0xff)
+    if (petreu2[PETREU_DIRECTION_A] != 0xff) {
         real_bank_value = getrealvalue(petreu2[PETREU_REGISTER_A],
-                                             petreu2[PETREU_DIRECTION_A]);
-    else
+                                       petreu2[PETREU_DIRECTION_A]);
+    } else {
         real_bank_value = petreu2[PETREU_REGISTER_A];
+    }
 
-    real_bank_value=(real_bank_value&((petreu_size_kb>>4)-1));
+    real_bank_value = real_bank_value & petreu_bank_mask;
 
     petreu_ram[(real_bank_value << 16) + (real_register_b_value << 8) + real_register_a_value] = byte;
 }
 
-void store_petreu_ram(WORD addr, BYTE byte)
+static void store_petreu_ram(uint16_t addr, uint8_t byte)
 {
-  if (petreu_size_kb==128)
-    put_petreu_ram(addr,byte);
-  else
-    put_petreu2_ram(addr,byte);
+    if (petreu_size_kb == 128) {
+        put_petreu_ram(addr, byte);
+    } else {
+        put_petreu2_ram(addr, byte);
+    }
+}
+
+static int petreu_dump(void)
+{
+    int real_bank;
+
+    if (petreu_size_kb == 128) {
+        real_bank = petreu_bank;
+    } else {
+        if (petreu2[PETREU_DIRECTION_A] != 0xff) {
+            real_bank = getrealvalue(petreu2[PETREU_REGISTER_A], petreu2[PETREU_DIRECTION_A]);
+        } else {
+            real_bank = petreu2[PETREU_REGISTER_A];
+        }
+        real_bank = real_bank & petreu_bank_mask;
+    }
+
+    mon_out("RAM size: %dKiB, Bank: %d\n", petreu_size_kb, real_bank);
+
+    return 0;
 }

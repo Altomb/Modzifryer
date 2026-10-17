@@ -1,8 +1,9 @@
 /*
- * masceruade-stubs.h - C64 expansion port stubs for the VIC20 masC=uerade adapter.
+ * masceruade-stubs.h - C64 expansion port stubs handling for the VIC20 masC=uerade adapter.
  *
  * Written by
  *  Marco van den Heuvel <blackystardust68@yahoo.com>
+ *  Bas Wassink <b.wassink@ziggo.nl>
  *
  * This file is part of VICE, the Versatile Commodore Emulator.
  * See README for copyright notice.
@@ -27,31 +28,13 @@
 #ifndef VICE_MASCUERADE_STUBS_H
 #define VICE_MASCUERADE_STUBS_H
 
-#include "cartio.h"
-
-struct c64export_resource_s {
-    const char *name;
-    unsigned int game;
-    unsigned int exrom;
-    io_source_t *io1;
-    io_source_t *io2;
-    unsigned int cartid;
-};
-typedef struct c64export_resource_s c64export_resource_t;
-
-typedef struct export_list_s {
-    struct export_list_s *previous;
-    c64export_resource_t *device;
-    struct export_list_s *next;
-} export_list_t;
-
-/* returns head of list if param is NULL, else the next item */
-extern export_list_t *c64export_query_list(export_list_t *item);
-extern void c64export_dump(void);
-
-extern int c64export_add(const c64export_resource_t *export_res);
-extern int c64export_remove(const c64export_resource_t *export_res);
-
-extern int c64export_resources_init(void);
+int mmc64_cart_enabled(void);
+int mmcreplay_cart_enabled(void);
+int retroreplay_cart_enabled(void);
+int rrnetmk3_cart_enabled(void);
+int cartridge_type_enabled(int type);
+int cartridge_flush_image(int type);
+int cartridge_save_image(int type, const char *filename);
 
 #endif
+

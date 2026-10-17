@@ -7,6 +7,7 @@
  * Written by
  *  Ettore Perazzoli <ettore@comm2000.it>
  *  Andreas Boose <viceteam@t-online.de>
+ *  Marco van den Heuvel <blackystardust68@yahoo.com>
  *
  * This file is part of VICE, the Versatile Commodore Emulator.
  * See README for copyright notice.
@@ -30,23 +31,39 @@
 
 #include "vice.h"
 
+#ifdef _FILE_OFFSET_BITS
+#undef _FILE_OFFSET_BITS
+#endif
+#define _FILE_OFFSET_BITS 64
+
 #include <assert.h>
 #include <ctype.h>
 #include <stdarg.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
+#include <limits.h>
 
 #ifdef HAVE_STRINGS_H
 #include <strings.h>
 #endif
 
 #include "archdep.h"
-#include "ioutil.h"
 #include "lib.h"
 #include "log.h"
+
 #include "util.h"
 
+
+/* #define DBGUTIL */
+
+#ifdef DBGUTIL
+#define DBG(x)  printf x
+#else
+#define DBG(x)
+#endif
 
 /* Malloc a new string whose contents concatenate the arguments until the
    first NULL pointer (max `_CONCAT_MAX_ARGS' arguments).  */
@@ -64,8 +81,8 @@ char *util_concat(const char *s, ...)
 
     va_start(ap, s);
     for (i = 1;
-        i < _CONCAT_MAX_ARGS && (arg = va_arg(ap, const char *)) != NULL;
-        i++) {
+         i < _CONCAT_MAX_ARGS && (arg = va_arg(ap, const char *)) != NULL;
+         i++) {
         arg_len[i] = strlen(arg);
         tot_len += arg_len[i];
     }
@@ -74,8 +91,9 @@ char *util_concat(const char *s, ...)
 
     newp = lib_malloc(tot_len + 1);
 
-    if (arg_len[0] > 0)
+    if (arg_len[0] > 0) {
         memcpy(newp, s, arg_len[0]);
+    }
     ptr = newp + arg_len[0];
 
     va_start(ap, s);
@@ -86,24 +104,75 @@ char *util_concat(const char *s, ...)
     *ptr = '\0';
     va_end(ap);
 
-#ifdef AMIGA_SUPPORT
-    /* util_concat is often used to build complete paths, but the AmigaOS paths
-     * are a little special as they should look like <device>:<directory>/<file>
-     * but VICE doesn't handle this and will add a slash "/" after the colon
-     * making VICE fail to open files. I know this isn't the place to fix this,
-     * but I'm lazy and don't feel like changing a lot of places right now.
-     *     An alternative would be to override the fopen commands to make it
-     * possible to make this change as needed when opening the file.
-     */
-
-    while ((ptr = strstr(newp, ":/")) != NULL) {
-        strcpy(ptr + 1, ptr + 2);
-    }
-
-#endif
-
+    DBG(("util_concat %p - %s\n", newp, newp));
     return newp;
 }
+
+
+/** \brief  Join the strings in \a list with \a sep as separator
+ *
+ * \param[in]   list    list of strings, `NULL`-terminated
+ * \param[in]   sep     separator string (optional)
+ *
+ * Example:
+ * \code{.c}
+ *
+ *  const char **list[] = { "foo", "bar", "meloen", NULL };
+ *  char *s = util_strjoin(list, ";");
+ *  // returns: foo;bar;meloen
+ * \endcode
+ *
+ * \return  heap-allocated string, deallocate with lib_free()
+ */
+char *util_strjoin(const char **list, const char *sep)
+{
+    char *result;
+    char *p;
+    size_t i;
+    size_t list_size;
+    size_t total_len = 0;
+    size_t sep_len;
+
+    for (i = 0; list[i] != NULL; i++) {
+        total_len += strlen(list[i]);
+        /* NOP */
+    }
+    list_size = i;
+    /* total_len is now all strings in list added together without sep */
+
+    if (list_size == 0) {
+        /* no list */
+        return NULL;
+    } else if (list_size == 1) {
+        /* one item, just copy */
+        return lib_strdup(*list);
+    }
+
+    if (sep != NULL && *sep != '\0') {
+        sep_len = strlen(sep);
+    } else {
+        sep_len = 0;
+    }
+
+    total_len += ((list_size - 1) * sep_len) + 1;
+    result = lib_malloc(total_len);
+
+    p = result;
+    for (i = 0; i < list_size; i++) {
+        size_t ilen;
+        if (i > 0 && (sep_len > 0)) {
+            /* add sepatator */
+            memcpy(p, sep, sep_len);
+            p += sep_len;
+        }
+        ilen = strlen(list[i]);
+        memcpy(p, list[i], ilen);
+        p += ilen;
+    }
+    *p = '\0';
+    return result;
+}
+
 
 /* Add a line to a string.  */
 void util_addline(char **list, const char *line)
@@ -126,15 +195,15 @@ void util_addline_free(char **list, char *line)
    malloc'ed block of `max_buf_size' bytes of which only the first `buf_size'
    ones are used.  If the `buf' is not large enough, realloc it.  Return a
    pointer to the new block.  */
-BYTE *util_bufcat(BYTE *buf, int *buf_size, size_t *max_buf_size,
-                  const BYTE *src, int src_size)
+uint8_t *util_bufcat(uint8_t *buf, int *buf_size, size_t *max_buf_size,
+                     const uint8_t *src, int src_size)
 {
 #define BUFCAT_GRANULARITY 0x1000
     if (*buf_size + src_size > (int)(*max_buf_size)) {
-        BYTE *new_buf;
+        uint8_t *new_buf;
 
         *max_buf_size = (((*buf_size + src_size) / BUFCAT_GRANULARITY + 1)
-                        * BUFCAT_GRANULARITY);
+                         * BUFCAT_GRANULARITY);
         new_buf = lib_realloc(buf, *max_buf_size);
         buf = new_buf;
     }
@@ -151,15 +220,15 @@ void util_remove_spaces(char *s)
     char *p;
     size_t l = strlen(s);
 
-    for (p = s; *p == ' '; p++)
-        ;
+    for (p = s; *p == ' '; p++) {
+    }
 
     l -= (p - s);
     memmove(s, p, l + 1);
 
     if (l > 0) {
-        for (p = s + l - 1; l > 0 && *p == ' '; l--, p--)
-            ;
+        for (p = s + l - 1; l > 0 && *p == ' '; l--, p--) {
+        }
         *(p + 1) = '\0';
     }
 }
@@ -169,28 +238,32 @@ void util_remove_spaces(char *s)
 int util_string_set(char **str, const char *new_value)
 {
     if (*str == NULL) {
-        if (new_value != NULL)
-            *str = lib_stralloc(new_value);
+        if (new_value != NULL) {
+            *str = lib_strdup(new_value);
+        }
     } else {
         if (new_value == NULL) {
             lib_free(*str);
             *str = NULL;
         } else {
             /* Skip copy if src and dest are already the same.  */
-            if (strcmp(*str, new_value) == 0)
+            if (strcmp(*str, new_value) == 0) {
                 return -1;
+            }
 
             *str = lib_realloc(*str, strlen(new_value) + 1);
             strcpy(*str, new_value);
         }
     }
+    DBG(("util_string_set %p - %s\n", *str, *str));
     return 0;
 }
 
 int util_check_null_string(const char *string)
 {
-    if (string != NULL && *string != '\0')
+    if (string != NULL && *string != '\0') {
         return 0;
+    }
 
     return -1;
 }
@@ -206,7 +279,7 @@ int util_check_filename_access(const char *filename)
             return -1;
         } else {
             fclose(file);
-            ioutil_remove(filename);
+            archdep_remove(filename);
             return 0;
         }
     } else {
@@ -216,64 +289,6 @@ int util_check_filename_access(const char *filename)
 }
 
 /* ------------------------------------------------------------------------- */
-
-int util_string_to_long(const char *str, const char **endptr, int base,
-                        long *result)
-{
-    const char *sp, *ep;
-    long weight, value;
-    long sign;
-    char last_letter = 0;       /* Initialize to make compiler happy.  */
-    char c;
-
-    if (base > 10)
-        last_letter = 'A' + base - 11;
-
-    c = toupper((int) *str);
-
-    if (!isspace((int)c)
-        && !isdigit((int)c)
-        && (base <= 10 || c > last_letter || c < 'A')
-        && c != '+' && c != '-')
-        return -1;
-
-    if (*str == '+') {
-        sign = +1;
-        str++;
-    } else if (*str == '-') {
-        str++;
-        sign = -1;
-    } else
-        sign = +1;
-
-    for (sp = str; isspace((int)*sp); sp++)
-        ;
-
-    for (ep = sp;
-         (isdigit((int)*ep)
-          || (base > 10
-              && toupper((int)*ep) <= last_letter
-              && toupper((int)*ep) >= 'A')); ep++)
-        ;
-
-    if (ep == sp)
-        return -1;
-
-    if (endptr != NULL)
-        *endptr = (char *)ep;
-
-    ep--;
-
-    for (value = 0, weight = 1; ep >= sp; weight *= base, ep--) {
-        if (base > 10 && toupper((int) *ep) >= 'A')
-            value += weight * (toupper((int)*ep) - 'A' + 10);
-        else
-            value += weight * (int)(*ep - '0');
-    }
-
-    *result = value * sign;
-    return 0;
-}
 
 /* Replace every occurrence of `string' in `s' with `replacement' and return
    the result as a malloc'ed string.  */
@@ -292,8 +307,8 @@ char *util_subst(const char *s, const char *string, const char *replacement)
        time.  */
     for (num_occurrences = 0, sp = s;
          (sp = strstr(sp, string)) != NULL;
-         num_occurrences++, sp += string_len)
-        ;
+         num_occurrences++, sp += string_len) {
+    }
 
     total_size = (int)(s_len - (string_len - replacement_len) * num_occurrences + 1);
 
@@ -302,10 +317,11 @@ char *util_subst(const char *s, const char *string, const char *replacement)
     sp = s;
     dp = result;
     do {
-        char *f = strstr(sp, string);
+        char *f = (char*)strstr(sp, string);
 
-        if (f == NULL)
+        if (f == NULL) {
             break;
+        }
 
         memcpy(dp, sp, f - sp);
         memcpy(dp + (f - sp), replacement, replacement_len);
@@ -322,68 +338,81 @@ char *util_subst(const char *s, const char *string, const char *replacement)
 
 /* ------------------------------------------------------------------------- */
 
-/* Return the length of an open file in bytes.  */
-size_t util_file_length(FILE *fd)
-{
-    size_t off, filesize;
-
-    off = ftell(fd);
-    fseek(fd, 0, SEEK_END);
-    filesize = ftell(fd);
-    fseek(fd, (long)off, SEEK_SET);
-    return filesize;
-}
-
 /* Load the first `size' bytes of file named `name' into `dest'.  Return 0 on
    success, -1 on failure.  */
-int util_file_load(const char *name, BYTE *dest, size_t size,
+int util_file_load(const char *name, uint8_t *dest, size_t size,
                    unsigned int load_flag)
 {
     FILE *fd;
-    size_t i, length, r = 0;
+    size_t r = 0;
     long start = 0;
+    off_t length;
 
     if (util_check_null_string(name)) {
-        log_error(LOG_ERR, "No file name given for load_file().");
+        log_error(LOG_DEFAULT, "No file name given for util_file_load().");
         return -1;
     }
 
     fd = fopen(name, MODE_READ);
 
-    if (fd == NULL)
+    if (fd == NULL) {
         return -1;
+    }
 
-    length = util_file_length(fd);
+    length = archdep_file_size(fd);
+    if (length < 0) {
+        fclose(fd);
+        return -1;
+    }
 
     if ((load_flag & UTIL_FILE_LOAD_SKIP_ADDRESS) && (length & 2)) {
         start = 2;
         length -= 2;
     }
 
-    if (length > size) {
+    if ((size_t)length != size) {
         fclose(fd);
         return -1;
     }
 
-    if ((load_flag & UTIL_FILE_LOAD_FILL) == 0 && length != size) {
-        fclose(fd);
-        return -1;
-    }
-
-    for (i = 0; i < size; i += length) {
-        fseek(fd, start, SEEK_SET);
-        if (i + length > size)
-            break;
-        r = fread((void *)&(dest[i]), length, 1, fd);
-/* log_debug("READ %i bytes to offset %i result %i.",length,i,r); */
-        if (r < 1)
-            break;
-    }
-
+    fseek(fd, start, SEEK_SET);
+    r = fread(dest, 1, size, fd);
     fclose(fd);
 
-    if (r < 1)
+    if (r < size) {
         return -1;
+    }
+    return 0;
+}
+
+/* Allocate buffer and load entire file + terminating null byte.  Return 0 on
+   success, -1 on failure.  */
+int util_file_load_string(FILE *fd, char **dest)
+{
+    char *buffer;
+    off_t size;
+    size_t r;
+
+    size = archdep_file_size(fd);
+    if (size < 0) {
+        return -1;
+    }
+    buffer = lib_malloc((size_t)size + 1);
+
+    r = fread(buffer, 1, (size_t)size, fd);
+
+    if (r < (size_t)size) {
+        lib_free(buffer);
+        log_error(LOG_DEFAULT,
+                  "Could only load %"PRI_SIZE_T" of %"PRI_SIZE_T" bytes",
+                  r, (size_t)size);
+        return -1;
+    }
+
+    /* Add terminating byte to allow this buffer to be used as string */
+    buffer[size] = '\0';
+
+    *dest = buffer;
 
     return 0;
 }
@@ -391,30 +420,36 @@ int util_file_load(const char *name, BYTE *dest, size_t size,
 /* Write the first `size' bytes of `src' into a newly created file `name'.
    If `name' already exists, it is replaced by the new one.  Returns 0 on
    success, -1 on failure.  */
-int util_file_save(const char *name, BYTE *src, int size)
+int util_file_save(const char *name, uint8_t *src, int size)
 {
     FILE *fd;
     size_t r;
 
     if (util_check_null_string(name)) {
-        log_error(LOG_ERR, "No file name given for save_file().");
+        log_error(LOG_DEFAULT, "No file name given for save_file().");
         return -1;
     }
 
     fd = fopen(name, MODE_WRITE);
 
-    if (fd == NULL)
+    if (fd == NULL) {
         return -1;
+    }
 
     r = fwrite((char *)src, size, 1, fd);
 
     fclose(fd);
 
-    if (r < 1)
+    if (r < 1) {
         return -1;
+    }
 
     return 0;
 }
+
+
+
+
 
 /* Input one line from the file descriptor `f'.  FIXME: we need something
    better, like GNU `getline()'.  */
@@ -425,8 +460,9 @@ int util_get_line(char *buf, int bufsize, FILE *f)
 
     r = fgets(buf, bufsize, f);
 
-    if (r == NULL)
+    if (r == NULL) {
         return -1;
+    }
 
     len = strlen(buf);
 
@@ -436,14 +472,17 @@ int util_get_line(char *buf, int bufsize, FILE *f)
         /* Remove trailing newline characters.  */
         /* Remove both 0x0a and 0x0d characters, this solution makes it */
         /* work on all target platforms: Unixes, Win32, DOS, and even for MAC */
-        while ((len > 0) && ((*(buf + len - 1) == 0x0d)
-            || (*(buf + len - 1) == 0x0a)))
+        while ((len > 0) && ((*(buf + len - 1) == 0x0d) || (*(buf + len - 1) == 0x0a))) {
             len--;
+        }
 
         /* Remove useless spaces.  */
-        while ((len > 0) && (*(buf + len - 1) == ' '))
+        while ((len > 0) && (*(buf + len - 1) == ' ')) {
             len--;
-        for (p = buf; *p == ' '; p++, len--);
+        }
+        for (p = buf; *p == ' ' && len > 0; p++, len--) {
+        }
+
         memmove(buf, p, len + 1);
         *(buf + len) = '\0';
     }
@@ -457,30 +496,58 @@ void util_fname_split(const char *path, char **directory_return,
                       char **name_return)
 {
     const char *p;
-
+#if 0
+    printf("%s:%d:%s(): got '%s'\n", __FILE__, __LINE__, __func__, path);
+#endif
+    /* if no input, return "."/"" */
     if (path == NULL) {
-        *directory_return = *name_return = NULL;
+        if (directory_return != NULL) {
+            *directory_return = lib_strdup(".");
+        }
+        if (name_return != NULL) {
+            *name_return = lib_strdup("");
+        }
+#if 0
+        printf("%s:%d:%s(): dir = '%s', name = '%s' (didn't find DIRSEP)\n",
+                __FILE__, __LINE__, __func__,
+                directory_return != NULL ? *directory_return : "NULL",
+                name_return != NULL ? *name_return : "NULL");
+#endif
         return;
     }
 
-    p = strrchr(path, FSDEV_DIR_SEP_CHR);
+    /* get ptr to last dir seperator before the filename */
+    p = strrchr(path, ARCHDEP_DIR_SEP_CHR);
 
-#if defined __MSDOS__ || defined WIN32 || defined __OS2__
+#if (ARCHDEP_DIR_SEP_CHR == '\\')
+# if 0
+    printf("WE HAVE \\ AS A DIR SEPARATOR!\n");
+# endif
     /* Both `/' and `\' are valid.  */
     {
         const char *p1;
 
-        p1 = strrchr(path, '\\');
-        if (p == NULL || p < p1)
+        p1 = strrchr(path, '/');
+        if (p == NULL || p < p1) {
             p = p1;
+        }
     }
 #endif
 
+    /* if no path in the input, return "." as path */
     if (p == NULL) {
-        if (directory_return != NULL)
-            *directory_return = NULL;
-        if (name_return != NULL)
-            *name_return = lib_stralloc(path);
+        if (directory_return != NULL) {
+            *directory_return = lib_strdup(".");
+        }
+        if (name_return != NULL) {
+            *name_return = lib_strdup(path);
+        }
+#if 0
+        printf("%s:%d:%s(): dir = '%s', name = '%s' (didn't find DIRSEP)\n",
+                __FILE__, __LINE__, __func__,
+                directory_return != NULL ? *directory_return : "NULL",
+                name_return != NULL ? *name_return : "NULL");
+#endif
         return;
     }
 
@@ -490,178 +557,152 @@ void util_fname_split(const char *path, char **directory_return,
         (*directory_return)[p - path] = '\0';
     }
 
-    if (name_return != NULL)
-        *name_return = lib_stralloc(p + 1);
-
+    if (name_return != NULL) {
+        *name_return = lib_strdup(p + 1);
+    }
+#if 0
+    printf("%s:%d:%s(): dir = '%s', name = '%s' (didn't find DIRSEP)\n",
+            __FILE__, __LINE__, __func__,
+            directory_return != NULL ? *directory_return : "NULL",
+            name_return != NULL ? *name_return : "NULL");
+#endif
     return;
 }
 
 /* ------------------------------------------------------------------------- */
 
-/*! \brief read an array of DWORDs (4 bytes) in low endian from a file
+/*! \brief Read bytes from a position in a file
 
  \param fd
    file descriptor as obtained by fopen().
 
  \param buf
-   Pointer to a buffer where the DWORDs will be stored.
+   pointer where to from the file
 
  \param num
-   number of DWORD to read. buf is considered as an array defined
-   as DWORD buf[num].
+   number of bytes to read.
+
+ \param offset
+   the offset from start of file
 
  \return
    0 on success, else -1.
 
- \remark
-   num is the number of DWORDs to read; it is *not* the
-   size of the buffer in bytes!
 */
-int util_dword_read(FILE *fd, DWORD *buf, size_t num)
+
+int util_fpread(FILE *fd, void *buf, size_t num, long offset)
 {
-    unsigned int i;
-    BYTE *tmpbuf;
-
-    assert( sizeof(DWORD) == 4);
-
-    tmpbuf = lib_malloc(4 * num);
-
-    if (fread(tmpbuf, num, 4, fd) < 4) {
-        lib_free(tmpbuf);
+    if (fseek(fd, offset, SEEK_SET) < 0 || fread(buf, num, 1, fd) < 1) {
         return -1;
     }
 
-    for (i = 0; i < num; i++) {
-        buf[i] = (tmpbuf[i * 4] + (tmpbuf[i * 4 + 1] << 8)
-            + (tmpbuf[i * 4 + 2] << 16) + (tmpbuf[i * 4 + 3] << 24));
-    }
-
-    lib_free(tmpbuf);
     return 0;
 }
 
-/*! \brief write an array of DWORDs (4 bytes) in low endian to a file
+/*! \brief Write bytes to a position in a file
 
  \param fd
    file descriptor as obtained by fopen().
 
  \param buf
-   Pointer to the array of DWORDs to be written to the file
+   pointer to the data to be written to the file
 
  \param num
-   number of DWORD to read. buf is considered as an array defined
-   as DWORD buf[num].
+   number of bytes to write.
+
+ \param offset
+   the offset from start of file
 
  \return
    0 on success, else -1.
 
- \remark
-   num is the number of DWORDs to write; it is *not* the
-   size of the buffer in bytes!
 */
-int util_dword_write(FILE *fd, DWORD *buf, size_t num)
+int util_fpwrite(FILE *fd, const void *buf, size_t num, long offset)
 {
-    unsigned int i;
-    BYTE *tmpbuf;
-
-    assert( sizeof(DWORD) == 4 );
-
-    tmpbuf = lib_malloc(4 * num);
-
-    for (i = 0; i < num; i++) {
-        tmpbuf[i * 4] = (BYTE)(buf[i] & 0xff);
-        tmpbuf[i * 4 + 1] = (BYTE)((buf[i] >> 8) & 0xff);
-        tmpbuf[i * 4 + 2] = (BYTE)((buf[i] >> 16) & 0xff);
-        tmpbuf[i * 4 + 3] = (BYTE)((buf[i] >> 24) & 0xff);
-    }
-
-    if (fwrite(tmpbuf, num, 4, fd) < 1) {
-        lib_free(tmpbuf);
+    if (fseek(fd, offset, SEEK_SET) < 0 || fwrite(buf, num, 1, fd) < 1) {
         return -1;
     }
-
-    lib_free(tmpbuf);
     return 0;
 }
 
-void util_dword_to_be_buf(BYTE *buf, DWORD data)
+void util_dword_to_be_buf(uint8_t *buf, uint32_t data)
 {
-    buf[3] = (BYTE)(data & 0xff);
-    buf[2] = (BYTE)((data >> 8) & 0xff);
-    buf[1] = (BYTE)((data >> 16) & 0xff);
-    buf[0] = (BYTE)((data >> 24) & 0xff);
+    buf[3] = (uint8_t)(data & 0xff);
+    buf[2] = (uint8_t)((data >> 8) & 0xff);
+    buf[1] = (uint8_t)((data >> 16) & 0xff);
+    buf[0] = (uint8_t)((data >> 24) & 0xff);
 }
 
-void util_dword_to_le_buf(BYTE *buf, DWORD data)
+void util_dword_to_le_buf(uint8_t *buf, uint32_t data)
 {
-    buf[0] = (BYTE)(data & 0xff);
-    buf[1] = (BYTE)((data >> 8) & 0xff);
-    buf[2] = (BYTE)((data >> 16) & 0xff);
-    buf[3] = (BYTE)((data >> 24) & 0xff);
+    buf[0] = (uint8_t)(data & 0xff);
+    buf[1] = (uint8_t)((data >> 8) & 0xff);
+    buf[2] = (uint8_t)((data >> 16) & 0xff);
+    buf[3] = (uint8_t)((data >> 24) & 0xff);
 }
 
-DWORD util_le_buf_to_dword(BYTE *buf)
+uint32_t util_le_buf_to_dword(uint8_t *buf)
 {
-    DWORD data;
+    uint32_t data;
 
     data = buf[0] | (buf[1] << 8) | (buf[2] << 16) | (buf[3] << 24);
 
     return data;
 }
 
-DWORD util_be_buf_to_dword(BYTE *buf)
+uint32_t util_be_buf_to_dword(uint8_t *buf)
 {
-    DWORD data;
+    uint32_t data;
 
     data = buf[3] | (buf[2] << 8) | (buf[1] << 16) | (buf[0] << 24);
 
     return data;
 }
 
-void util_int_to_be_buf4(BYTE *buf, int data)
+void util_int_to_be_buf4(uint8_t *buf, int data)
 {
-    util_dword_to_be_buf(buf, (DWORD)data);
+    util_dword_to_be_buf(buf, (uint32_t)data);
 }
 
-void util_int_to_le_buf4(BYTE *buf, int data)
+void util_int_to_le_buf4(uint8_t *buf, int data)
 {
-    util_dword_to_le_buf(buf, (DWORD)data);
+    util_dword_to_le_buf(buf, (uint32_t)data);
 }
 
-int util_le_buf4_to_int(BYTE *buf)
+int util_le_buf4_to_int(uint8_t *buf)
 {
     return (int)util_le_buf_to_dword(buf);
 }
 
-int util_be_buf4_to_int(BYTE *buf)
+int util_be_buf4_to_int(uint8_t *buf)
 {
     return (int)util_be_buf_to_dword(buf);
 }
 
-void util_word_to_be_buf(BYTE *buf, WORD data)
+void util_word_to_be_buf(uint8_t *buf, uint16_t data)
 {
-    buf[1] = (BYTE)(data & 0xff);
-    buf[0] = (BYTE)((data >> 8) & 0xff);
+    buf[1] = (uint8_t)(data & 0xff);
+    buf[0] = (uint8_t)((data >> 8) & 0xff);
 }
 
-void util_word_to_le_buf(BYTE *buf, WORD data)
+void util_word_to_le_buf(uint8_t *buf, uint16_t data)
 {
-    buf[0] = (BYTE)(data & 0xff);
-    buf[1] = (BYTE)((data >> 8) & 0xff);
+    buf[0] = (uint8_t)(data & 0xff);
+    buf[1] = (uint8_t)((data >> 8) & 0xff);
 }
 
-WORD util_le_buf_to_word(BYTE *buf)
+uint16_t util_le_buf_to_word(uint8_t *buf)
 {
-    WORD data;
+    uint16_t data;
 
     data = buf[0] | (buf[1] << 8);
 
     return data;
 }
 
-WORD util_be_buf_to_word(BYTE *buf)
+uint16_t util_be_buf_to_word(uint8_t *buf)
 {
-    WORD data;
+    uint16_t data;
 
     data = buf[1] | (buf[0] << 8);
 
@@ -688,7 +729,7 @@ int util_file_exists(const char *name)
 
 char *util_find_next_line(const char *pos)
 {
-    char *p = strchr(pos, '\n');
+    const char *p = strchr(pos, '\n');
 
     return (char *)(p == NULL ? pos : p + 1);
 }
@@ -697,156 +738,57 @@ char *util_find_prev_line(const char *text, const char *pos)
 {
     const char *p;
 
-    if (pos - text <= 2)
+    if (pos - text <= 2) {
         return (char *) text;
+    }
 
-    for (p = pos - 2; p != text; p--)
-        if (*p == '\n')
+    for (p = pos - 2; p != text; p--) {
+        if (*p == '\n') {
             break;
+        }
+    }
 
-    if (*p == '\n')
+    if (*p == '\n') {
         p++;
+    }
 
     return (char *)p;
 }
 
 /* ------------------------------------------------------------------------- */
 
-/* The following are replacements for libc functions that could be missing.  */
-
-#if !defined HAVE_MEMMOVE
-
-void *memmove(void *target, const void *source, unsigned int length)
-{
-    char *tptr = (char *) target;
-    const char *sptr = (const char *) source;
-
-    if (tptr > sptr) {
-        tptr += length;
-        sptr += length;
-        while (length--)
-            *(--tptr) = *(--sptr);
-    } else if (tptr < sptr) {
-        while (length--)
-            *(tptr++) = *(sptr++);
-    }
-
-    return target;
-}
-
-#endif /* !defined HAVE_MEMMOVE */
-
-#if !defined HAVE_ATEXIT
-
-static void atexit_support_func(int status, void *arg)
-{
-    void (*f)(void) = (void (*)(void))arg;
-
-    f();
-}
-
-int atexit(void (*function)(void))
-{
-    return on_exit(atexit_support_func, (void *)function);
-}
-
-#endif /* !defined HAVE_ATEXIT */
-
-#if !defined HAVE_STRERROR
-
-char *strerror(int errnum)
-{
-    static char buffer[100];
-
-    sprintf(buffer, "Error %d", errnum);
-    return buffer;
-}
-
-#endif /* !defined HAVE_STRERROR */
-
-/* The following `strcasecmp()' and `strncasecmp()' implementations are
-   taken from:
-   GLIB - Library of useful routines for C programming
-   Copyright (C) 1995-1997 Peter Mattis, Spencer Kimball and Josh
-   MacDonald.
-   The source is available from http://www.gtk.org/.  */
-
-#if !defined HAVE_STRCASECMP
-
-int strcasecmp(const char *s1, const char *s2)
-{
-    int c1, c2;
-
-    if (s1 == NULL || s2 == NULL)
-        return 0;
-
-    while (*s1 && *s2) {
-        /* According to A. Cox, some platforms have islower's that don't work
-           right on non-uppercase.  */
-        c1 = isupper ((unsigned int)*s1) ? tolower ((unsigned int)*s1) : *s1;
-        c2 = isupper ((unsigned int)*s2) ? tolower ((unsigned int)*s2) : *s2;
-        if (c1 != c2)
-            return (c1 - c2);
-        s1++; s2++;
-    }
-
-    return (((int)(unsigned char)*s1) - ((int)(unsigned char)*s2));
-}
-
-#endif
-
-#if !defined HAVE_STRNCASECMP
-
-int strncasecmp(const char *s1, const char *s2, unsigned int n)
-{
-    int c1, c2;
-
-    if (s1 == NULL || s2 == NULL)
-        return 0;
-
-    while (n-- && *s1 && *s2) {
-        /* According to A. Cox, some platforms have islower's that don't work
-           right on non-uppercase.  */
-        c1 = isupper((unsigned int)*s1) ? tolower((unsigned int)*s1) : *s1;
-        c2 = isupper((unsigned int)*s2) ? tolower((unsigned int)*s2) : *s2;
-        if (c1 != c2)
-            return (c1 - c2);
-        s1++;
-        s2++;
-    }
-
-    if (n)
-        return (((int)(unsigned char)*s1) - ((int)(unsigned char)*s2));
-    else
-        return 0;
-}
-
-#endif
-
-/* ------------------------------------------------------------------------- */
-
-/* util_add_extension() add the extension if not already there.
-   If the extension is added `name' is realloced. */
-
+/** \brief  Add \a extension to a\ name if missing
+ *
+ * \param[in,out]   name        input and final 'string'
+ * \param[in]       extension   extension to add to \a name
+ *
+ * \warning Since adding \a extension can trigger a realloc(3) of \a *name,
+ *          make sure to handle the output pointer properly.
+ *
+ */
 void util_add_extension(char **name, const char *extension)
 {
-    size_t name_len, ext_len;
+    size_t name_len;
+    size_t ext_len;
 
-    if (extension == NULL || *name == NULL)
+    if (extension == NULL || *name == NULL) {
         return;
+    }
 
-    name_len = strlen(*name);
     ext_len = strlen(extension);
 
-    if (ext_len == 0)
+    if (ext_len == 0) {
         return;
+    }
 
+    name_len = strlen(*name);
     if ((name_len > ext_len + 1)
-        && (strcasecmp(&((*name)[name_len - ext_len]), extension) == 0))
+        && (util_strcasecmp(&((*name)[name_len - ext_len]), extension) == 0)) {
         return;
+    }
 
     *name = lib_realloc(*name, name_len + ext_len + 2);
-    (*name)[name_len] = FSDEV_EXT_SEP_CHR;
+    (*name)[name_len] = '.';
     memcpy(&((*name)[name_len + 1]), extension, ext_len + 1);
 }
 
@@ -855,7 +797,7 @@ char *util_add_extension_const(const char *filename, const char *extension)
 {
     char *ext_filename;
 
-    ext_filename = lib_stralloc(filename);
+    ext_filename = lib_strdup(filename);
 
     util_add_extension(&ext_filename, extension);
 
@@ -864,39 +806,43 @@ char *util_add_extension_const(const char *filename, const char *extension)
 
 /* like util_add_extension(), but using a var[MAXPATH] type string
    without using realloc if extension is not present. */
-
 void util_add_extension_maxpath(char *name, const char *extension, unsigned int maxpath)
 {
     size_t name_len, ext_len;
 
-    if (extension == NULL || name == NULL)
+    if (extension == NULL || name == NULL) {
         return;
+    }
 
     name_len = strlen(name);
     ext_len = strlen(extension);
 
-    if (ext_len == 0)
+    if (ext_len == 0) {
         return;
+    }
 
-    if (name_len+ext_len>maxpath)
+    if (name_len + ext_len > maxpath) {
         return;
+    }
 
     if ((name_len > ext_len + 1)
-        && (strcasecmp(&((name)[name_len - ext_len]), extension) == 0))
+        && (util_strcasecmp(&((name)[name_len - ext_len]), extension) == 0)) {
         return;
+    }
 
-    sprintf(name,"%s%c%s",name,FSDEV_EXT_SEP_CHR,extension);
+    name[name_len] = '.';
+    memcpy(name + name_len + 1, extension, ext_len + 1);
 }
 
-char *util_get_extension(char *filename)
+const char *util_get_extension(const char *filename)
 {
-    char *s;
+    const char *s;
 
     if (filename == NULL) {
         return NULL;
     }
 
-    s = strrchr(filename, FSDEV_EXT_SEP_CHR);
+    s = strrchr(filename, '.');
     if (s) {
         return s + 1;
     } else {
@@ -909,7 +855,7 @@ char *util_get_extension(char *filename)
    out of the main sources. */
 char util_tolower(char c)
 {
-    return (char)tolower((int)c);
+    return (char)tolower((unsigned char)c);
 }
 
 /* char to char toupper function, still uses toupper,
@@ -917,5 +863,301 @@ char util_tolower(char c)
    out of the main sources. */
 char util_toupper(char c)
 {
-    return (char)toupper((int)c);
+    return (char)toupper((unsigned char)c);
+}
+
+/** \brief  Skip leading whitespace in string
+ *
+ * \param[in]   s   string
+ *
+ * \return  pointer to first non-whitespace character or terminating nul
+ */
+const char *util_skip_whitespace(const char *s)
+{
+    while (*s != '\0' && isspace((unsigned char)*s)) {
+        s++;
+    }
+    return s;
+}
+
+/** \brief  Skip trailing whitespace in string
+ *
+ * \param[in]   s   string
+ *
+ * \return  pointer to first non-whitespace character or terminating nul,
+ *          starting from the end of the string
+ */
+const char *util_skip_whitespace_trailing(const char *s)
+{
+    const char *p;
+
+    if (*s == '\0') {
+        /* empty string */
+        return s;
+    }
+
+    /* last character in the string */
+    p = s + strlen(s) - 1;
+
+    while (*p != '\0' && isspace((unsigned char)*p)) {
+        p--;
+    }
+    if (p < s) {
+        /* entire string contained whitespace */
+        return s;
+    } else {
+        return p;
+    }
+}
+
+/* generate a list in the form "%X/%X/.../%X" */
+char *util_gen_hex_address_list(int start, int stop, int step)
+{
+    char *temp1, *temp2;
+    char *temp3 = NULL;
+    int i = start;
+
+    temp1 = lib_strdup("");
+    while (i < stop) {
+        temp2 = lib_msprintf("0x%X", (unsigned int)i);
+        temp3 = util_concat(temp1, temp2, NULL);
+        lib_free(temp1);
+        lib_free(temp2);
+        temp1 = temp3;
+        if (i + step < stop) {
+            temp3 = util_concat(temp1, "/", NULL);
+            lib_free(temp1);
+            temp1 = temp3;
+        }
+        i += step;
+    }
+    return temp3;
+}
+
+
+/** \brief  Join multiple paths into a single path
+ *
+ * Joins a list of strings into a path for use with the current arch
+ *
+ * \param   [in]    path    list of paths to join, NULL-terminated
+ *
+ * \return  heap-allocated string, free with lib_free()
+ */
+char *util_join_paths(const char *path, ...)
+{
+    const char *arg;
+    char *result;
+    char *endptr;
+    size_t result_len;
+    size_t len;
+    va_list ap;
+#if 0
+    printf("%s: first argument: '%s'\n", __func__, path);
+#endif
+    /* silly way to use a varags function, but lets catch it anyway */
+    if (path == NULL) {
+        return NULL;
+    }
+
+    /* determine size of result string */
+    va_start(ap, path);
+    result_len = strlen(path);
+    while ((arg = va_arg(ap, const char *)) != NULL) {
+        result_len += (strlen(arg) + 1);
+    }
+    va_end(ap);
+#if 0
+    /* cannot use %zu here due to MS' garbage C lib */
+    printf("%s: result length: %"PRI_SIZE_T"\n", __func__, result_len);
+#endif
+    /* initialize result string */
+    result = lib_calloc(result_len + 1, 1);
+    strcpy(result, path);
+    endptr = result + (ptrdiff_t)strlen(path);
+
+    /* now concatenate arguments into a pathname */
+    va_start(ap, path);
+    while ((arg = va_arg(ap, const char *)) != NULL) {
+#if 0
+        printf("%s: adding '%s' to the result.", __func__, arg);
+#endif
+        len = strlen(arg);
+        if (*arg != ARCHDEP_DIR_SEP_CHR) {
+            *endptr++ = ARCHDEP_DIR_SEP_CHR;
+        }
+        memcpy(endptr, arg, len + 1);
+        endptr += (ptrdiff_t)len;
+    }
+
+    va_end(ap);
+    return result;
+}
+
+
+/** \brief  Compare strings, ignoring case
+ *
+ * \param[in]   s1  string to compare
+ * \param[in]   s2  string to compare
+ *
+ * \return  -1 if \a s1 \< \a s2, 0 if \a s1 == \a s2, 1 if \a s1 \> \a s2
+ *
+ * \note    Does naive case-folding, so don't rely on this for sorting strings
+ *          in non-ASCII encoding (for example when e-umlaut exists but E-umlaut
+ *          doesn't exist)
+ */
+int util_strcasecmp(const char *s1, const char *s2)
+{
+    while (*s1 != '\0' && *s2 != '\0') {
+        int c1 = tolower((unsigned char)*s1);
+        int c2 = tolower((unsigned char)*s2);
+
+        if (c1 < c2) {
+            return -1;
+        } else if (c1 > c2) {
+            return 1;
+        }
+
+        s1++;
+        s2++;
+    }
+
+    if (*s1 == '\0' && *s2 == '\0') {
+        return 0;
+    } else if (*s1 == '\0') {
+        return -1;
+    } else {
+        return 1;
+    }
+}
+
+
+/** \brief  Compare strings, ignoring case, comparing at most \a n chars
+ *
+ * \param[in]   s1  string to compare
+ * \param[in]   s2  string to compare
+ *
+ * \return  -1 if \a s1 \< \a s2, 0 if \a s1 == \a s2, 1 if \a s1 \> \a s2
+ *
+ * \note    Does naive case-folding, so don't rely on this for sorting strings
+ *          in non-ASCII encoding (for example when e-umlaut exists but E-umlaut
+ *          doesn't exist)
+ */
+int util_strncasecmp(const char *s1, const char *s2, size_t n)
+{
+    while (*s1 != '\0' && *s2 != '\0' && n > 0) {
+        int c1 = tolower((unsigned char)*s1);
+        int c2 = tolower((unsigned char)*s2);
+
+        if (c1 < c2) {
+            return -1;
+        } else if (c1 > c2) {
+            return 1;
+        }
+
+        s1++;
+        s2++;
+        n--;
+    }
+
+    if ((n == 0) || (*s1 != '\0' && *s2 != '\0') || (*s1 == '\0' && *s2 == '\0')) {
+        return 0;
+    } else if (*s1 == '\0') {
+        return -1;
+    } else {
+        return 1;
+    }
+}
+
+
+/** \brief  Split string into substrings
+ *
+ * Split \a string into substrings on \a delimiter, returning at most
+ * \a max_tokens substrings, plus the remainder as a final substring if there
+ * is anything left in \a string. The \a delimiter is not among the substrings,
+ * except in the remainder if there is a remainder.
+ *
+ * If \a string is `NULL` or "" `NULL is returned.
+ * If \a delimiter is `NULL` or "" an array of a single element is returned,
+ * with the single element being a copy of the full \a string.
+ * If \a max_tokens is reached the remaining characters in \a string are
+ * returned as the final array element.
+ * Consecutive instances of \a delimiter are treated as a single delimiter,
+ * there are no empty tokens returned.
+ *
+ * \param[in]   string      string to split on \a delimiter
+ * \param[in]   delimiter   string delimiter
+ * \param[in]   max_tokens  maximum number of substrings to generate
+ *
+ * \return  array of substrings, `NULL`-terminated
+ *
+ * \note    free both the array and its elements with lib_free() after use
+ */
+char **util_strsplit(const char *string, const char *delimiter, int max_tokens)
+{
+    size_t       delimlen;
+    size_t       ressize;
+    size_t       resindex;
+    char       **result;
+    const char  *curpos;
+
+    if (string == NULL || *string == '\0') {
+        return NULL;
+    }
+    if (delimiter == NULL || *delimiter == '\0') {
+        result = lib_malloc(sizeof *result * 2);
+        result[0] = lib_strdup(string);
+        result[1] = NULL;
+        return result;
+    }
+    delimlen = strlen(delimiter);
+
+    if (max_tokens > 1) {
+        ressize = (size_t)max_tokens + 2; /* +1 for remainder, +1 for NULL */
+    } else {
+        ressize = 16;
+    }
+    result = lib_malloc(sizeof *result * ressize);
+
+    curpos   = string;
+    resindex = 0;
+    ressize  = 0;
+    while (*curpos != '\0' && ((max_tokens < 1) || (size_t)resindex < max_tokens)) {
+        const char *delimpos;
+        char       *token;
+        size_t      tokenlen;
+
+        /* -1 for remainder, -1 for terminating NULL */
+        if (resindex == ressize - 2) {
+            ressize *= 2;
+            result = realloc(result, sizeof *result * ressize);
+        }
+
+        delimpos = strstr(curpos, delimiter);
+        if (delimpos == NULL) {
+            /* no more data, append remainder */
+            break;
+        }
+
+        if (delimpos == curpos) {
+            /* delimiter at start of string or right after previous delimiter,
+             * skip */
+            curpos += delimlen;
+        } else {
+            /* append token */
+            tokenlen = (size_t)(delimpos - curpos);
+            token = lib_malloc(tokenlen + 1);
+            memcpy(token, curpos, tokenlen);
+            token[tokenlen] = '\0';
+            result[resindex++] = token;
+            curpos = delimpos + delimlen;
+        }
+    }
+
+    if (*curpos != '\0') {
+        /* add remainder of string as the final element */
+        result[resindex++] = lib_strdup(curpos);
+    }
+    /* terminate list */
+    result[resindex] = NULL;
+    return result;
 }

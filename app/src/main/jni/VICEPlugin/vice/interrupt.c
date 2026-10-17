@@ -3,7 +3,7 @@
  *
  * Written by
  *  Ettore Perazzoli <ettore@comm2000.it>
- *  André Fachat <fachat@physik.tu-chemnitz.de>
+ *  Andre Fachat <fachat@physik.tu-chemnitz.de>
  *  Andreas Boose <viceteam@t-online.de>
  *
  * This file is part of VICE, the Versatile Commodore Emulator.
@@ -60,8 +60,9 @@ void interrupt_cpu_status_reset(interrupt_cpu_status_t *cs)
     pending_int = cs->pending_int;
     int_name = cs->int_name;
     last_opcode_info_ptr = cs->last_opcode_info_ptr;
-    if (num_ints > 0)
+    if (num_ints > 0) {
         memset(pending_int, 0, num_ints * sizeof(*(cs->pending_int)));
+    }
     memset(cs, 0, sizeof(interrupt_cpu_status_t));
     cs->num_ints = num_ints;
     cs->pending_int = pending_int;
@@ -88,7 +89,7 @@ unsigned int interrupt_cpu_status_int_new(interrupt_cpu_status_t *cs,
     cs->pending_int[cs->num_ints - 1] = 0;
 
     cs->int_name = lib_realloc(cs->int_name, cs->num_ints * sizeof(char *));
-    cs->int_name[cs->num_ints - 1] = lib_stralloc(name);
+    cs->int_name[cs->num_ints - 1] = lib_strdup(name);
 
     return cs->num_ints - 1;
 }
@@ -103,11 +104,15 @@ void interrupt_cpu_status_destroy(interrupt_cpu_status_t *cs)
     if (cs != NULL) {
         unsigned int num;
 
-        for (num = 0; num < cs->num_ints; num++)
+        for (num = 0; num < cs->num_ints; num++) {
             lib_free(cs->int_name[num]);
+        }
 
         lib_free(cs->int_name);
         lib_free(cs->pending_int);
+
+        lib_free(cs->trap_func);
+        lib_free(cs->trap_data);
     }
 
     lib_free(cs);
@@ -119,8 +124,7 @@ void interrupt_set_nmi_trap_func(interrupt_cpu_status_t *cs,
     cs->nmi_trap_func = nmi_trap_func;
 }
 
-void interrupt_set_reset_trap_func(interrupt_cpu_status_t *cs,
-                                 void (*reset_trap_func)(void))
+void interrupt_set_reset_trap_func(interrupt_cpu_status_t *cs, void (*reset_trap_func)(void))
 {
     cs->reset_trap_func = reset_trap_func;
 }
@@ -215,19 +219,20 @@ int interrupt_get_nmi(interrupt_cpu_status_t *cs, int int_num)
 void interrupt_fixup_int_clk(interrupt_cpu_status_t *cs, CLOCK cpu_clk,
                              CLOCK *int_clk)
 {
-    unsigned int num_cycles_left = 0, last_num_cycles_left = 0, num_dma;
-    unsigned int cycles_left_to_trigger_irq = 
-        (OPINFO_DELAYS_INTERRUPT(*cs->last_opcode_info_ptr) ? 2 : 1);
+    CLOCK num_cycles_left = 0, last_num_cycles_left = 0;
+    unsigned int num_dma;
+    unsigned int cycles_left_to_trigger_irq = (OPINFO_DELAYS_INTERRUPT(*cs->last_opcode_info_ptr) ? 2 : 1);
     CLOCK last_start_clk = CLOCK_MAX;
 
 #ifdef DEBUGIRQDMA
     if (debug.maincpu_traceflg) {
         unsigned int i;
-        log_debug("INTREQ %ld NUMWR %i", (long)cpu_clk,
+        log_debug(LOG_DEFAULT, "INTREQ %ld NUMWR %i", (long)cpu_clk,
                   maincpu_num_write_cycles());
-        for (i = 0; i < cs->num_dma_per_opcode; i++)
-            log_debug("%iCYLEFT %i STCLK %i", i, cs->num_cycles_left[i],
+        for (i = 0; i < cs->num_dma_per_opcode; i++) {
+            log_debug(LOG_DEFAULT, "%iCYLEFT %i STCLK %i", i, cs->num_cycles_left[i],
                       cs->dma_start_clk[i]);
+        }
     }
 #endif
 
@@ -235,18 +240,20 @@ void interrupt_fixup_int_clk(interrupt_cpu_status_t *cs, CLOCK cpu_clk,
     while (num_dma != 0) {
         num_dma--;
         num_cycles_left = cs->num_cycles_left[num_dma];
-        if ((cs->dma_start_clk[num_dma] - 1) <= cpu_clk)
+        if ((cs->dma_start_clk[num_dma] - 1) <= cpu_clk) {
             break;
+        }
         last_num_cycles_left = num_cycles_left;
         last_start_clk = cs->dma_start_clk[num_dma];
     }
     /* if the INTREQ happens between two CPU cycles, we have to interpolate */
-    if (num_cycles_left - last_num_cycles_left > last_start_clk - cpu_clk - 1)
+    if (num_cycles_left - last_num_cycles_left > last_start_clk - cpu_clk - 1) {
         num_cycles_left = last_num_cycles_left + last_start_clk - cpu_clk - 1;
+    }
 
 #ifdef DEBUGIRQDMA
     if (debug.maincpu_traceflg) {
-        log_debug("TAKENLEFT %i   LASTSTOLENCYCLECLK %i", num_cycles_left,cs->last_stolen_cycles_clk);
+        log_debug(LOG_DEFAULT, "TAKENLEFT %i   LASTSTOLENCYCLECLK %i", num_cycles_left, cs->last_stolen_cycles_clk);
     }
 #endif
 
@@ -257,33 +264,31 @@ void interrupt_fixup_int_clk(interrupt_cpu_status_t *cs, CLOCK cpu_clk,
     }
 #ifdef DEBUGIRQDMA
     if (debug.maincpu_traceflg) {
-        log_debug("INTCLK dma shifted %i   (cs->dma_start_clk[0]=%i", *int_clk, cs->dma_start_clk[0]);
+        log_debug(LOG_DEFAULT, "INTCLK dma shifted %i   (cs->dma_start_clk[0]=%i", *int_clk, cs->dma_start_clk[0]);
     }
 #endif
 
-    if (num_cycles_left >= cycles_left_to_trigger_irq)
+    if (num_cycles_left >= cycles_left_to_trigger_irq) {
         *int_clk -= (cycles_left_to_trigger_irq + 1);
+    }
 
 #ifdef DEBUGIRQDMA
     if (debug.maincpu_traceflg) {
-        log_debug("INTCLK fixed %i", *int_clk);
+        log_debug(LOG_DEFAULT, "INTCLK fixed %i", *int_clk);
     }
 #endif
-
 }
 
 /* ------------------------------------------------------------------------- */
 
 void interrupt_trigger_dma(interrupt_cpu_status_t *cs, CLOCK cpu_clk)
 {
-    cs->global_pending_int = (enum cpu_int)
-        (cs->global_pending_int | IK_DMA);
+    cs->global_pending_int = (enum cpu_int)(cs->global_pending_int | IK_DMA);
 }
 
 void interrupt_ack_dma(interrupt_cpu_status_t *cs)
 {
-    cs->global_pending_int = (enum cpu_int)
-        (cs->global_pending_int & ~IK_DMA);
+    cs->global_pending_int = (enum cpu_int)(cs->global_pending_int & ~IK_DMA);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -291,8 +296,9 @@ void interrupt_ack_dma(interrupt_cpu_status_t *cs)
 /* Trigger a RESET.  This resets the machine.  */
 void interrupt_trigger_reset(interrupt_cpu_status_t *cs, CLOCK cpu_clk)
 {
-    if (cs == NULL)
+    if (cs == NULL) {
         return;
+    }
 
     cs->global_pending_int |= IK_RESET;
 }
@@ -302,29 +308,66 @@ void interrupt_ack_reset(interrupt_cpu_status_t *cs)
 {
     cs->global_pending_int &= ~IK_RESET;
 
-    if (cs->reset_trap_func)
+    if (cs->reset_trap_func) {
         cs->reset_trap_func();
+    }
 }
 
-/* Trigger a TRAP.  This is a special condition that can be used for
-   debugging.  `trap_func' will be called with PC as the argument when this
-   condition is detected.  */
-void interrupt_maincpu_trigger_trap(void (*trap_func)(WORD, void *data),
+/* Trigger a TRAP next cycle */
+
+extern log_t traps_log;
+
+void interrupt_maincpu_trigger_trap(void (*trap_func)(uint16_t, void *data),
                                     void *data)
 {
     interrupt_cpu_status_t *cs = maincpu_int_status;
+    int this_trap_index;
+    int trap_size_needed;
+
+    this_trap_index = cs->traps_next + cs->traps_count;
+    cs->traps_count++;
+    trap_size_needed = cs->traps_next + cs->traps_count;
+
+    /*
+     * traps can trigger traps and more than one can be triggered per cycle ...
+     * so this is not as simple as it might otherwise be.
+     */
+
+    if (trap_size_needed > cs->traps_size) {
+        log_verbose(traps_log, "Increasing trap_func array size to %d with %d to run", trap_size_needed, cs->traps_count);
+        cs->trap_func = lib_realloc(cs->trap_func, trap_size_needed * sizeof(*cs->trap_func));
+        cs->trap_data = lib_realloc(cs->trap_data, trap_size_needed * sizeof(*cs->trap_data));
+        cs->traps_size = trap_size_needed;
+    }
 
     cs->global_pending_int |= IK_TRAP;
-    cs->trap_func = trap_func;
-    cs->trap_data = data;
+
+    cs->trap_func[this_trap_index] = trap_func;
+    cs->trap_data[this_trap_index] = data;
 }
 
 
 /* Dispatch the TRAP condition.  */
-void interrupt_do_trap(interrupt_cpu_status_t *cs, WORD address)
+void interrupt_do_trap(interrupt_cpu_status_t *cs, uint16_t address)
 {
-    cs->global_pending_int &= ~IK_TRAP;
-    cs->trap_func(address, cs->trap_data);
+    int i;
+    int traps_this_cycle = cs->traps_count;
+
+    for (i = 0; i < traps_this_cycle; i++) {
+        cs->trap_func[cs->traps_next](address, cs->trap_data[cs->traps_next]);
+        /* Don't increment this before the trap func above has exectued! */
+        cs->traps_next++;
+    }
+
+    if (cs->traps_count > traps_this_cycle) {
+        /* Executuing a trap scheduled another trap! Run them next cycle */
+        cs->traps_count -= traps_this_cycle;
+    } else {
+        /* All traps have been executed */
+        cs->global_pending_int &= ~IK_TRAP;
+        cs->traps_next = 0;
+        cs->traps_count = 0;
+    }
 }
 
 void interrupt_monitor_trap_on(interrupt_cpu_status_t *cs)
@@ -342,21 +385,21 @@ void interrupt_monitor_trap_off(interrupt_cpu_status_t *cs)
 int interrupt_write_snapshot(interrupt_cpu_status_t *cs, snapshot_module_t *m)
 {
     /* FIXME: could we avoid some of this info?  */
-    if (SMW_DW(m, cs->irq_clk) < 0
-        || SMW_DW(m, cs->nmi_clk) < 0
-        || SMW_DW(m, cs->irq_pending_clk) < 0
-        || SMW_DW(m, (DWORD)cs->num_last_stolen_cycles) < 0
-        || SMW_DW(m, cs->last_stolen_cycles_clk) < 0) {
+    if (SMW_CLOCK(m, cs->irq_clk) < 0
+        || SMW_CLOCK(m, cs->nmi_clk) < 0
+        || SMW_CLOCK(m, cs->irq_pending_clk) < 0
+        || SMW_CLOCK(m, cs->num_last_stolen_cycles) < 0
+        || SMW_CLOCK(m, cs->last_stolen_cycles_clk) < 0) {
         return -1;
     }
 
     return 0;
 }
 
-int interrupt_write_new_snapshot(interrupt_cpu_status_t *cs,
-                                 snapshot_module_t *m)
+int interrupt_write_new_snapshot(interrupt_cpu_status_t *cs, snapshot_module_t *m)
 {
-    if (SMW_DW(m, cs->nirq) < 0
+    if (0
+        || SMW_DW(m, cs->nirq) < 0
         || SMW_DW(m, cs->nnmi) < 0
         || SMW_DW(m, cs->global_pending_int) < 0) {
         return -1;
@@ -365,11 +408,11 @@ int interrupt_write_new_snapshot(interrupt_cpu_status_t *cs,
     return 0;
 }
 
-int interrupt_write_sc_snapshot(interrupt_cpu_status_t *cs,
-                                snapshot_module_t *m)
+int interrupt_write_sc_snapshot(interrupt_cpu_status_t *cs, snapshot_module_t *m)
 {
-    if (SMW_DW(m, cs->irq_delay_cycles) < 0
-        || SMW_DW(m, cs->nmi_delay_cycles) < 0) {
+    if (0
+        || SMW_CLOCK(m, cs->irq_delay_cycles) < 0
+        || SMW_CLOCK(m, cs->nmi_delay_cycles) < 0) {
         return -1;
     }
 
@@ -379,7 +422,7 @@ int interrupt_write_sc_snapshot(interrupt_cpu_status_t *cs,
 int interrupt_read_snapshot(interrupt_cpu_status_t *cs, snapshot_module_t *m)
 {
     unsigned int i;
-    DWORD dw;
+    CLOCK qw;
 
     for (i = 0; i < cs->num_ints; i++) {
         cs->pending_int[i] = IK_NONE;
@@ -388,28 +431,30 @@ int interrupt_read_snapshot(interrupt_cpu_status_t *cs, snapshot_module_t *m)
     cs->global_pending_int = IK_NONE;
     cs->nirq = cs->nnmi = cs->reset = cs->trap = 0;
 
-    if (SMR_DW(m, &cs->irq_clk) < 0
-        || SMR_DW(m, &cs->nmi_clk) < 0
-        || SMR_DW(m, &cs->irq_pending_clk) < 0) {
+    if (0
+        || SMR_CLOCK(m, &cs->irq_clk) < 0
+        || SMR_CLOCK(m, &cs->nmi_clk) < 0
+        || SMR_CLOCK(m, &cs->irq_pending_clk) < 0) {
         return -1;
     }
 
-    if (SMR_DW(m, &dw) < 0) {
+    if (SMR_CLOCK(m, &qw) < 0) {
         return -1;
     }
-    cs->num_last_stolen_cycles = dw;
+    cs->num_last_stolen_cycles = qw;
 
-    if (SMR_DW(m, &dw) < 0) {
+    if (SMR_CLOCK(m, &qw) < 0) {
         return -1;
     }
-    cs->last_stolen_cycles_clk = dw;
+    cs->last_stolen_cycles_clk = qw;
 
     return 0;
 }
 
 int interrupt_read_new_snapshot(interrupt_cpu_status_t *cs, snapshot_module_t *m)
 {
-    if (SMR_DW_INT(m, &cs->nirq) < 0
+    if (0
+        || SMR_DW_INT(m, &cs->nirq) < 0
         || SMR_DW_INT(m, &cs->nnmi) < 0
         || SMR_DW_UINT(m, &cs->global_pending_int) < 0) {
         return -1;
@@ -420,11 +465,11 @@ int interrupt_read_new_snapshot(interrupt_cpu_status_t *cs, snapshot_module_t *m
 
 int interrupt_read_sc_snapshot(interrupt_cpu_status_t *cs, snapshot_module_t *m)
 {
-    if (SMR_DW_UINT(m, &cs->irq_delay_cycles) < 0
-        || SMR_DW_UINT(m, &cs->nmi_delay_cycles) < 0) {
+    if (0
+        || SMR_CLOCK(m, &cs->irq_delay_cycles) < 0
+        || SMR_CLOCK(m, &cs->nmi_delay_cycles) < 0) {
         return -1;
     }
 
     return 0;
 }
-

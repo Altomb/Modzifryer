@@ -34,14 +34,13 @@
 #include "types.h"
 
 #include "c64-midi.h"
-#include "c64export.h"
 #include "cartio.h"
 #include "cartridge.h"
 #include "cmdline.h"
+#include "export.h"
 #include "machine.h"
 #include "resources.h"
 #include "snapshot.h"
-#include "translate.h"
 
 /* the order must match the enum in c64-midi.h */
 midi_interface_t midi_interface[] = {
@@ -55,17 +54,17 @@ midi_interface_t midi_interface[] = {
     { "Namesoft", 0xde00, 0, 2, 1, 3, 0xff, 1, 2, CARTRIDGE_MIDI_NAMESOFT },
     /* Electronics - Maplin magazine */
     { "Maplin", 0xdf00, 0, 0, 1, 1, 0xff, 2, 0, CARTRIDGE_MIDI_MAPLIN },
-    { NULL }
+    MIDI_INFERFACE_LIST_END
 };
 
 /* ---------------------------------------------------------------------*/
 
-static BYTE c64midi_read(WORD address)
+static uint8_t c64midi_read(uint16_t address)
 {
     return midi_read(address);
 }
 
-static BYTE c64midi_peek(WORD address)
+static uint8_t c64midi_peek(uint16_t address)
 {
     return midi_peek(address);
 }
@@ -73,21 +72,23 @@ static BYTE c64midi_peek(WORD address)
 /* ---------------------------------------------------------------------*/
 
 static io_source_t midi_device = {
-    "MIDI",
-    IO_DETACH_RESOURCE,
-    "MIDIEnable",
-    0xde00, 0xdeff, 0xff,
-    1, /* read is always valid */
-    midi_store,
-    c64midi_read,
-    c64midi_peek,
-    NULL, /* TODO: dump */
-    CARTRIDGE_MIDI_SEQUENTIAL,
-    0,
-    0
+    "MIDI",                    /* name of the device */
+    IO_DETACH_RESOURCE,        /* use resource to detach the device when involved in a read-collision */
+    "MIDIEnable",              /* resource to set to '0' */
+    0xde00, 0xdeff, 0xff,      /* range of the device, the actual registers and mirrors depend on which MIDI cart is being emulated */
+    1,                         /* read is always valid */
+    midi_store,                /* store function */
+    NULL,                      /* NO poke function */
+    c64midi_read,              /* read function */
+    c64midi_peek,              /* peek function */
+    NULL,                      /* TODO: device state information dump function */
+    CARTRIDGE_MIDI_SEQUENTIAL, /* cartridge ID */
+    IO_PRIO_NORMAL,            /* normal priority, device read needs to be checked for collisions */
+    0,                         /* insertion order, gets filled in by the registration function */
+    IO_MIRROR_NONE             /* NO mirroring */
 };
 
-static c64export_resource_t export_res = {
+static export_resource_t export_res = {
     "MIDI", 0, 0, &midi_device, NULL, CARTRIDGE_MIDI_SEQUENTIAL
 };
 
@@ -129,16 +130,18 @@ int c64_midi_maplin_cart_enabled(void)
     return midi_enabled && (export_res.cartid == CARTRIDGE_MIDI_MAPLIN);
 }
 
-static int set_midi_enabled(int val, void *param)
+static int set_midi_enabled(int value, void *param)
 {
+    int val = value ? 1 : 0;
+
     if (!midi_enabled && val) {
-        if (c64export_add(&export_res) < 0) {
+        if (export_add(&export_res) < 0) {
             return -1;
         }
         midi_list_item = io_source_register(&midi_device);
         midi_enabled = 1;
     } else if (midi_enabled && !val) {
-        c64export_remove(&export_res);
+        export_remove(&export_res);
         io_source_unregister(midi_list_item);
         midi_list_item = NULL;
         midi_enabled = 0;
@@ -150,6 +153,17 @@ static int set_midi_enabled(int val, void *param)
 static int midi_set_c64mode(int new_mode, void *param)
 {
     int old = midi_enabled;
+
+    switch (new_mode) {
+        case MIDI_MODE_SEQUENTIAL:
+        case MIDI_MODE_PASSPORT:
+        case MIDI_MODE_DATEL:
+        case MIDI_MODE_NAMESOFT:
+        case MIDI_MODE_MAPLIN:
+            break;
+        default:
+            return -1;
+    }
 
     if (midi_mode != new_mode) {
         set_midi_enabled(0, NULL);
@@ -179,6 +193,13 @@ int c64_midi_enable(void)
     return resources_set_int("MIDIEnable", 1);
 }
 
+
+int c64_midi_disable(void)
+{
+    return resources_set_int("MIDIEnable", 0);
+}
+
+
 void c64_midi_detach(void)
 {
     resources_set_int("MIDIEnable", 0);
@@ -191,7 +212,7 @@ static const resource_int_t resources_int[] = {
       &midi_mode, midi_set_c64mode, NULL },
     { "MIDIEnable", 0, RES_EVENT_STRICT, (resource_value_t)0,
       &midi_enabled, set_midi_enabled, NULL },
-    { NULL }
+    RESOURCE_INT_LIST_END
 };
 
 int c64_midi_resources_init(void)
@@ -205,13 +226,12 @@ int c64_midi_resources_init(void)
 
 /* ---------------------------------------------------------------------*/
 
-static const cmdline_option_t cmdline_options[] = {
-    { "-miditype", SET_RESOURCE, 1,
+static const cmdline_option_t cmdline_options[] =
+{
+    { "-miditype", SET_RESOURCE, CMDLINE_ATTRIB_NEED_ARGS,
       NULL, NULL, "MIDIMode", NULL,
-      USE_PARAM_STRING, USE_DESCRIPTION_ID,
-      IDCLS_UNUSED, IDCLS_SPECIFY_C64_MIDI_TYPE,
-      "<0-4>", NULL },
-    { NULL }
+      "<0-4>", "MIDI interface type (0: Sequential, 1: Passport, 2: DATEL, 3: Namesoft, 4: Maplin)" },
+    CMDLINE_LIST_END
 };
 
 int c64_midi_cmdline_options_init(void)
@@ -227,65 +247,75 @@ int c64_midi_cmdline_options_init(void)
 
 int c64_midi_base_de00(void)
 {
-    return (midi_interface[midi_mode].base_addr == 0xde00)?1:0;
+    return (midi_interface[midi_mode].base_addr == 0xde00) ? 1 : 0;
 }
 
 /* ---------------------------------------------------------------------*/
 /*    snapshot support functions                                             */
 
-#define CART_DUMP_VER_MAJOR   0
-#define CART_DUMP_VER_MINOR   0
-#define SNAP_MODULE_NAME  "CARTMIDI"
+/* CARTMIDI snapshot module format:
 
-/* FIXME: implement snapshot support */
+   type  | name | description
+   --------------------------
+   BYTE  | mode | midi mode
+ */
+
+static char snap_module_name[] = "CARTMIDI";
+#define SNAP_MAJOR   0
+#define SNAP_MINOR   0
+
 int c64_midi_snapshot_write_module(snapshot_t *s)
 {
-    return -1;
-#if 0
     snapshot_module_t *m;
 
-    m = snapshot_module_create(s, SNAP_MODULE_NAME,
-                          CART_DUMP_VER_MAJOR, CART_DUMP_VER_MINOR);
+    m = snapshot_module_create(s, snap_module_name, SNAP_MAJOR, SNAP_MINOR);
+
     if (m == NULL) {
         return -1;
     }
 
-    if (0) {
+    if (SMW_B(m, (uint8_t)midi_mode) < 0) {
         snapshot_module_close(m);
         return -1;
     }
 
     snapshot_module_close(m);
-    return 0;
-#endif
+
+    return midi_snapshot_write_module(s);
 }
 
 int c64_midi_snapshot_read_module(snapshot_t *s)
 {
-    return -1;
-#if 0
-    BYTE vmajor, vminor;
+    uint8_t vmajor, vminor;
     snapshot_module_t *m;
+    int tmp_midi_mode;
 
-    m = snapshot_module_open(s, SNAP_MODULE_NAME, &vmajor, &vminor);
+    m = snapshot_module_open(s, snap_module_name, &vmajor, &vminor);
+
     if (m == NULL) {
         return -1;
     }
 
-    if ((vmajor != CART_DUMP_VER_MAJOR) || (vminor != CART_DUMP_VER_MINOR)) {
-        snapshot_module_close(m);
-        return -1;
+    /* Do not accept versions higher than current */
+    if (snapshot_version_is_bigger(vmajor, vminor, SNAP_MAJOR, SNAP_MINOR)) {
+        snapshot_set_error(SNAPSHOT_MODULE_HIGHER_VERSION);
+        goto fail;
     }
 
-    if (0) {
-        snapshot_module_close(m);
-        return -1;
+    if (SMR_B_INT(m, &tmp_midi_mode) < 0) {
+        goto fail;
     }
 
     snapshot_module_close(m);
-    return 0;
-#endif
+
+    /* enable midi */
+    midi_set_c64mode(tmp_midi_mode, NULL);
+    set_midi_enabled(1, NULL);
+
+    return midi_snapshot_read_module(s);
+
+fail:
+    snapshot_module_close(m);
+    return -1;
 }
-
-
 #endif

@@ -32,18 +32,17 @@
 
 /* actions to be done when a zfile is closed */
 typedef enum {
-        ZFILE_KEEP,     /* Nothing, keep original file (default).  */
-        ZFILE_REQUEST,  /* Request the user what to do.  */
-        ZFILE_DEL       /* Remove original file.  */
+    ZFILE_KEEP,         /* Nothing, keep original file (default).  */
+    ZFILE_REQUEST,      /* Request the user what to do.  */
+    ZFILE_DEL           /* Remove original file.  */
 } zfile_action_t;
 
-extern FILE *zfile_fopen(const char *name, const char *mode);
-extern int zfile_fclose(FILE *stream);
+FILE *zfile_fopen(const char *name, const char *mode);
+int zfile_fclose(FILE *stream);
 
-extern void zfile_shutdown(void);
+void zfile_shutdown(void);
 
-extern int zfile_close_action(const char *filename, zfile_action_t action,
-                              const char *request_string);
+int zfile_close_action(const char *filename, zfile_action_t action, const char *request_string);
 
 #if 0
 
@@ -56,12 +55,12 @@ extern int zfile_close_action(const char *filename, zfile_action_t action,
 
 #include <zlib.h>
 
-extern int gerror(FILE *f);
+int gerror(FILE *f);
 
 #define fopen                      gzopen
 #define fclose                     gzclose
-#define fread(buf, sz1, sz2, fd)   gzread(fd, buf, (sz1)*(sz2))
-#define fwrite(buf, sz1, sz2, fd)  gzwrite(fd, buf, (sz1)*(sz2))
+#define fread(buf, sz1, sz2, fd)   gzread(fd, buf, (sz1) * (sz2))
+#define fwrite(buf, sz1, sz2, fd)  gzwrite(fd, buf, (sz1) * (sz2))
 #define fprintf                    gzprintf
 #define fputs(str, fd)             gzputs(fd, str)
 #define fgets(str, len, fd)        gzgets(fd, str, len)
@@ -78,4 +77,3 @@ extern int gerror(FILE *f);
 
 
 #endif
-

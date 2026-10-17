@@ -55,13 +55,13 @@
 #define TED_NTSC_OFFSET                 0 /* FIXME */
 
 /* values in TED raster counter */
-        /* 0x004 in TED raster counter */
+/* 0x004 in TED raster counter */
 #define TED_PAL_25ROW_START_LINE        4
-        /* 0x0CB in TED raster counter */
+/* 0x0CB in TED raster counter */
 #define TED_PAL_25ROW_STOP_LINE         0xcb
-        /* 0x008 in TED raster counter */
+/* 0x008 in TED raster counter */
 #define TED_PAL_24ROW_START_LINE        8
-        /* 0x0C7 in TED raster counter */
+/* 0x0C7 in TED raster counter */
 #define TED_PAL_24ROW_STOP_LINE         0xc7
 
 /* FIXME calculate NTSC values */
@@ -99,8 +99,7 @@ enum ted_video_mode_s {
 };
 typedef enum ted_video_mode_s ted_video_mode_t;
 
-#define TED_IS_ILLEGAL_MODE(x)       ((x) >= TED_ILLEGAL_TEXT_MODE \
-                                         && (x) != TED_IDLE_MODE)
+#define TED_IS_ILLEGAL_MODE(x)       ((x) >= TED_ILLEGAL_TEXT_MODE && (x) != TED_IDLE_MODE)
 #define TED_IS_BITMAP_MODE(x)        ((x) & 0x02)
 
 /* Note: we measure cycles from 0 to 113, not from 1 to 114.  */
@@ -126,28 +125,27 @@ typedef enum ted_video_mode_s ted_video_mode_t;
    only accurate if a pending drawing event has been served, this is
    guaranteed to be always correct. */
 #define TED_RASTER_Y(clk)           ((unsigned int)((ted.ted_raster_counter \
-                                    + (((clk) - ted.last_emulate_line_clk) \
-                                    >= 114 ? (ted.ted_raster_counter == ted.screen_height - 1 \
-                                    ? 1 - ted.screen_height : 1) : 0)) & 0x1ff))
+                                                     + (((clk) - ted.last_emulate_line_clk) \
+                                                        >= 114 ? (ted.ted_raster_counter == (ted.screen_height - 1) \
+                                                                  ? 1 - ted.screen_height : 1) : 0)) & 0x1ff))
 
 /* Cycle # within the current line.  */
 #define TED_RASTER_CYCLE(clk)       ((unsigned int)((clk) - ted.last_emulate_line_clk - (((clk) - ted.last_emulate_line_clk) >= 114 ? 114 : 0)))
 
 /* `clk' value for the beginning of the current line.  */
-#define TED_LINE_START_CLK(clk)     ((unsigned int)(ted.last_emulate_line_clk + (((clk) - ted.last_emulate_line_clk) >= 114 ? 114 : 0)))
+/* FIXME: assigned to (CLOCK)ted.raster_irq_clk in ted-irq.c:ted_irq_set_raster_line() */
+/* FIXME: assigned to (CLOCK)ted.raster_irq_clk in ted-mem.c:ted1c1d_store() */
+#define TED_LINE_START_CLK(clk)     ((CLOCK)(ted.last_emulate_line_clk + (((clk) - ted.last_emulate_line_clk) >= 114UL ? 114UL : 0UL)))
 
 /* # of the previous and next raster line.  Handles wrap over.  */
 /* FIXME not always true, previous line can be 511 */
-#define TED_PREVIOUS_LINE(line)  (((line) > 0) \
-                                 ? (line) - 1 : ted.screen_height - 1)
+#define TED_PREVIOUS_LINE(line)  (((line) > 0) ? (line) - 1 : ted.screen_height - 1)
 /* FIXME not always true, line counter can be in range [screen_height, 511] */
 #define TED_NEXT_LINE(line)      (((line) + 1) % ted.screen_height)
 
 /* FIXME not used can be dropped */
-#define TED_LINE_RTOU(line) ((line + ted.screen_height - ted.offset) \
-                            % ted.screen_height)
-#define TED_LINE_UTOR(line) ((line + ted.screen_height + ted.offset) \
-                            % ted.screen_height)
+#define TED_LINE_RTOU(line) ((line + ted.screen_height - ted.offset) % ted.screen_height)
+#define TED_LINE_UTOR(line) ((line + ted.screen_height + ted.offset) % ted.screen_height)
 
 /* Bad line range.  */
 /* TED raster_counter values */
@@ -191,7 +189,14 @@ struct ted_s {
     raster_t raster;
 
     /* TED registers.  */
-    BYTE regs[64];
+    uint8_t regs[64];
+
+    /* Timer 1 reload latch */
+    CLOCK t1_start;
+
+    /* Timers running status */
+
+    unsigned int timer_running[3];
 
     /* Interrupt register.  */
     int irq_status;             /* = 0; */
@@ -200,15 +205,15 @@ struct ted_s {
     unsigned int raster_irq_line;
 
     /* Video memory pointers.  */
-    BYTE *screen_ptr;
-    BYTE *chargen_ptr;
-    BYTE *bitmap_ptr;
-    BYTE *color_ptr;
+    uint8_t *screen_ptr;
+    uint8_t *chargen_ptr;
+    uint8_t *bitmap_ptr;
+    uint8_t *color_ptr;
 
     /* Screen memory buffers (chars and color).  */
-    BYTE vbuf[TED_SCREEN_TEXTCOLS];
-    BYTE cbuf[TED_SCREEN_TEXTCOLS];
-    BYTE cbuf_tmp[TED_SCREEN_TEXTCOLS];
+    uint8_t vbuf[TED_SCREEN_TEXTCOLS];
+    uint8_t cbuf[TED_SCREEN_TEXTCOLS];
+    uint8_t cbuf_tmp[TED_SCREEN_TEXTCOLS];
 
     /* If this flag is set, bad lines (DMA's) can happen.  */
     int allow_bad_lines;
@@ -277,7 +282,7 @@ struct ted_s {
     ted_idle_data_location_t idle_data_location;
 
     /* TED keybaord read value.  */
-    BYTE kbdval;
+    uint8_t kbdval;
 
     /* All the TED logging goes here.  */
     signed int log;
@@ -332,24 +337,28 @@ struct ted_s {
     int character_fetch_on;
 
     /* Last value read from TED (used for RMW access).  */
-    BYTE last_read;
+    uint8_t last_read;
 
     /* Video chip capabilities.  */
     struct video_chip_cap_s *video_chip_cap;
 
+    /* Last (data) value read or written by the CPU */
+    uint8_t last_cpu_val;
+
     unsigned int int_num;
 };
+
 typedef struct ted_s ted_t;
 
 extern ted_t ted;
 
 /* Private function calls, used by the other TED modules.  */
-extern void ted_update_memory_ptrs(unsigned int cycle);
-extern void ted_update_video_mode(unsigned int cycle);
-extern void ted_raster_draw_alarm_handler(CLOCK offset, void *data);
-/* extern void ted_resize(void); */
-extern void ted_delay_clk(void);
-extern void ted_delay_oldclk(CLOCK num);
+void ted_update_memory_ptrs(unsigned int cycle);
+void ted_update_video_mode(unsigned int cycle);
+void ted_raster_draw_alarm_handler(CLOCK offset, void *data);
+/* void ted_resize(void); */
+void ted_delay_clk(void);
+void ted_delay_oldclk(CLOCK num);
 
 /* Debugging options.  */
 
@@ -358,22 +367,21 @@ extern void ted_delay_oldclk(CLOCK num);
 /* #define TED_REGISTERS_DEBUG */
 
 #ifdef TED_VMODE_DEBUG
-#define TED_DEBUG_VMODE(x) log_debug x
+#define TED_DEBUG_VMODE(x) log_printf x
 #else
 #define TED_DEBUG_VMODE(x)
 #endif
 
 #ifdef TED_RASTER_DEBUG
-#define TED_DEBUG_RASTER(x) log_debug x
+#define TED_DEBUG_RASTER(x) log_printf x
 #else
 #define TED_DEBUG_RASTER(x)
 #endif
 
 #ifdef TED_REGISTERS_DEBUG
-#define TED_DEBUG_REGISTER(x) log_debug x
+#define TED_DEBUG_REGISTER(x) log_printf x
 #else
 #define TED_DEBUG_REGISTER(x)
 #endif
 
 #endif
-

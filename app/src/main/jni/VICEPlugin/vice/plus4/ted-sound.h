@@ -3,6 +3,7 @@
  *
  * Written by
  *  Andreas Boose <viceteam@t-online.de>
+ *  Marco van den Heuvel <blackystardust68@yahoo.com>
  *
  * This file is part of VICE, the Versatile Commodore Emulator.
  * See README for copyright notice.
@@ -31,12 +32,11 @@
 
 #include "sound.h"
 
-extern void ted_sound_store(WORD addr, BYTE value);
-extern BYTE ted_sound_read(WORD addr);
+void ted_sound_store(uint16_t addr, uint8_t value);
+uint8_t ted_sound_read(uint16_t addr);
 
-extern void ted_sound_reset(sound_t *psid, CLOCK cpu_clk);
+void ted_sound_reset(sound_t *psid, CLOCK cpu_clk);
 
-extern void ted_sound_chip_init(void);
+void ted_sound_chip_init(void);
 
 #endif
-

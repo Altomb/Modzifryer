@@ -2,7 +2,7 @@
  * cbm2tpi1.c - TPI 1 for CBM-II
  *
  * Written by
- *  André Fachat <a.fachat@physik.tu-chemnitz.de>
+ *  Andre Fachat <a.fachat@physik.tu-chemnitz.de>
  *  Andreas Boose <viceteam@t-online.de>
  *
  * This file is part of VICE, the Versatile Commodore Emulator.
@@ -35,27 +35,28 @@
 #include "cbm2tpi.h"
 #include "cia.h"
 #include "datasette.h"
-#include "drivecpu.h"
+#include "drive.h"
 #include "interrupt.h"
 #include "lib.h"
 #include "log.h"
 #include "maincpu.h"
 #include "parallel.h"
+#include "tapeport.h"
 #include "tpi.h"
 #include "types.h"
 
 
-void tpi1_store(WORD addr, BYTE data)
+void tpi1_store(uint16_t addr, uint8_t data)
 {
     tpicore_store(machine_context.tpi1, addr, data);
 }
 
-BYTE tpi1_read(WORD addr)
+uint8_t tpi1_read(uint16_t addr)
 {
     return tpicore_read(machine_context.tpi1, addr);
 }
 
-BYTE tpi1_peek(WORD addr)
+uint8_t tpi1_peek(uint16_t addr)
 {
     return tpicore_peek(machine_context.tpi1, addr);
 }
@@ -74,10 +75,22 @@ static void restore_int(unsigned int int_num, int value)
 /* TPI resources. */
 
 static int tape1_sense = 0;
+static int tape1_write_in = 0;
+static int tape1_motor_in = 0;
 
 void tpi1_set_tape_sense(int v)
 {
     tape1_sense = v;
+}
+
+void tpi1_set_tape_write_in(int v)
+{
+    tape1_write_in = v;
+}
+
+void tpi1_set_tape_motor_in(int v)
+{
+    tape1_motor_in = v;
 }
 
 /*----------------------------------------------------------------------*/
@@ -105,21 +118,21 @@ static void reset(tpi_context_t *tpi_context)
     cia1_set_ieee_dir(machine_context.cia1, 0);
 }
 
-static void store_pa(tpi_context_t *tpi_context, BYTE byte)
+static void store_pa(tpi_context_t *tpi_context, uint8_t byte)
 {
     if (byte != tpi_context->oldpa) {
-        BYTE tmp = ~byte;
+        uint8_t tmp = ~byte;
         cia1_set_ieee_dir(machine_context.cia1, byte & 2);
         if (byte & 2) {
             parallel_cpu_set_ndac(0);
             parallel_cpu_set_nrfd(0);
-            parallel_cpu_set_atn((BYTE)(tmp & 0x08));
-            parallel_cpu_set_dav((BYTE)(tmp & 0x10));
-            parallel_cpu_set_eoi((BYTE)(tmp & 0x20));
+            parallel_cpu_set_atn((uint8_t)(tmp & 0x08));
+            parallel_cpu_set_dav((uint8_t)(tmp & 0x10));
+            parallel_cpu_set_eoi((uint8_t)(tmp & 0x20));
         } else {
             /* order is important */
-            parallel_cpu_set_nrfd((BYTE)(tmp & 0x80));
-            parallel_cpu_set_ndac((BYTE)(tmp & 0x40));
+            parallel_cpu_set_nrfd((uint8_t)(tmp & 0x80));
+            parallel_cpu_set_ndac((uint8_t)(tmp & 0x40));
             parallel_cpu_set_atn(0);
             parallel_cpu_set_dav(0);
             parallel_cpu_set_eoi(0);
@@ -127,51 +140,56 @@ static void store_pa(tpi_context_t *tpi_context, BYTE byte)
     }
 }
 
-static void undump_pa(tpi_context_t *tpi_context, BYTE byte)
+static void undump_pa(tpi_context_t *tpi_context, uint8_t byte)
 {
-    BYTE tmp = ~byte;
+    uint8_t tmp = ~byte;
     cia1_set_ieee_dir(machine_context.cia1, byte & 2);
     if (byte & 2) {
         parallel_cpu_set_ndac(0);
         parallel_cpu_set_nrfd(0);
-        parallel_cpu_restore_atn((BYTE)(tmp & 0x08));
-        parallel_cpu_set_dav((BYTE)(tmp & 0x10));
-        parallel_cpu_set_eoi((BYTE)(tmp & 0x20));
+        parallel_cpu_restore_atn((uint8_t)(tmp & 0x08));
+        parallel_cpu_set_dav((uint8_t)(tmp & 0x10));
+        parallel_cpu_set_eoi((uint8_t)(tmp & 0x20));
     } else {
         /* order is important */
-        parallel_cpu_set_nrfd((BYTE)(tmp & 0x80));
-        parallel_cpu_set_ndac((BYTE)(tmp & 0x40));
+        parallel_cpu_set_nrfd((uint8_t)(tmp & 0x80));
+        parallel_cpu_set_ndac((uint8_t)(tmp & 0x40));
         parallel_cpu_restore_atn(0);
         parallel_cpu_set_dav(0);
         parallel_cpu_set_eoi(0);
     }
 }
 
-static void store_pb(tpi_context_t *tpi_context, BYTE byte)
+static void store_pb(tpi_context_t *tpi_context, uint8_t byte)
 {
-    if ((byte ^ tpi_context->oldpb) & 0x40)
-        datasette_set_motor(!(byte & 0x40));
-    if ((byte ^ tpi_context->oldpb) & 0x20)
-        datasette_toggle_write_bit(byte & 0x20);
+    if ((byte ^ tpi_context->oldpb) & 0x80) {
+        tapeport_set_sense_out(TAPEPORT_PORT_1, !(byte & 0x80));
+    }
+    if ((byte ^ tpi_context->oldpb) & 0x40) {
+        tapeport_set_motor(TAPEPORT_PORT_1, !(byte & 0x40));
+    }
+    if ((byte ^ tpi_context->oldpb) & 0x20) {
+        tapeport_toggle_write_bit(TAPEPORT_PORT_1, byte & 0x20);
+    }
 }
 
-static void store_pc(tpi_context_t *tpi_context, BYTE byte)
-{
-}
-
-static void undump_pb(tpi_context_t *tpi_context, BYTE byte)
-{
-}
-
-static void undump_pc(tpi_context_t *tpi_context, BYTE byte)
+static void store_pc(tpi_context_t *tpi_context, uint8_t byte)
 {
 }
 
-static BYTE read_pa(tpi_context_t *tpi_context)
+static void undump_pb(tpi_context_t *tpi_context, uint8_t byte)
 {
-    BYTE byte;
+}
 
-    drivecpu_execute_all(maincpu_clk);
+static void undump_pc(tpi_context_t *tpi_context, uint8_t byte)
+{
+}
+
+static uint8_t read_pa(tpi_context_t *tpi_context)
+{
+    uint8_t byte;
+
+    drive_catch_up_hook(maincpu_clk);
 
     byte = 0x07;
     byte += parallel_atn ? 0 : 8;
@@ -186,21 +204,23 @@ static BYTE read_pa(tpi_context_t *tpi_context)
     return byte;
 }
 
-static BYTE read_pb(tpi_context_t *tpi_context)
+static uint8_t read_pb(tpi_context_t *tpi_context)
 {
-    BYTE byte;
+    uint8_t byte;
 
-    byte = 0x7f;
-    byte += tape1_sense ? 0x80 : 0;
+    byte = 0x1f;
+    byte |= tape1_sense ? 0 : 0x80;
+    byte |= tape1_motor_in ? 0x40 : 0;
+    byte |= tape1_write_in ? 0x20 : 0;
 
     byte = (byte & ~(tpi_context->c_tpi)[TPI_DDPB])
            | (tpi_context->c_tpi[TPI_PB] & tpi_context->c_tpi[TPI_DDPB]);
     return byte;
 }
 
-static BYTE read_pc(tpi_context_t *tpi_context)
+static uint8_t read_pc(tpi_context_t *tpi_context)
 {
-    BYTE byte;
+    uint8_t byte;
     byte = (0xff & ~(tpi_context->c_tpi)[TPI_DDPC])
            | (tpi_context->c_tpi[TPI_PC] & tpi_context->c_tpi[TPI_DDPC]);
     return byte;
@@ -214,16 +234,16 @@ void tpi1_init(tpi_context_t *tpi_context)
         = interrupt_cpu_status_int_new(maincpu_int_status, tpi_context->myname);
 }
 
-void tpi1_setup_context(machine_context_t *machine_context)
+void tpi1_setup_context(machine_context_t *machine_ctx)
 {
     tpi_context_t *tpi_context;
 
-    machine_context->tpi1 = lib_malloc(sizeof(tpi_context_t));
-    tpi_context = machine_context->tpi1;
+    machine_ctx->tpi1 = lib_malloc(sizeof(tpi_context_t));
+    tpi_context = machine_ctx->tpi1;
 
     tpi_context->prv = NULL;
 
-    tpi_context->context = (void *)machine_context;
+    tpi_context->context = (void *)machine_ctx;
 
     tpi_context->rmw_flag = &maincpu_rmw_flag;
     tpi_context->clk_ptr = &maincpu_clk;
@@ -249,4 +269,3 @@ void tpi1_setup_context(machine_context_t *machine_context)
     tpi_context->set_int = set_int;
     tpi_context->restore_int = restore_int;
 }
-

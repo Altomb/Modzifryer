@@ -45,9 +45,6 @@ struct position_s {
 typedef struct position_s position_t;
 
 struct viewport_s {
-    /* Title for the viewport.  FIXME: Duplicated info from the canvas?  */
-    char *title;
-
     /* Offset of the screen on the window.  */
     unsigned int x_offset, y_offset;
 
@@ -93,8 +90,9 @@ struct geometry_s {
     unsigned int extra_offscreen_border_right;
     /* true pixel aspect ratio of the current video mode */
     float pixel_aspect_ratio;
+    /* width of each char in pixels (usually 8, but VDC on X128 can change this) */
+    unsigned int char_pixel_width;
 };
 typedef struct geometry_s geometry_t;
 
 #endif
-

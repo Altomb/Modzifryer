@@ -29,30 +29,22 @@
 
 #include "archdep.h"
 #include "attach.h"
-#include "autostart.h"
 #include "cmdline.h"
 #include "console.h"
 #include "debug.h"
-#include "diskimage.h"
 #include "drive.h"
-#include "drivecpu.h"
-#include "fliplist.h"
-#include "fsdevice.h"
-#include "gfxoutput.h"
 #include "initcmdline.h"
-#include "joy.h"
-#include "joystick.h"
-#include "kbdbuf.h"
 #include "keyboard.h"
 #include "log.h"
 #include "machine-bus.h"
+#include "machine-video.h"
 #include "machine.h"
 #include "maincpu.h"
 #include "monitor.h"
 #ifdef HAVE_NETWORK
+#include "monitor_binary.h"
 #include "monitor_network.h"
 #endif
-#include "network.h"
 #include "palette.h"
 #include "ram.h"
 #include "resources.h"
@@ -62,10 +54,28 @@
 #include "sysfile.h"
 #include "uiapi.h"
 #include "vdrive.h"
-#include "vice-event.h"
+#include "video.h"
+#include "vsync.h"
 
+#include "init.h"
 
-static void init_resource_fail(const char *module)
+/* #define DBGINIT */
+
+#ifdef DBGINIT
+#define DBG(x)  log_printf x
+#else
+#define DBG(x)
+#endif
+
+static int init_done = 0;
+
+/* returns true once everything is initialized and the UI has started up */
+int init_main_is_done(void)
+{
+    return init_done;
+}
+
+void init_resource_fail(const char *module)
 {
     archdep_startup_log_error("Cannot initialize %s resources.\n",
                               module);
@@ -73,6 +83,7 @@ static void init_resource_fail(const char *module)
 
 int init_resources(void)
 {
+    DBG(("init_resources"));
     if (resources_init(machine_get_name())) {
         archdep_startup_log_error("Cannot initialize resource handling.\n");
         return -1;
@@ -85,61 +96,48 @@ int init_resources(void)
         init_resource_fail("system file locator");
         return -1;
     }
-    if (autostart_resources_init() < 0) {
-        init_resource_fail("autostart");
-        return -1;
-    }
     if (romset_resources_init() < 0) {
         init_resource_fail("romset");
+        return -1;
+    }
+    if (screenshot_resources_init() < 0) {
+        init_resource_fail("screenshot");
         return -1;
     }
     if (ui_resources_init() < 0) {
         init_resource_fail("UI");
         return -1;
     }
-    if (fliplist_resources_init() < 0) {
-        init_resource_fail("flip list");
+    if (maincpu_resources_init() < 0) {
+        init_resource_fail("main cpu");
         return -1;
     }
-    if (file_system_resources_init() < 0) {
-        init_resource_fail("file system");
+    if (machine_common_resources_init() < 0) {
+        init_resource_fail("machine common");
         return -1;
     }
-    /* Initialize file system device-specific resources.  */
-    if (fsdevice_resources_init() < 0) {
-        init_resource_fail("file system device");
+    if (vsync_resources_init() < 0) {
+        init_resource_fail("vsync");
         return -1;
     }
-    if (disk_image_resources_init() < 0) {
-        init_resource_fail("disk image");
+    if (sound_resources_init() < 0) {
+        init_resource_fail("sound");
         return -1;
     }
-    if (event_resources_init() < 0) {
-        init_resource_fail("event");
+    if (keyboard_resources_init() < 0) {
+        init_resource_fail("keyboard");
         return -1;
     }
-    if (debug_resources_init() < 0) {
-        init_resource_fail("debug");
+    if (machine_video_resources_init() < 0) {
+        init_resource_fail("machine video");
         return -1;
     }
     if (machine_resources_init() < 0) {
         init_resource_fail("machine");
         return -1;
     }
-    if (joystick_init_resources() < 0) {
-        init_resource_fail("joystick");
-        return -1;
-    }
     if (ram_resources_init() < 0) {
         init_resource_fail("RAM");
-        return -1;
-    }
-    if (gfxoutput_resources_init() < 0) {
-        init_resource_fail("GFXOUTPUT");
-        return -1;
-    }
-    if (network_resources_init() < 0) {
-        init_resource_fail("network");
         return -1;
     }
     if (monitor_resources_init() < 0) {
@@ -148,14 +146,19 @@ int init_resources(void)
     }
 #ifdef HAVE_NETWORK
     if (monitor_network_resources_init() < 0) {
-        init_resource_fail("monitor");
+        init_resource_fail("MONITOR_NETWORK");
+        return -1;
+    }
+    if (monitor_binary_resources_init() < 0) {
+        init_resource_fail("MONITOR_BINARY");
         return -1;
     }
 #endif
+    DBG(("init_resources done"));
     return 0;
 }
 
-static void init_cmdline_options_fail(const char *module)
+void init_cmdline_options_fail(const char *module)
 {
     archdep_startup_log_error("Cannot initialize %s command-line options.\n",
                               module);
@@ -163,6 +166,7 @@ static void init_cmdline_options_fail(const char *module)
 
 int init_cmdline_options(void)
 {
+    DBG(("init_cmdline_options"));
     if (cmdline_init()) {
         archdep_startup_log_error("Cannot initialize command-line handling.\n");
         return -1;
@@ -184,24 +188,8 @@ int init_cmdline_options(void)
         return -1;
     }
     if (machine_class != VICE_MACHINE_VSID) {
-        if (autostart_cmdline_options_init() < 0) {
-            init_resource_fail("autostart");
-            return -1;
-        }
-        if (fliplist_cmdline_options_init() < 0) {
-            init_cmdline_options_fail("flip list");
-            return -1;
-        }
-        if (file_system_cmdline_options_init() < 0) {
-            init_cmdline_options_fail("attach");
-            return -1;
-        }
-        if (disk_image_cmdline_options_init() < 0) {
-            init_cmdline_options_fail("disk image");
-            return -1;
-        }
-        if (event_cmdline_options_init() < 0) {
-            init_cmdline_options_fail("event");
+        if (romset_cmdline_options_init() < 0) {
+            init_cmdline_options_fail("romset");
             return -1;
         }
     }
@@ -209,38 +197,34 @@ int init_cmdline_options(void)
         init_cmdline_options_fail("monitor");
         return -1;
     }
-#ifdef DEBUG
-    if (debug_cmdline_options_init() < 0) {
-        init_cmdline_options_fail("debug");
+    if (machine_common_cmdline_options_init() < 0) {
+        init_cmdline_options_fail("machine common");
         return -1;
     }
-#endif
+    if (vsync_cmdline_options_init() < 0) {
+        init_cmdline_options_fail("vsync");
+        return -1;
+    }
+    if (sound_cmdline_options_init() < 0) {
+        init_cmdline_options_fail("sound");
+        return -1;
+    }
+    if (keyboard_cmdline_options_init() < 0) {
+        init_cmdline_options_fail("keyboard");
+        return -1;
+    }
+    if (video_cmdline_options_init() < 0) {
+        init_cmdline_options_fail("video");
+        return -1;
+    }
     if (machine_cmdline_options_init() < 0) {
         init_cmdline_options_fail("machine");
         return -1;
     }
 
     if (machine_class != VICE_MACHINE_VSID) {
-        if (fsdevice_cmdline_options_init() < 0) {
-            init_cmdline_options_fail("file system");
-            return -1;
-        }
-    }
-    if (!video_disabled_mode && joystick_init_cmdline_options() < 0) {
-        init_cmdline_options_fail("joystick");
-        return -1;
-    }
-    if (machine_class != VICE_MACHINE_VSID) {
-        if (kbdbuf_cmdline_options_init() < 0) {
-            init_cmdline_options_fail("keyboard");
-            return -1;
-        }
         if (ram_cmdline_options_init() < 0) {
             init_cmdline_options_fail("RAM");
-            return -1;
-        }
-        if (gfxoutput_cmdline_options_init() < 0) {
-            init_cmdline_options_fail("GFXOUTPUT");
             return -1;
         }
     }
@@ -249,7 +233,47 @@ int init_cmdline_options(void)
         init_cmdline_options_fail("MONITOR_NETWORK");
         return -1;
     }
+    if (monitor_binary_cmdline_options_init() < 0) {
+        init_cmdline_options_fail("MONITOR_BINARY");
+        return -1;
+    }
 #endif
+    DBG(("init_cmdline_options done"));
+    return 0;
+}
+
+/*
+    RANT AHEAD: The way VICE initializes its resources ("global variables") at
+    startup, and then by reading the config file, is a mess. There is no way to
+    make sure a certain order of events without putting a silly amount of work
+    into it and be extra careful every time a detail changes or is added. This,
+    more than once, produced really hard to solve "chicken and egg" problems.
+
+    Sometimes, solving these problems can be done in a simple, yet very ugly.
+    way: after all init was done, we "touch" certain resources again, ie we change
+    their value to another and back to the original, triggering the setup callbacks.
+
+    This is the place to collect this sort of hacks - do not put them elsewhere,
+    so we always know what parts of the code cause this kind of problem.
+ */
+static int main_init_hack(void)
+{
+    /* The FileSystemDeviceX resources do not exist in VSID: */
+    if (machine_class != VICE_MACHINE_VSID) {
+        int n;
+        int dev;
+
+        /* When initializing FileSystemDeviceX resources, vdrive is not properly
+           initialized. Switching forth and back seems to solve the following:
+           - real device does not work when saved into vicerc
+           - real device does not work in xvic
+        */
+        for (n = 0; n < NUM_DISK_UNITS; n++) {
+            resources_get_int_sprintf("FileSystemDevice%d", &dev, n + 8);
+            resources_set_int_sprintf("FileSystemDevice%d", dev == 1 ? 0 : 1, n + 8);
+            resources_set_int_sprintf("FileSystemDevice%d", dev, n + 8);
+        }
+    }
     return 0;
 }
 
@@ -264,16 +288,22 @@ int init_main(void)
     }
 
     if (machine_class != VICE_MACHINE_VSID) {
-        gfxoutput_init();
         screenshot_init();
 
-        drivecpu_early_init_all();
+        drive_cpu_early_init_all();
     }
 
     machine_bus_init();
     machine_maincpu_init();
 
-    event_init();
+    /* FIXME: what's about uimon_init??? */
+    /* the monitor console MUST be available before machine initialization can
+       notify it, and for example cpujam or -initbreak from cmdline.
+    */
+    if (console_init() < 0) {
+        log_error(LOG_DEFAULT, "Console initialization failed.");
+        return -1;
+    }
 
     /* Machine-specific initialization.  */
     if (machine_init() < 0) {
@@ -281,28 +311,17 @@ int init_main(void)
         return -1;
     }
 
-    /* FIXME: what's about uimon_init??? */
-    /* the monitor console MUST be available, because of for example cpujam,
-       or -initbreak from cmdline.
-    */
-    if (console_init() < 0) {
-        log_error(LOG_DEFAULT, "Console initialization failed.");
-        return -1;
-    }
-
     keyboard_init();
 
-    if (!video_disabled_mode) {
-        joystick_init();
-    }
-
     if (machine_class != VICE_MACHINE_VSID) {
-        disk_image_init();
         vdrive_init();
     }
 
     ui_init_finalize();
 
+    main_init_hack();
+
+    init_done = 1;
+
     return 0;
 }
-

@@ -26,4 +26,5 @@ APP_CFLAGS := -fcommon \
              -Wno-pointer-sign -Wno-format -Wno-user-defined-warnings \
              -DLITTLE_ENDIAN=1
 APP_CPPFLAGS := -std=c++14 -fpermissive -fcommon -w -Wno-register \
-             -Wno-deprecated-non-prototype -Wno-register -DLITTLE_ENDIAN=1
+             -Wno-deprecated-non-prototype -Wno-register -Wno-narrowing \
+             -DLITTLE_ENDIAN=1

@@ -26,6 +26,8 @@
 
 #include "vice.h"
 
+#include <stdio.h>
+
 #include "diskimage.h"
 #include "log.h"
 #include "machine-bus.h"
@@ -38,12 +40,10 @@ static log_t realimage_log = LOG_DEFAULT;
 
 void realimage_media_create(disk_image_t *image)
 {
-
 }
 
 void realimage_media_destroy(disk_image_t *image)
 {
-
 }
 
 /*-----------------------------------------------------------------------*/
@@ -60,14 +60,14 @@ int realimage_close(disk_image_t *image)
 
 /*-----------------------------------------------------------------------*/
 
-int realimage_read_sector(disk_image_t *image, BYTE *buf, unsigned int track,
-                          unsigned int sector)
+int realimage_read_sector(const disk_image_t *image, uint8_t *buf,
+                          const disk_addr_t *dadr)
 {
-    return machine_bus_lib_read_sector(8, track, sector, buf);
+    return machine_bus_lib_read_sector(8, dadr->track, dadr->sector, buf);
 }
 
-int realimage_write_sector(disk_image_t *image, BYTE *buf, unsigned int track,
-                           unsigned int sector)
+int realimage_write_sector(disk_image_t *image, const uint8_t *buf,
+                           const disk_addr_t *dadr)
 {
     return 0;
 }
@@ -78,4 +78,3 @@ void realimage_init(void)
 {
     realimage_log = log_open("Real Image");
 }
-

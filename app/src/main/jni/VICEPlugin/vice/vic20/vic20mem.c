@@ -3,8 +3,9 @@
  *
  * Written by
  *  Ettore Perazzoli <ettore@comm2000.it>
- *  André Fachat <fachat@physik.tu-chemnitz.de>
+ *  Andre Fachat <fachat@physik.tu-chemnitz.de>
  *  Daniel Kahlin <daniel@kahlin.net>
+ *  Marco van den Heuvel <blackystardust68@yahoo.com>
  *
  * Multiple memory configuration support originally by
  *  Alexander Lehmann <alex@mathematik.th-darmstadt.de>
@@ -57,28 +58,34 @@
 #include "vic20ieeevia.h"
 #include "vic20mem.h"
 #include "vic20memrom.h"
+#include "vic20rom.h"
 #include "vic20via.h"
 
-/*----------------------------------------------------------------------*/
+/* #define DEBUG_VIC20MEM */
 
-/* Old program counter.  Not used without MMU support.  */
-unsigned int mem_old_reg_pc;
+#ifdef DEBUG_VIC20MEM
+#define DBG(x)  log_printf x
+#else
+#define DBG(x)
+#endif
 
 /* ------------------------------------------------------------------------- */
 
 /* The VIC20 memory. */
-BYTE mem_ram[VIC20_RAM_SIZE];
+uint8_t mem_ram[VIC20_RAM_SIZE];
+
+uint8_t vfli_ram[0x4000]; /* for mikes vfli modification */
 
 /* Last data read/write by the cpu, this value lingers on the C(PU)-bus and
    gets used when the CPU reads from unconnected space on the C(PU)-bus */
-BYTE vic20_cpu_last_data;
+uint8_t vic20_cpu_last_data;
 /* Last read data on V-bus (VD0-VD7) */
-BYTE vic20_v_bus_last_data;
+uint8_t vic20_v_bus_last_data;
 /* Last read data on V-bus (VD8-VD11) */
-BYTE vic20_v_bus_last_high;
+uint8_t vic20_v_bus_last_high;
 
 /* Memory read and write tables.  */
-static BYTE *_mem_read_base_tab[0x101];
+static uint8_t *_mem_read_base_tab[0x101];
 static int mem_read_limit_tab[0x101];
 
 /* These ones are used when watchpoints are turned on.  */
@@ -91,214 +98,158 @@ static read_func_ptr_t _mem_peek_tab[0x101];
 
 read_func_ptr_t *_mem_read_tab_ptr;
 store_func_ptr_t *_mem_write_tab_ptr;
-BYTE **_mem_read_base_tab_ptr;
-int *mem_read_limit_tab_ptr;
+read_func_ptr_t *_mem_read_tab_ptr_dummy;
+store_func_ptr_t *_mem_write_tab_ptr_dummy;
+static uint8_t **_mem_read_base_tab_ptr;
+static int *mem_read_limit_tab_ptr;
 
-/* Current watchpoint state. 1 = watchpoints active, 0 = no watchpoints */
+/* Current watchpoint state.
+          0 = no watchpoints
+    bit0; 1 = watchpoints active
+    bit1; 2 = watchpoints trigger on dummy accesses
+*/
 static int watchpoints_active = 0;
 
 /* ------------------------------------------------------------------------- */
 
-BYTE zero_read(WORD addr)
+uint8_t zero_read(uint16_t addr)
 {
     vic20_cpu_last_data = mem_ram[addr & 0xff];
     vic20_mem_v_bus_read(addr);
     return vic20_cpu_last_data;
 }
 
-void zero_store(WORD addr, BYTE value)
+void zero_store(uint16_t addr, uint8_t value)
 {
     vic20_cpu_last_data = value;
     vic20_mem_v_bus_store(addr);
     mem_ram[addr & 0xff] = value;
 }
 
-static BYTE ram_read(WORD addr)
+static uint8_t ram_read(uint16_t addr)
 {
     vic20_cpu_last_data = mem_ram[addr];
     return vic20_cpu_last_data;
 }
 
-static BYTE ram_read_v_bus(WORD addr)
+static uint8_t ram_read_v_bus(uint16_t addr)
 {
     vic20_cpu_last_data = mem_ram[addr];
     vic20_mem_v_bus_read(addr);
     return vic20_cpu_last_data;
 }
 
-static void ram_store(WORD addr, BYTE value)
+static void ram_store(uint16_t addr, uint8_t value)
 {
     vic20_cpu_last_data = value;
     mem_ram[addr & (VIC20_RAM_SIZE - 1)] = value;
 }
 
-static void ram_store_v_bus(WORD addr, BYTE value)
+static void ram_store_v_bus(uint16_t addr, uint8_t value)
 {
     vic20_cpu_last_data = value;
     vic20_mem_v_bus_store(addr);
     mem_ram[addr & (VIC20_RAM_SIZE - 1)] = value;
 }
 
-static BYTE ram_peek(WORD addr)
+static uint8_t ram_peek(uint16_t addr)
 {
     return mem_ram[addr];
 }
 
 /* ------------------------------------------------------------------------- */
 
-static BYTE colorram_read(WORD addr)
+static uint8_t colorram_read(uint16_t addr)
 {
-    vic20_cpu_last_data = mem_ram[addr] | (vic20_v_bus_last_data & 0xf0);
+    if (vflimod_enabled) {
+        addr = (addr & 0x3ff) | (vic20_vflihack_userport << 10);
+        vic20_cpu_last_data = vfli_ram[addr] | (vic20_v_bus_last_data & 0xf0);
+    } else {
+        vic20_cpu_last_data = mem_ram[addr] | (vic20_v_bus_last_data & 0xf0);
+    }
     vic20_v_bus_last_data = vic20_cpu_last_data; /* TODO verify this */
     return vic20_cpu_last_data;
 }
 
-static void colorram_store(WORD addr, BYTE value)
+static void colorram_store(uint16_t addr, uint8_t value)
 {
     vic20_cpu_last_data = value;
     vic20_v_bus_last_data = vic20_cpu_last_data; /* TODO verify this */
-    mem_ram[addr & (VIC20_RAM_SIZE - 1)] = value & 0xf;
+    if (vflimod_enabled) {
+        addr = (addr & 0x3ff) | (vic20_vflihack_userport << 10);
+        vfli_ram[addr] = value & 0xf;
+    } else {
+        mem_ram[addr & (VIC20_RAM_SIZE - 1)] = value & 0xf;
+    }
 }
 
-static BYTE colorram_peek(WORD addr)
+static uint8_t colorram_peek(uint16_t addr)
 {
     return mem_ram[addr] | (vic20_v_bus_last_data & 0xf0);
 }
 
 /* ------------------------------------------------------------------------- */
 
-static void via_store(WORD addr, BYTE value)
+static uint8_t io3_peek(uint16_t addr)
 {
-    vic20_cpu_last_data = value;
-
-    if (addr & 0x10) {          /* $911x (VIA2) */
-        via2_store(addr, value);
-    }
-    if (addr & 0x20) {          /* $912x (VIA1) */
-        via1_store(addr, value);
-    }
-    vic20_mem_v_bus_store(addr);
+    return vic20io3_peek(addr);
 }
 
-static BYTE via_read(WORD addr)
+static uint8_t io2_peek(uint16_t addr)
 {
-    if ( (addr & 0x30) == 0x00 ) {  /* $910x (unconnected V-bus) */
-        vic20_cpu_last_data = vic20_v_bus_last_data;
-    } else {
-        BYTE temp_bus = 0xff;
-
-        if (addr & 0x10) {          /* $911x (VIA2) */
-            temp_bus &= via2_read(addr);
-        }
-        if (addr & 0x20) {          /* $912x (VIA1) */
-            temp_bus &= via1_read(addr);
-        }
-        vic20_cpu_last_data = temp_bus;
-    }
-    vic20_mem_v_bus_read(addr);
-    return vic20_cpu_last_data;
+    return vic20io2_peek(addr);
 }
 
-static BYTE via_peek(WORD addr)
+static uint8_t io0_peek(uint16_t addr)
 {
-
-    if ((addr & 0x30) == 0x00) {  /* $910x (unconnected V-bus) */
-        return vic20_v_bus_last_data;
-    } else {
-        BYTE temp_bus = 0xff;
-
-        if (addr & 0x10) {          /* $911x (VIA2) */
-            temp_bus &= via2_read(addr);
-        }
-        if (addr & 0x20) {          /* $912x (VIA1) */
-            temp_bus &= via1_read(addr);
-        }
-        return temp_bus;
-    }
+    return vic20io0_peek(addr);
 }
 
 /*-------------------------------------------------------------------*/
 
-static BYTE io3_peek(WORD addr)
-{
-#if 0
-    /* TODO */
-    if (sidcart_enabled && sidcart_address==1 && addr>=0x9c00 && addr<=0x9c1f) {
-        return sid_peek(addr);
-    }
-#endif
-
-#ifdef HAVE_MIDI
-#if 0
-    /* TODO */
-    if (midi_enabled && (addr & 0xff00) == 0x9c00) {
-        if (midi_test_peek((WORD)(addr & 0xff))) {
-            return midi_peek((WORD)(addr & 0xff));
-        }
-    }
-#endif
-#endif
-
-    return vic20_v_bus_last_data;
-}
-
-static BYTE io2_peek(WORD addr)
-{
-#if 0
-    /* TODO */
-    if (sidcart_enabled && sidcart_address==0 && addr>=0x9800 && addr<=0x981f) {
-        return sid_peek(addr);
-    }
-#endif
-
-    return vic20_v_bus_last_data;
-}
-
-/*-------------------------------------------------------------------*/
-
-static BYTE chargen_read(WORD addr)
+static uint8_t chargen_read(uint16_t addr)
 {
     vic20_cpu_last_data = vic20memrom_chargen_read(addr);
     vic20_mem_v_bus_read(addr);
     return vic20_cpu_last_data;
 }
 
-static BYTE chargen_peek(WORD addr)
+static uint8_t chargen_peek(uint16_t addr)
 {
     return vic20memrom_chargen_read(addr);
 }
 
 /*-------------------------------------------------------------------*/
 
-static BYTE read_unconnected_v_bus(WORD addr)
+static uint8_t read_unconnected_v_bus(uint16_t addr)
 {
     vic20_cpu_last_data = vic20_v_bus_last_data;
     vic20_mem_v_bus_read(addr);
     return vic20_cpu_last_data;
 }
 
-static BYTE read_unconnected_c_bus(WORD addr)
+static uint8_t read_unconnected_c_bus(uint16_t addr)
 {
     return vic20_cpu_last_data;
 }
 
-static void store_dummy_v_bus(WORD addr, BYTE value)
+static void store_dummy_v_bus(uint16_t addr, uint8_t value)
 {
     vic20_cpu_last_data = value;
     vic20_mem_v_bus_store(addr);
 }
 
-static void store_dummy_c_bus(WORD addr, BYTE value)
+static void store_dummy_c_bus(uint16_t addr, uint8_t value)
 {
     vic20_cpu_last_data = value;
 }
 
-static BYTE peek_unconnected_v_bus(WORD addr)
+static uint8_t peek_unconnected_v_bus(uint16_t addr)
 {
     return vic20_v_bus_last_data;
 }
 
-static BYTE peek_unconnected_c_bus(WORD addr)
+static uint8_t peek_unconnected_c_bus(uint16_t addr)
 {
     return vic20_cpu_last_data;
 }
@@ -306,13 +257,27 @@ static BYTE peek_unconnected_c_bus(WORD addr)
 /*-------------------------------------------------------------------*/
 /* Watchpoint functions */
 
-static BYTE read_watch(WORD addr)
+static uint8_t zero_read_watch(uint16_t addr)
+{
+    addr &= 0xff;
+    monitor_watch_push_load_addr(addr, e_comp_space);
+    return _mem_read_tab_nowatch[0](addr);
+}
+
+static void zero_store_watch(uint16_t addr, uint8_t value)
+{
+    addr &= 0xff;
+    monitor_watch_push_store_addr(addr, e_comp_space);
+    _mem_write_tab_nowatch[0](addr, value);
+}
+
+static uint8_t read_watch(uint16_t addr)
 {
     monitor_watch_push_load_addr(addr, e_comp_space);
     return _mem_read_tab_nowatch[addr >> 8](addr);
 }
 
-static void store_watch(WORD addr, BYTE value)
+static void store_watch(uint16_t addr, uint8_t value)
 {
     monitor_watch_push_store_addr(addr, e_comp_space);
     _mem_write_tab_nowatch[addr >> 8](addr, value);
@@ -321,17 +286,17 @@ static void store_watch(WORD addr, BYTE value)
 /* ------------------------------------------------------------------------- */
 /* Generic memory access.  */
 
-void mem_store(WORD addr, BYTE value)
+void mem_store(uint16_t addr, uint8_t value)
 {
     _mem_write_tab_ptr[addr >> 8](addr, value);
 }
 
-BYTE mem_read(WORD addr)
+uint8_t mem_read(uint16_t addr)
 {
     return _mem_read_tab_ptr[addr >> 8](addr);
 }
 
-BYTE mem_peek(WORD addr)
+static uint8_t mem_peek(uint16_t addr)
 {
     return _mem_peek_tab[addr >> 8](addr);
 }
@@ -342,7 +307,7 @@ static void set_mem(int start_page, int end_page,
                     read_func_ptr_t read_func,
                     store_func_ptr_t store_func,
                     read_func_ptr_t peek_func,
-                    BYTE *read_base, int base_mask)
+                    uint8_t *read_base, int base_mask)
 {
     int i;
 
@@ -360,14 +325,9 @@ static void set_mem(int start_page, int end_page,
             _mem_write_tab_nowatch[i] = store_func;
             _mem_peek_tab[i] = peek_func;
             _mem_read_base_tab[i] = NULL;
-            mem_read_limit_tab[i] = -1;
+            mem_read_limit_tab[i] = 0;
         }
     }
-}
-
-void mem_set_bank_pointer(BYTE **base, int *limit)
-{
-    /* We do not need MMU support.  */
 }
 
 int vic20_mem_enable_ram_block(int num)
@@ -439,6 +399,8 @@ void mem_initialize_memory(void)
         }
     }
 
+    DBG(("0400-0FFF %s", (mem_cart_blocks & VIC_CART_RAM123) ? "cartridge" : ((ram_block_0_enabled) ? "ram" : "open")));
+
     if (mem_cart_blocks & VIC_CART_BLK1) {
         /* a cartridge is selected, map everything to cart/vic20cartmem.c */
         set_mem(0x20, 0x3f,
@@ -452,6 +414,8 @@ void mem_initialize_memory(void)
             vic20_mem_disable_ram_block(1);
         }
     }
+
+    DBG(("2000-3FFF %s", (mem_cart_blocks & VIC_CART_BLK1) ? "cartridge" : ((ram_block_1_enabled) ? "ram" : "open")));
 
     if (mem_cart_blocks & VIC_CART_BLK2) {
         /* a cartridge is selected, map everything to cart/vic20cartmem.c */
@@ -467,6 +431,8 @@ void mem_initialize_memory(void)
         }
     }
 
+    DBG(("4000-5FFF %s", (mem_cart_blocks & VIC_CART_BLK2) ? "cartridge" : ((ram_block_2_enabled) ? "ram" : "open")));
+
     if (mem_cart_blocks & VIC_CART_BLK3) {
         /* a cartridge is selected, map everything to cart/vic20cartmem.c */
         set_mem(0x60, 0x7f,
@@ -480,6 +446,8 @@ void mem_initialize_memory(void)
             vic20_mem_disable_ram_block(3);
         }
     }
+
+    DBG(("6000-7FFF %s", (mem_cart_blocks & VIC_CART_BLK3) ? "cartridge" : ((ram_block_3_enabled) ? "ram" : "open")));
 
     if (mem_cart_blocks & VIC_CART_BLK5) {
         /* a cartridge is selected, map everything to cart/vic20cartmem.c */
@@ -495,19 +463,16 @@ void mem_initialize_memory(void)
         }
     }
 
+    DBG(("A000-BFFF %s", (mem_cart_blocks & VIC_CART_BLK5) ? "cartridge" : ((ram_block_5_enabled) ? "ram" : "open")));
+
     /* Setup character generator ROM at $8000-$8FFF. */
     set_mem(0x80, 0x8f,
             chargen_read, store_dummy_v_bus, chargen_peek,
             NULL, 0);
 
-    /* Setup VIC-I at $9000-$90FF. */
-    set_mem(0x90, 0x90,
-            vic_read, vic_store, vic_peek,
-            NULL, 0);
-
-    /* Setup VIAs at $9100-$93FF. */
-    set_mem(0x91, 0x93,
-            via_read, via_store, via_peek,
+    /* Setup I/O0 */
+    set_mem(0x90, 0x93,
+            vic20io0_read, vic20io0_store, io0_peek,
             NULL, 0);
 
     /* Setup color memory at $9400-$97FF.
@@ -523,7 +488,7 @@ void mem_initialize_memory(void)
             vic20io2_read, vic20io2_store, io2_peek,
             NULL, 0);
 
-    /* Setup I/O3 at the expansion port (includes emulator ID) */
+    /* Setup I/O3 at the expansion port */
     set_mem(0x9c, 0x9f,
             vic20io3_read, vic20io3_store, io3_peek,
             NULL, 0);
@@ -542,17 +507,30 @@ void mem_initialize_memory(void)
     _mem_write_tab_nowatch[0x100] = _mem_write_tab_nowatch[0];
     _mem_peek_tab[0x100] = _mem_peek_tab[0];
     _mem_read_base_tab[0x100] = _mem_read_base_tab[0];
-    mem_read_limit_tab[0x100] = -1;
+    mem_read_limit_tab[0x100] = 0;
 
     _mem_read_base_tab_ptr = _mem_read_base_tab;
     mem_read_limit_tab_ptr = mem_read_limit_tab;
 
-    for (i = 0; i <= 0x100; i++) {
+    /* setup watchpoint tables */
+    _mem_read_tab_watch[0] = zero_read_watch;
+    _mem_write_tab_watch[0] = zero_store_watch;
+    for (i = 1; i <= 0x100; i++) {
         _mem_read_tab_watch[i] = read_watch;
         _mem_write_tab_watch[i] = store_watch;
     }
 
     mem_toggle_watchpoints(watchpoints_active, NULL);
+    maincpu_resync_limits();
+}
+
+void mem_mmu_translate(unsigned int addr, uint8_t **base, int *start, int *limit)
+{
+    uint8_t *p = _mem_read_base_tab_ptr[addr >> 8];
+
+    *base = (p == NULL) ? NULL : (p - (addr & 0xff00));
+    *start = addr; /* TODO */
+    *limit = mem_read_limit_tab_ptr[addr >> 8];
 }
 
 void mem_toggle_watchpoints(int flag, void *context)
@@ -560,19 +538,30 @@ void mem_toggle_watchpoints(int flag, void *context)
     if (flag) {
         _mem_read_tab_ptr = _mem_read_tab_watch;
         _mem_write_tab_ptr = _mem_write_tab_watch;
+        if (flag > 1) {
+            /* enable watchpoints on dummy accesses */
+            _mem_read_tab_ptr_dummy = _mem_read_tab_watch;
+            _mem_write_tab_ptr_dummy = _mem_write_tab_watch;
+        } else {
+            _mem_read_tab_ptr_dummy = _mem_read_tab_nowatch;
+            _mem_write_tab_ptr_dummy = _mem_write_tab_nowatch;
+        }
     } else {
+        /* all watchpoints disabled */
         _mem_read_tab_ptr = _mem_read_tab_nowatch;
         _mem_write_tab_ptr = _mem_write_tab_nowatch;
+        _mem_read_tab_ptr_dummy = _mem_read_tab_nowatch;
+        _mem_write_tab_ptr_dummy = _mem_write_tab_nowatch;
     }
     watchpoints_active = flag;
 }
-
 /* ------------------------------------------------------------------------- */
 
 /* Initialize RAM for power-up.  */
 void mem_powerup(void)
 {
     ram_init(mem_ram, 0x8000);
+    ram_init(vfli_ram, 0x4000);
     memset(mem_ram + 0x8000, 0, 0x8000);
 }
 
@@ -580,7 +569,7 @@ void mem_powerup(void)
 
 /* FIXME: this part needs to be checked. */
 
-void mem_get_basic_text(WORD *start, WORD *end)
+void mem_get_basic_text(uint16_t *start, uint16_t *end)
 {
     if (start != NULL) {
         *start = mem_ram[0x2b] | (mem_ram[0x2c] << 8);
@@ -590,7 +579,7 @@ void mem_get_basic_text(WORD *start, WORD *end)
     }
 }
 
-void mem_set_basic_text(WORD start, WORD end)
+void mem_set_basic_text(uint16_t start, uint16_t end)
 {
     mem_ram[0x2b] = mem_ram[0xac] = start & 0xff;
     mem_ram[0x2c] = mem_ram[0xad] = start >> 8;
@@ -600,15 +589,36 @@ void mem_set_basic_text(WORD start, WORD end)
 
 /* ------------------------------------------------------------------------- */
 
-int mem_rom_trap_allowed(WORD addr)
+int mem_rom_trap_allowed(uint16_t addr)
 {
     return addr >= 0xe000;
 }
 
-void mem_inject(DWORD addr, BYTE value)
+/* this function should always read from the screen currently used by the kernal
+   for output, normally this does just return system ram - except when the
+   videoram is not memory mapped.
+   used by autostart to "read" the kernal messages
+*/
+uint8_t mem_read_screen(uint16_t addr)
+{
+    return ram_read(addr);
+}
+
+void mem_inject(uint32_t addr, uint8_t value)
 {
     /* just call mem_store(), otherwise expansions might fail */
-    mem_store((WORD)(addr & 0xffff), value);
+    mem_store((uint16_t)(addr & 0xffff), value);
+}
+
+/* In banked memory architectures this will always write to the bank that
+   contains the keyboard buffer and "number of keys in buffer", regardless of
+   what the CPU "sees" currently.
+   In all other cases this just writes to the first 64kb block, usually by
+   wrapping to mem_inject().
+*/
+void mem_inject_key(uint16_t addr, uint8_t value)
+{
+    mem_inject(addr, value);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -616,16 +626,25 @@ void mem_inject(DWORD addr, BYTE value)
 /* Banked memory access functions for the monitor */
 
 /* Exported banked memory access functions for the monitor */
+#define MAXBANKS (2)
 
-static const char *banknames[] = { "default", "cpu", NULL };
+/* by convention, a "bank array" has a 2-hex-digit bank index appended */
+static const char *banknames[MAXBANKS + 1] = { "default", "cpu", NULL };
 
-static const int banknums[] = { 0, 0 };
+static const int banknums[MAXBANKS + 1] = { 0, 0, -1 };
+static const int bankindex[MAXBANKS + 1] = { -1, -1, -1 };
+static const int bankflags[MAXBANKS + 1] = { 0, 0, -1 };
 
 const char **mem_bank_list(void)
 {
     return banknames;
 }
 
+const int *mem_bank_list_nos(void) {
+    return banknums;
+}
+
+/* return bank number for a given literal bank name */
 int mem_bank_from_name(const char *name)
 {
     int i = 0;
@@ -639,48 +658,73 @@ int mem_bank_from_name(const char *name)
     return -1;
 }
 
-BYTE mem_bank_read(int bank, WORD addr, void *context)
+/* return current index for a given bank */
+int mem_bank_index_from_bank(int bank)
+{
+    int i = 0;
+
+    while (banknums[i] > -1) {
+        if (banknums[i] == bank) {
+            return bankindex[i];
+        }
+        i++;
+    }
+    return -1;
+}
+
+int mem_bank_flags_from_bank(int bank)
+{
+    int i = 0;
+
+    while (banknums[i] > -1) {
+        if (banknums[i] == bank) {
+            return bankflags[i];
+        }
+        i++;
+    }
+    return -1;
+}
+
+uint8_t mem_bank_read(int bank, uint16_t addr, void *context)
 {
     return mem_read(addr);
 }
 
-BYTE mem_bank_peek(int bank, WORD addr, void *context)
+/* used by monitor if sfx off */
+uint8_t mem_bank_peek(int bank, uint16_t addr, void *context)
 {
     return mem_peek(addr);
 }
 
-void mem_bank_write(int bank, WORD addr, BYTE byte, void *context)
+int mem_get_current_bank_config(void) {
+    return 0;
+}
+
+uint8_t mem_peek_with_config(int config, uint16_t addr, void *context) {
+    return mem_bank_peek(0 /* current */, addr, context);
+}
+
+void mem_bank_write(int bank, uint16_t addr, uint8_t byte, void *context)
 {
     mem_store(addr, byte);
 }
 
-/* FIXME: add other i/o extensions here */
-static int mem_dump_io(WORD addr)
+/* used by monitor if sfx off */
+void mem_bank_poke(int bank, uint16_t addr, uint8_t byte, void *context)
 {
-    if ((addr >= 0x9000) && (addr <= 0x900f)) {
-        return vic_dump();
-    } else if ((addr >= 0x9120) && (addr <= 0x912f)) {
-        return viacore_dump(machine_context.via1);
-    } else if ((addr >= 0x9110) && (addr <= 0x911f)) {
-        return viacore_dump(machine_context.via2);
-    }
-    return -1;
+    mem_bank_write(bank, addr, byte, context);
 }
 
 mem_ioreg_list_t *mem_ioreg_list_get(void *context)
 {
     mem_ioreg_list_t *mem_ioreg_list = NULL;
 
-    mon_ioreg_add_list(&mem_ioreg_list, "VIC", 0x9000, 0x900f, mem_dump_io);
-    mon_ioreg_add_list(&mem_ioreg_list, "VIA1", 0x9120, 0x912f, mem_dump_io);
-    mon_ioreg_add_list(&mem_ioreg_list, "VIA2", 0x9110, 0x911f, mem_dump_io);
-
     io_source_ioreg_add_list(&mem_ioreg_list);
 
     return mem_ioreg_list;
 }
 
-void mem_get_screen_parameter(WORD *base, BYTE *rows, BYTE *columns, int *bank)
+void mem_get_screen_parameter(uint16_t *base, uint8_t *rows, uint8_t *columns, int *bank)
 {
     *base = ((vic_peek(0x9005) & 0x80) ? 0 : 0x8000) + ((vic_peek(0x9005) & 0x70) << 6) + ((vic_peek(0x9002) & 0x80) << 2);
     *rows = (vic_peek(0x9003) & 0x7e) >> 1;
@@ -688,73 +732,15 @@ void mem_get_screen_parameter(WORD *base, BYTE *rows, BYTE *columns, int *bank)
     *bank = 0;
 }
 
-/************************************************************************/
-
-/* This is a light version of C64's patchrom to change between PAL and
-   NTSC kernal
-    0: kernal ROM 901486-07 (VIC20 PAL)
-    1: kernal ROM 901486-06 (VIC20 NTSC)
-*/
-#define PATCH_VERSIONS 1
-
-int mem_patch_kernal(void)
+/* used by autostart to locate and "read" kernal output on the current screen
+ * this function should return whatever the kernal currently uses, regardless
+ * what is currently visible/active in the UI
+ */
+void mem_get_cursor_parameter(uint16_t *screen_addr, uint8_t *cursor_column, uint8_t *line_length, int *blinking)
 {
-    static unsigned short const patch_bytes[] = {
-        1, 0xE475,
-            0xe8,
-            0x41,
-
-        2, 0xEDE4,
-            0x0c, 0x26,
-            0x05, 0x19,
-
-        6, 0xFE3F,
-            0x26, 0x8d, 0x24, 0x91, 0xa9, 0x48,
-            0x89, 0x8d, 0x24, 0x91, 0xa9, 0x42,
-
-        21, 0xFF5C,
-            0xe6, 0x2a, 0x78, 0x1c, 0x49, 0x13, 0xb1, 0x0f,
-                0x0a, 0x0e, 0xd3, 0x06, 0x38, 0x03, 0x6a, 0x01,
-                0xd0, 0x00, 0x83, 0x00, 0x36,
-            0x92, 0x27, 0x40, 0x1a, 0xc6, 0x11, 0x74, 0x0e,
-                0xee, 0x0c, 0x45, 0x06, 0xf1, 0x02, 0x46, 0x01,
-                0xb8, 0x00, 0x71, 0x00, 0x2a,
-
-        0, 00
-    };
-
-    int rev, video_mode;
-    short bytes, n, i = 0;
-    WORD a;
-
-    resources_get_int("MachineVideoStandard", &video_mode);
-
-    switch (video_mode) {
-      case MACHINE_SYNC_PAL:
-        rev = 0;    /* use kernal 901486-07 */
-        break;
-      case MACHINE_SYNC_NTSC:
-        rev = 1;    /* use kernal 901486-06 */
-        break;
-      default:
-        log_message(LOG_ERR, "VIC20MEM: unknown sync, cannot patch kernal.");
-        return -1;
-    }
-
-    while ((bytes = patch_bytes[i++]) > 0) {
-        a = (WORD)patch_bytes[i++];
-
-        i += (bytes * rev); /* select patch */
-        for (n = bytes; n--;) {
-            vic20memrom_trap_store(a, (BYTE)patch_bytes[i]);
-            rom_store(a++, (BYTE)patch_bytes[i++]);
-        }
-
-        i += (bytes * (PATCH_VERSIONS - rev));  /* skip patch */
-    }
-
-    log_message(LOG_DEFAULT, "VIC20 kernal patched to 901486-0%d.",7-rev);
-
-    return 0;
+    /* Cursor Blink enable: 1 = Flash Cursor, 0 = Cursor disabled, -1 = n/a */
+    *blinking = mem_ram[0xcc] ? 0 : 1;
+    *screen_addr = mem_ram[0xd1] + mem_ram[0xd2] * 256; /* Current Screen Line Address */
+    *cursor_column = mem_ram[0xd3];    /* Cursor Column on Current Line */
+    *line_length = mem_ram[0xd5] + 1;  /* Physical Screen Line Length */
 }
-

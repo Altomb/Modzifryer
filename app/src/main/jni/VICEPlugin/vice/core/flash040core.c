@@ -3,6 +3,8 @@
  *
  * Written by
  *  Hannu Nuotio <hannu.nuotio@tut.fi>
+ * Extended by
+ *  Marko Makela <marko.makela@iki.fi>
  *
  * This file is part of VICE, the Versatile Commodore Emulator.
  * See README for copyright notice.
@@ -19,8 +21,7 @@
  *
  *  You should have received a copy of the GNU General Public License
  *  along with this program; if not, write to the Free Software
- *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
- *  02111-1307  USA.
+ *  Foundation, Inc., 51 Franklin Street, Suite 500, Boston, MA 02110-1335 USA.
  *
  */
 
@@ -42,20 +43,15 @@
 /* #define FLASH_DEBUG_ENABLED */
 
 #ifdef FLASH_DEBUG_ENABLED
-#define FLASH_DEBUG(x) log_debug x
+#define FLASH_DEBUG(x) log_printf  x
 #else
 #define FLASH_DEBUG(x)
 #endif
 
-/* Timeout after sector erase command (datasheet states 50us) */
-#define ERASE_SECTOR_TIMEOUT_CYCLES 50
-/* Time taken by sector & chip erase (FIXME: numbers pulled from a hat) */
-#define ERASE_SECTOR_CYCLES 1012
-#define ERASE_CHIP_CYCLES 8192
-
 struct flash_types_s {
-    BYTE manufacturer_ID;
-    BYTE device_ID;
+    uint8_t manufacturer_ID;
+    uint8_t device_ID;
+    uint8_t device_ID_addr;
     unsigned int size;
     unsigned int sector_mask;
     unsigned int sector_size;
@@ -64,35 +60,50 @@ struct flash_types_s {
     unsigned int magic_2_addr;
     unsigned int magic_1_mask;
     unsigned int magic_2_mask;
-    BYTE status_toggle_bits;
+    uint8_t status_toggle_bits;
+    unsigned int erase_sector_timeout_cycles;
+    unsigned int erase_sector_cycles;
+    unsigned int erase_chip_cycles;
 };
 typedef struct flash_types_s flash_types_t;
 
-static flash_types_t flash_types[FLASH040_TYPE_NUM] = {
-    /* 29F040 */
-    { 0x01, 0xa4,
+static const flash_types_t flash_types[FLASH040_TYPE_NUM] = {
+    /* AM29F040 */
+    { 0x01, 0xa4, 1,
       0x80000,
       0x70000, 0x10000, 16,
       0x5555, 0x2aaa, 0x7fff, 0x7fff,
-      0x40 },
-    /* 29F040B */
-    { 0x01, 0xa4,
+      0x40,
+      80, 2000000, 14000000}, /* may take up to 30s and 120s */
+    /* AM29F040B */
+    { 0x01, 0xa4, 1,
       0x80000,
       0x70000, 0x10000, 16,
-      0x555,  0x2aa,  0x7ff,  0x7ff,
-      0x40 },
+      0x555, 0x2aa, 0x7ff, 0x7ff,
+      0x40,
+      50, 1000000, 8000000}, /* may take up to 8s and 64s */
     /* 29F010 */
-    { 0x01, 0x20,
+    { 0x01, 0x20, 1,
       0x20000,
       0x1c000, 0x04000, 14,
       0x5555, 0x2aaa, 0x7fff, 0x7fff,
-      0x40 },
+      0x40,
+      80, 1000000, 1000000 }, /* may take up to 15s */
     /* 29F032B with A0/1 swap */
-    { 0x01, 0x41,
+    { 0x01, 0x41, 1,
       0x400000,
       0x3f0000, 0x10000, 16,
-      0x556,  0x2a9,  0x7ff,  0x7ff,
-      0x44 },
+      0x556, 0x2a9, 0x7ff, 0x7ff,
+      0x44,
+      50, 1000000, 64000000 }, /* may take up to 8s */
+    /* Spansion S29GL064N */
+    { 0x01, 0x7e, 2,
+      0x800000,
+      /* FIXME: some models support non-uniform sector layout */
+      0x7f0000, 0x10000, 16,
+      0xaaa, 0x555, 0xfff, 0xfff,
+      0x40,
+      50, 500000, 64000000}, /* may take up to 3.5s and 128s */
 };
 
 /* -------------------------------------------------------------------------- */
@@ -135,7 +146,7 @@ inline static void flash_add_sector_to_erase_mask(flash040_context_t *flash040_c
 {
     unsigned int sector_num = flash_addr_to_sector_number(flash040_context, addr);
 
-    flash040_context->erase_mask[sector_num >> 3] |= (BYTE)(1 << (sector_num & 0x7));
+    flash040_context->erase_mask[sector_num >> 3] |= (uint8_t)(1 << (sector_num & 0x7));
 }
 
 inline static void flash_erase_sector(flash040_context_t *flash040_context, unsigned int sector)
@@ -157,10 +168,10 @@ inline static void flash_erase_chip(flash040_context_t *flash040_context)
     flash040_context->flash_dirty = 1;
 }
 
-inline static int flash_program_byte(flash040_context_t *flash040_context, unsigned int addr, BYTE byte)
+inline static int flash_program_byte(flash040_context_t *flash040_context, unsigned int addr, uint8_t byte)
 {
-    BYTE old_data = flash040_context->flash_data[addr];
-    BYTE new_data = old_data & byte;
+    uint8_t old_data = flash040_context->flash_data[addr];
+    uint8_t new_data = old_data & byte;
 
     FLASH_DEBUG(("Programming 0x%05x with 0x%02x (%02x->%02x)", addr, byte, old_data, old_data & byte));
     flash040_context->program_byte = byte;
@@ -173,9 +184,9 @@ inline static int flash_program_byte(flash040_context_t *flash040_context, unsig
 inline static int flash_write_operation_status(flash040_context_t *flash040_context)
 {
     return ((flash040_context->program_byte ^ 0x80) & 0x80)   /* DQ7 = inverse of programmed data */
-         | ((maincpu_clk & 2) << 5)                           /* DQ6 = toggle bit (2 us) */
-         | (1 << 5)                                           /* DQ5 = timeout */
-         ;
+           | ((int)(maincpu_clk & 2) << 5)                    /* DQ6 = toggle bit (2 us) */
+           | (1 << 5)                                         /* DQ5 = timeout */
+    ;
 }
 
 inline static int flash_erase_operation_status(flash040_context_t *flash040_context)
@@ -202,7 +213,7 @@ inline static int flash_erase_operation_status(flash040_context_t *flash040_cont
 static void erase_alarm_handler(CLOCK offset, void *data)
 {
     unsigned int i, j;
-    BYTE m;
+    uint8_t m;
     flash040_context_t *flash040_context = (flash040_context_t *)data;
 
     alarm_unset(flash040_context->erase_alarm);
@@ -211,13 +222,16 @@ static void erase_alarm_handler(CLOCK offset, void *data)
 
     switch (flash040_context->flash_state) {
         case FLASH040_STATE_SECTOR_ERASE_TIMEOUT:
+            alarm_set(flash040_context->erase_alarm, maincpu_clk + flash_types[flash040_context->flash_type].erase_sector_cycles);
+            flash040_context->flash_state = FLASH040_STATE_SECTOR_ERASE;
+            break;
         case FLASH040_STATE_SECTOR_ERASE:
             for (i = 0; i < (8 * FLASH040_ERASE_MASK_SIZE); ++i) {
                 j = i >> 3;
-                m = (BYTE)(1 << (i & 0x7));
+                m = (uint8_t)(1 << (i & 0x7));
                 if (flash040_context->erase_mask[j] & m) {
                     flash_erase_sector(flash040_context, i);
-                    flash040_context->erase_mask[j] &= (BYTE)~m;
+                    flash040_context->erase_mask[j] &= (uint8_t) ~m;
                     break;
                 }
             }
@@ -227,7 +241,7 @@ static void erase_alarm_handler(CLOCK offset, void *data)
             }
 
             if (m != 0) {
-                alarm_set(flash040_context->erase_alarm, maincpu_clk + ERASE_SECTOR_CYCLES);
+                alarm_set(flash040_context->erase_alarm, maincpu_clk + flash_types[flash040_context->flash_type].erase_sector_cycles);
             } else {
                 flash040_context->flash_state = flash040_context->flash_base_state;
             }
@@ -242,13 +256,12 @@ static void erase_alarm_handler(CLOCK offset, void *data)
             FLASH_DEBUG(("Erase alarm - error, state %i unhandled!", (int)flash040_context->flash_state));
             break;
     }
-
 }
 
 /* -------------------------------------------------------------------------- */
 
 static void flash040core_store_internal(flash040_context_t *flash040_context,
-                                                 unsigned int addr, BYTE byte)
+                                        unsigned int addr, uint8_t byte)
 {
 #ifdef FLASH_DEBUG_ENABLED
     flash040_state_t old_state = flash040_context->flash_state;
@@ -325,12 +338,12 @@ static void flash040core_store_internal(flash040_context_t *flash040_context,
             if (flash_magic_1(flash040_context, addr) && (byte == 0x10)) {
                 flash040_context->flash_state = FLASH040_STATE_CHIP_ERASE;
                 flash040_context->program_byte = 0;
-                alarm_set(flash040_context->erase_alarm, maincpu_clk + ERASE_CHIP_CYCLES);
+                alarm_set(flash040_context->erase_alarm, maincpu_clk + flash_types[flash040_context->flash_type].erase_chip_cycles);
             } else if (byte == 0x30) {
                 flash_add_sector_to_erase_mask(flash040_context, addr);
                 flash040_context->program_byte = 0;
                 flash040_context->flash_state = FLASH040_STATE_SECTOR_ERASE_TIMEOUT;
-                alarm_set(flash040_context->erase_alarm, maincpu_clk + ERASE_SECTOR_TIMEOUT_CYCLES);
+                alarm_set(flash040_context->erase_alarm, maincpu_clk + flash_types[flash040_context->flash_type].erase_sector_timeout_cycles);
             } else {
                 flash040_context->flash_state = flash040_context->flash_base_state;
             }
@@ -357,7 +370,7 @@ static void flash040core_store_internal(flash040_context_t *flash040_context,
         case FLASH040_STATE_SECTOR_ERASE_SUSPEND:
             if (byte == 0x30) {
                 flash040_context->flash_state = FLASH040_STATE_SECTOR_ERASE;
-                alarm_set(flash040_context->erase_alarm, maincpu_clk + ERASE_SECTOR_CYCLES);
+                alarm_set(flash040_context->erase_alarm, maincpu_clk + flash_types[flash040_context->flash_type].erase_sector_cycles);
             }
             break;
 
@@ -382,7 +395,7 @@ static void flash040core_store_internal(flash040_context_t *flash040_context,
 
 /* -------------------------------------------------------------------------- */
 
-void flash040core_store(flash040_context_t *flash040_context, unsigned int addr, BYTE byte)
+void flash040core_store(flash040_context_t *flash040_context, unsigned int addr, uint8_t byte)
 {
     if (maincpu_rmw_flag) {
         maincpu_clk--;
@@ -393,10 +406,9 @@ void flash040core_store(flash040_context_t *flash040_context, unsigned int addr,
     flash040core_store_internal(flash040_context, addr, byte);
 }
 
-
-BYTE flash040core_read(flash040_context_t *flash040_context, unsigned int addr)
+uint8_t flash040core_read(flash040_context_t *flash040_context, unsigned int addr)
 {
-    BYTE value;
+    uint8_t value;
 #ifdef FLASH_DEBUG_ENABLED
     flash040_state_t old_state = flash040_context->flash_state;
 #endif
@@ -409,19 +421,14 @@ BYTE flash040core_read(flash040_context_t *flash040_context, unsigned int addr)
                 }
             }
 
-            switch (addr & 0xff) {
-                case 0x00:
-                    value = flash_types[flash040_context->flash_type].manufacturer_ID;
-                    break;
-                case 0x01:
-                    value = flash_types[flash040_context->flash_type].device_ID;
-                    break;
-                case 0x02:
-                    value = 0;
-                    break;
-                default:
-                    value = flash040_context->flash_data[addr];
-                    break;
+            if ((addr & 0xff) == 0) {
+                value = flash_types[flash040_context->flash_type].manufacturer_ID;
+            } else if ((addr & 0xff) == flash_types[flash040_context->flash_type].device_ID_addr) {
+                value = flash_types[flash040_context->flash_type].device_ID;
+            } else if ((addr & 0xff) == 2) {
+                value = 0;
+            } else {
+                value = flash040_context->flash_data[addr];
             }
             break;
 
@@ -437,8 +444,8 @@ BYTE flash040core_read(flash040_context_t *flash040_context, unsigned int addr)
             break;
 
         default:
-            /* The state doesn't reset if a read occurs during a command sequence */
-            /* fall through */
+        /* The state doesn't reset if a read occurs during a command sequence */
+        /* fall through */
         case FLASH040_STATE_READ:
             value = flash040_context->flash_data[addr];
             break;
@@ -454,7 +461,7 @@ BYTE flash040core_read(flash040_context_t *flash040_context, unsigned int addr)
     return value;
 }
 
-BYTE flash040core_peek(flash040_context_t *flash040_context, unsigned int addr)
+uint8_t flash040core_peek(flash040_context_t *flash040_context, unsigned int addr)
 {
     return flash040_context->flash_data[addr];
 }
@@ -471,7 +478,7 @@ void flash040core_reset(flash040_context_t *flash040_context)
 
 void flash040core_init(struct flash040_context_s *flash040_context,
                        struct alarm_context_s *alarm_context,
-                       flash040_type_t type, BYTE *data)
+                       flash040_type_t type, uint8_t *data)
 {
     FLASH_DEBUG(("Init"));
     flash040_context->flash_data = data;
@@ -491,21 +498,32 @@ void flash040core_shutdown(flash040_context_t *flash040_context)
 
 /* -------------------------------------------------------------------------- */
 
+/* FLASH040 2.0 snapshot module format:
+
+   type   | name                    | description
+   ----------------------------------------------
+   BYTE   | state                   |
+   BYTE   | base_state              |
+   BYTE   | program_byte            |
+   ARRAY  | erase_mask              | FLASH040_ERASE_MASK_SIZE
+   BYTE   | last_read               |
+*/
+
 #define FLASH040_DUMP_VER_MAJOR   2
 #define FLASH040_DUMP_VER_MINOR   0
 
 int flash040core_snapshot_write_module(snapshot_t *s, flash040_context_t *flash040_context, const char *name)
 {
     snapshot_module_t *m;
-    BYTE state, base_state;
+    uint8_t state, base_state;
 
     m = snapshot_module_create(s, name, FLASH040_DUMP_VER_MAJOR, FLASH040_DUMP_VER_MINOR);
     if (m == NULL) {
         return -1;
     }
 
-    state = (BYTE)(flash040_context->flash_state);
-    base_state = (BYTE)(flash040_context->flash_base_state);
+    state = (uint8_t)(flash040_context->flash_state);
+    base_state = (uint8_t)(flash040_context->flash_base_state);
 
     if (0
         || (SMW_B(m, state) < 0)
@@ -523,7 +541,7 @@ int flash040core_snapshot_write_module(snapshot_t *s, flash040_context_t *flash0
 
 int flash040core_snapshot_read_module(snapshot_t *s, flash040_context_t *flash040_context, const char *name)
 {
-    BYTE vmajor, vminor, state, base_state;
+    uint8_t vmajor, vminor, state, base_state;
     snapshot_module_t *m;
 
     m = snapshot_module_open(s, name, &vmajor, &vminor);
@@ -557,7 +575,7 @@ int flash040core_snapshot_read_module(snapshot_t *s, flash040_context_t *flash04
         case FLASH040_STATE_SECTOR_ERASE:
         case FLASH040_STATE_CHIP_ERASE:
             /* the alarm timing is not saved, just use some value for now */
-            alarm_set(flash040_context->erase_alarm, maincpu_clk + ERASE_SECTOR_CYCLES);
+            alarm_set(flash040_context->erase_alarm, maincpu_clk + flash_types[flash040_context->flash_type].erase_sector_cycles);
             break;
 
         default:

@@ -27,6 +27,8 @@
  *
  */
 
+/* #define DEBUG_TRAPS */
+
 #include "vice.h"
 
 #include <stdio.h>
@@ -39,12 +41,16 @@
 #include "machine-bus.h"
 #include "maincpu.h"
 #include "mem.h"
-#include "mos6510.h"
-#include "mos6510dtv.h"
 #include "resources.h"
-#include "translate.h"
 #include "traps.h"
 #include "types.h"
+#include "wdc65816.h"
+
+#ifdef DEBUG_TRAPS
+#define DBG(x) log_printf  x
+#else
+#define DBG(x)
+#endif
 
 typedef struct traplist_s {
     struct traplist_s *next;
@@ -56,44 +62,111 @@ static traplist_t *traplist = NULL;
 static int install_trap(const trap_t *t);
 static int remove_trap(const trap_t *t);
 
-static log_t traps_log = LOG_ERR;
+log_t traps_log = LOG_DEFAULT;
+
+static int trapsready = 0;
 
 /* ------------------------------------------------------------------------- */
 
 /* Trap-related resources.  */
 
 /* Flag: Should we avoid installing traps at all?  */
-static int traps_enabled;
+static int traps_enabled = 0;
 
-static int set_traps_enabled(int new_value, void *param)
+#define MAX_DEVICES 15  /* FIXME: is there another constant we can use instead? */
+int traps_enabled_device[MAX_DEVICES];
+
+static int set_traps_status(int enabled)
 {
+    int new_value = enabled ? 1 : 0;
+    int res = 0;
+
+    DBG(("set_traps_status(%d)", enabled));
+
     if ((!traps_enabled && new_value) || (traps_enabled && !new_value)) {
         if (!new_value) {
             /* Traps have been disabled.  */
             traplist_t *p;
 
-            for (p = traplist; p != NULL; p = p->next)
-                remove_trap(p->trap);
+            for (p = traplist; p != NULL; p = p->next) {
+                if (remove_trap(p->trap) < 0) {
+                    res = -1;
+                }
+            }
         } else {
             /* Traps have been enabled.  */
             traplist_t *p;
 
-            for (p = traplist; p != NULL; p = p->next)
-                install_trap(p->trap);
+            for (p = traplist; p != NULL; p = p->next) {
+                if (install_trap(p->trap) < 0) {
+                    res = -1;
+                }
+            }
         }
+    } else {
+        /* always refresh the traps, this improves error handling on the
+           layer above */
+        res = traps_refresh();
     }
 
     traps_enabled = new_value;
-
-    machine_bus_status_virtualdevices_set((unsigned int)new_value);
-
-    return 0;
+    return res;
 }
 
-static const resource_int_t resources_int[] = {
-    { "VirtualDevices", 1, RES_EVENT_SAME, NULL,
-      &traps_enabled, set_traps_enabled, NULL },
-    { NULL }
+static int set_traps_enabled(int val, void *param)
+{
+    unsigned int enabled = 0;
+    unsigned int unit = vice_ptr_to_int(param);
+    unsigned int i;
+    int res = 0;
+
+    DBG(("set_traps_enabled %d device: %u", val, unit));
+    traps_enabled_device[unit] = val ? 1 : 0;
+
+    /* check all devices, enable traps if any of them is enabled */
+    for (i = 1; i < MAX_DEVICES; i++) {
+        enabled |= traps_enabled_device[i];
+    }
+    /* try to enable the traps, this may fail eg with unknown kernals */
+    if (set_traps_status(enabled) < 0) {
+        log_error(traps_log, "could not enable traps for device #%u", unit);
+        /* disable the traps for this device and update the global flag */
+        traps_enabled_device[unit] = 0;
+        for (i = 1; i < MAX_DEVICES; i++) {
+            enabled |= traps_enabled_device[i];
+        }
+        res = -1;
+    }
+
+    machine_bus_status_trapdevices_set(unit, enabled);
+    return res;
+}
+
+static resource_int_t resources_int[] = {
+    /* tape */
+    { "TrapDevice1", 0, RES_EVENT_SAME, NULL,
+      &traps_enabled_device[1], set_traps_enabled, (void*)1 },
+    { "TrapDevice2", 0, RES_EVENT_SAME, NULL,
+      &traps_enabled_device[2], set_traps_enabled, (void*)2 },
+    /* printers */
+    { "TrapDevice4", 0, RES_EVENT_SAME, NULL,
+      &traps_enabled_device[4], set_traps_enabled, (void*)4 },
+    { "TrapDevice5", 0, RES_EVENT_SAME, NULL,
+      &traps_enabled_device[5], set_traps_enabled, (void*)5 },
+    { "TrapDevice6", 0, RES_EVENT_SAME, NULL,
+      &traps_enabled_device[6], set_traps_enabled, (void*)6 },
+    { "TrapDevice7", 0, RES_EVENT_SAME, NULL,
+      &traps_enabled_device[7], set_traps_enabled, (void*)7 },
+    /* disk drives */
+    { "TrapDevice8", 0, RES_EVENT_SAME, NULL,
+      &traps_enabled_device[8], set_traps_enabled, (void*)8 },
+    { "TrapDevice9", 0, RES_EVENT_SAME, NULL,
+      &traps_enabled_device[9], set_traps_enabled, (void*)9 },
+    { "TrapDevice10", 0, RES_EVENT_SAME, NULL,
+      &traps_enabled_device[10], set_traps_enabled, (void*)10 },
+    { "TrapDevice11", 0, RES_EVENT_SAME, NULL,
+      &traps_enabled_device[11], set_traps_enabled, (void*)11 },
+    RESOURCE_INT_LIST_END
 };
 
 int traps_resources_init(void)
@@ -105,18 +178,72 @@ int traps_resources_init(void)
 
 /* Trap-related command-line options.  */
 
-static const cmdline_option_t cmdline_options[] = {
-    { "-virtualdev", SET_RESOURCE, 0,
-      NULL, NULL, "VirtualDevices", (resource_value_t)1,
-      USE_PARAM_STRING, USE_DESCRIPTION_ID,
-      IDCLS_UNUSED, IDCLS_ENABLE_TRAPS_FAST_EMULATION,
-      NULL, NULL },
-    { "+virtualdev", SET_RESOURCE, 0,
-      NULL, NULL, "VirtualDevices", (resource_value_t)0,
-      USE_PARAM_STRING, USE_DESCRIPTION_ID,
-      IDCLS_UNUSED, IDCLS_DISABLE_TRAPS_FAST_EMULATION,
-      NULL, NULL },
-    { NULL }
+static const cmdline_option_t cmdline_options[] =
+{
+    /* tape */
+    { "-trapdevice1", SET_RESOURCE, CMDLINE_ATTRIB_NONE,
+      NULL, NULL, "TrapDevice1", (resource_value_t)1,
+      NULL, "Enable general mechanisms for fast disk/tape emulation" },
+    { "+trapdevice1", SET_RESOURCE, CMDLINE_ATTRIB_NONE,
+      NULL, NULL, "TrapDevice1", (resource_value_t)0,
+      NULL, "Disable general mechanisms for fast disk/tape emulation" },
+    { "-trapdevice2", SET_RESOURCE, CMDLINE_ATTRIB_NONE,
+      NULL, NULL, "TrapDevice2", (resource_value_t)1,
+      NULL, "Enable general mechanisms for fast disk/tape emulation" },
+    { "+trapdevice2", SET_RESOURCE, CMDLINE_ATTRIB_NONE,
+      NULL, NULL, "TrapDevice2", (resource_value_t)0,
+      NULL, "Disable general mechanisms for fast disk/tape emulation" },
+    /* printers */
+    { "-trapdevice4", SET_RESOURCE, CMDLINE_ATTRIB_NONE,
+      NULL, NULL, "TrapDevice4", (resource_value_t)1,
+      NULL, "Enable general mechanisms for fast disk/tape emulation" },
+    { "+trapdevice4", SET_RESOURCE, CMDLINE_ATTRIB_NONE,
+      NULL, NULL, "TrapDevice4", (resource_value_t)0,
+      NULL, "Disable general mechanisms for fast disk/tape emulation" },
+    { "-trapdevice5", SET_RESOURCE, CMDLINE_ATTRIB_NONE,
+      NULL, NULL, "TrapDevice5", (resource_value_t)1,
+      NULL, "Enable general mechanisms for fast disk/tape emulation" },
+    { "+trapdevice5", SET_RESOURCE, CMDLINE_ATTRIB_NONE,
+      NULL, NULL, "TrapDevice5", (resource_value_t)0,
+      NULL, "Disable general mechanisms for fast disk/tape emulation" },
+    { "-trapdevice6", SET_RESOURCE, CMDLINE_ATTRIB_NONE,
+      NULL, NULL, "TrapDevice6", (resource_value_t)1,
+      NULL, "Enable general mechanisms for fast disk/tape emulation" },
+    { "+trapdevice6", SET_RESOURCE, CMDLINE_ATTRIB_NONE,
+      NULL, NULL, "TrapDevice6", (resource_value_t)0,
+      NULL, "Disable general mechanisms for fast disk/tape emulation" },
+    { "-trapdevice7", SET_RESOURCE, CMDLINE_ATTRIB_NONE,
+      NULL, NULL, "TrapDevice7", (resource_value_t)1,
+      NULL, "Enable general mechanisms for fast disk/tape emulation" },
+    { "+trapdevice7", SET_RESOURCE, CMDLINE_ATTRIB_NONE,
+      NULL, NULL, "TrapDevice7", (resource_value_t)0,
+      NULL, "Disable general mechanisms for fast disk/tape emulation" },
+    /* disk drives */
+    { "-trapdevice8", SET_RESOURCE, CMDLINE_ATTRIB_NONE,
+      NULL, NULL, "TrapDevice8", (resource_value_t)1,
+      NULL, "Enable general mechanisms for fast disk/tape emulation" },
+    { "+trapdevice8", SET_RESOURCE, CMDLINE_ATTRIB_NONE,
+      NULL, NULL, "TrapDevice8", (resource_value_t)0,
+      NULL, "Disable general mechanisms for fast disk/tape emulation" },
+    { "-trapdevice9", SET_RESOURCE, CMDLINE_ATTRIB_NONE,
+      NULL, NULL, "TrapDevice9", (resource_value_t)1,
+      NULL, "Enable general mechanisms for fast disk/tape emulation" },
+    { "+trapdevice9", SET_RESOURCE, CMDLINE_ATTRIB_NONE,
+      NULL, NULL, "TrapDevice9", (resource_value_t)0,
+      NULL, "Disable general mechanisms for fast disk/tape emulation" },
+    { "-trapdevice10", SET_RESOURCE, CMDLINE_ATTRIB_NONE,
+      NULL, NULL, "TrapDevice10", (resource_value_t)1,
+      NULL, "Enable general mechanisms for fast disk/tape emulation" },
+    { "+trapdevice10", SET_RESOURCE, CMDLINE_ATTRIB_NONE,
+      NULL, NULL, "TrapDevice10", (resource_value_t)0,
+      NULL, "Disable general mechanisms for fast disk/tape emulation" },
+    { "-trapdevice11", SET_RESOURCE, CMDLINE_ATTRIB_NONE,
+      NULL, NULL, "TrapDevice11", (resource_value_t)1,
+      NULL, "Enable general mechanisms for fast disk/tape emulation" },
+    { "+trapdevice11", SET_RESOURCE, CMDLINE_ATTRIB_NONE,
+      NULL, NULL, "TrapDevice11", (resource_value_t)0,
+      NULL, "Disable general mechanisms for fast disk/tape emulation" },
+    CMDLINE_LIST_END
 };
 
 int traps_cmdline_options_init(void)
@@ -129,6 +256,13 @@ int traps_cmdline_options_init(void)
 void traps_init(void)
 {
     traps_log = log_open("Traps");
+    trapsready = 1;
+}
+
+/* returns 1 if traps are ready to be used */
+int traps_ready(void)
+{
+    return trapsready;
 }
 
 void traps_shutdown(void)
@@ -149,7 +283,7 @@ static int install_trap(const trap_t *t)
     int i;
 
     for (i = 0; i < 3; i++) {
-        if ((t->readfunc)((WORD)(t->address + i)) != t->check[i]) {
+        if ((t->readfunc)((uint16_t)(t->address + i)) != t->check[i]) {
             log_error(traps_log,
                       "Incorrect checkbyte for trap `%s'.  Not installed.",
                       t->name);
@@ -157,6 +291,7 @@ static int install_trap(const trap_t *t)
         }
     }
 
+    log_verbose(traps_log, "Trap '%s' installed.", t->name);
     (t->storefunc)(t->address, TRAP_OPCODE);
 
     return 0;
@@ -171,8 +306,12 @@ int traps_add(const trap_t *trap)
     p->trap = trap;
     traplist = p;
 
-    if (traps_enabled)
+    if (traps_enabled) {
+        log_verbose(traps_log, "Trap '%s' added.", trap->name);
         install_trap(trap);
+    } else {
+        log_verbose(traps_log, "Traps are disabled, trap '%s' not installed.", trap->name);
+    }
 
     return 0;
 }
@@ -180,9 +319,11 @@ int traps_add(const trap_t *trap)
 static int remove_trap(const trap_t *trap)
 {
     if ((trap->readfunc)(trap->address) != TRAP_OPCODE) {
-        log_error(traps_log, "No trap `%s' installed?", trap->name);
+        log_error(traps_log, "remove_trap($%04x): No trap `%s' installed?",
+                  trap->address, trap->name);
         return -1;
     }
+    log_verbose(traps_log, "Trap '%s' disabled.", trap->name);
 
     (trap->storefunc)(trap->address, trap->check[0]);
     return 0;
@@ -193,8 +334,9 @@ int traps_remove(const trap_t *trap)
     traplist_t *p = traplist, *prev = NULL;
 
     while (p) {
-        if (p->trap->address == trap->address)
+        if (p->trap->address == trap->address) {
             break;
+        }
         prev = p;
         p = p->next;
     }
@@ -204,54 +346,65 @@ int traps_remove(const trap_t *trap)
         return -1;
     }
 
-    if (prev)
+    if (prev) {
         prev->next = p->next;
-    else
+    } else {
         traplist = p->next;
+    }
 
     lib_free(p);
 
-    if (traps_enabled)
+    if (traps_enabled) {
         remove_trap(trap);
+    }
 
     return 0;
 }
 
-DWORD traps_handler(void)
+int traps_refresh(void)
+{
+    int res = 0;
+    if (traps_enabled) {
+        traplist_t *p;
+
+        for (p = traplist; p != NULL; p = p->next) {
+            if (remove_trap(p->trap) < 0) {
+                res = -1;
+            }
+            if (install_trap(p->trap) < 0) {
+                res = -1;
+            }
+        }
+    }
+    return res;
+}
+
+uint32_t traps_handler(void)
 {
     traplist_t *p = traplist;
     unsigned int pc;
     int result;
 
-    if (machine_class == VICE_MACHINE_C64DTV) {
-        pc = MOS6510DTV_REGS_GET_PC(&maincpu_regs);
-    } else {
-        pc = MOS6510_REGS_GET_PC(&maincpu_regs);
-    }
+    pc = maincpu_get_pc();
 
     while (p) {
         if (p->trap->address == pc) {
             /* This allows the trap function to remove traps.  */
-            WORD resume_address = p->trap->resume_address;
+            uint16_t resume_address = p->trap->resume_address;
 
             result = (*p->trap->func)();
             if (!result) {
                 return (p->trap->check[0] | (p->trap->check[1] << 8) | (p->trap->check[2] << 16));
-            } 
+            }
             /* XXX ALERT!  `p' might not be valid anymore here, because
                `p->trap->func()' might have removed all the traps.  */
-            if (machine_class == VICE_MACHINE_C64DTV) {
-                MOS6510DTV_REGS_SET_PC(&maincpu_regs, resume_address);
-
-            } else {
-                MOS6510_REGS_SET_PC(&maincpu_regs, resume_address);
-            }
+            maincpu_set_pc(resume_address);
             return 0;
         }
         p = p->next;
     }
 
-    return (DWORD)-1;
+    return (uint32_t)-1;
 }
 
 int traps_checkaddr(unsigned int addr)

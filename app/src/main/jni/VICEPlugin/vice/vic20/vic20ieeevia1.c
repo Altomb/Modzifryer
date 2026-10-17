@@ -2,7 +2,7 @@
  * vic20ieeevia1.c - IEEE488 interface VIA1 emulation in the VIC-1112.
  *
  * Written by
- *  André Fachat <a.fachat@physik.tu-chemnitz.de>
+ *  Andre Fachat <a.fachat@physik.tu-chemnitz.de>
  *  Andreas Boose <viceteam@t-online.de>
  *
  * This file is part of VICE, the Versatile Commodore Emulator.
@@ -29,7 +29,7 @@
 
 #include <stdio.h>
 
-#include "drivecpu.h"
+#include "drive.h"
 #include "interrupt.h"
 #include "lib.h"
 #include "maincpu.h"
@@ -40,17 +40,22 @@
 #include "vic20ieeevia.h"
 
 
-void ieeevia1_store(WORD addr, BYTE data)
+int ieeevia1_dump(void)
+{
+    return viacore_dump(machine_context.ieeevia1);
+}
+
+void ieeevia1_store(uint16_t addr, uint8_t data)
 {
     viacore_store(machine_context.ieeevia1, addr, data);
 }
 
-BYTE ieeevia1_read(WORD addr)
+uint8_t ieeevia1_read(uint16_t addr)
 {
     return viacore_read(machine_context.ieeevia1, addr);
 }
 
-BYTE ieeevia1_peek(WORD addr)
+uint8_t ieeevia1_peek(uint16_t addr)
 {
     return viacore_peek(machine_context.ieeevia1, addr);
 }
@@ -59,63 +64,61 @@ static void set_ca2(via_context_t *via_context, int state)
 {
 }
 
-static void set_cb2(via_context_t *via_context, int state)
+static void set_cb2(via_context_t *via_context, int state, int offset)
 {
 }
 
-static void set_int(via_context_t *via_context, unsigned int int_num,
-                        int value, CLOCK rclk)
+static void set_int(via_context_t *via_context, unsigned int int_num, int value, CLOCK rclk)
 {
     interrupt_set_irq(maincpu_int_status, int_num, value, rclk);
 }
 
-static void restore_int(via_context_t *via_context, unsigned int int_num,
-                        int value)
+static void restore_int(via_context_t *via_context, unsigned int int_num, int value)
 {
     interrupt_restore_irq(maincpu_int_status, int_num, value);
 }
 
-static void undump_acr(via_context_t *via_context, BYTE byte)
+static void undump_acr(via_context_t *via_context, uint8_t byte)
 {
 }
 
-static void store_acr(via_context_t *via_context, BYTE byte)
+static void store_acr(via_context_t *via_context, uint8_t byte)
 {
 }
 
-static void store_sr(via_context_t *via_context, BYTE byte)
+static void store_sr(via_context_t *via_context, uint8_t byte)
 {
 }
 
-static void store_t2l(via_context_t *via_context, BYTE byte)
+static void store_t2l(via_context_t *via_context, uint8_t byte)
 {
 }
 
-static void undump_pra(via_context_t *via_context, BYTE byte)
+static void undump_pra(via_context_t *via_context, uint8_t byte)
 {
 }
 
-static void store_pra(via_context_t *via_context, BYTE byte, BYTE myoldpa,
-                      WORD addr)
+static void store_pra(via_context_t *via_context, uint8_t byte, uint8_t myoldpa,
+                      uint16_t addr)
 {
 }
 
-static void undump_prb(via_context_t *via_context, BYTE byte)
+static void undump_prb(via_context_t *via_context, uint8_t byte)
 {
-    parallel_cpu_set_dav((BYTE)(!(byte & 0x01)));
-    parallel_cpu_set_nrfd((BYTE)(!(byte & 0x02)));
-    parallel_cpu_set_ndac((BYTE)(!(byte & 0x04)));
+    parallel_cpu_set_dav((uint8_t)(!(byte & 0x01)));
+    parallel_cpu_set_nrfd((uint8_t)(!(byte & 0x02)));
+    parallel_cpu_set_ndac((uint8_t)(!(byte & 0x04)));
 }
 
-static void store_prb(via_context_t *via_context, BYTE byte, BYTE myoldpb,
-                      WORD addr)
+static void store_prb(via_context_t *via_context, uint8_t byte, uint8_t myoldpb,
+                      uint16_t addr)
 {
-    parallel_cpu_set_dav((BYTE)(!(byte & 0x01)));
-    parallel_cpu_set_nrfd((BYTE)(!(byte & 0x02)));
-    parallel_cpu_set_ndac((BYTE)(!(byte & 0x04)));
+    parallel_cpu_set_dav((uint8_t)(!(byte & 0x01)));
+    parallel_cpu_set_nrfd((uint8_t)(!(byte & 0x02)));
+    parallel_cpu_set_ndac((uint8_t)(!(byte & 0x04)));
 }
 
-static void undump_pcr(via_context_t *via_context, BYTE byte)
+static void undump_pcr(via_context_t *via_context, uint8_t byte)
 {
 }
 
@@ -126,47 +129,49 @@ static void reset(via_context_t *via_context)
     parallel_cpu_set_ndac(0);
 }
 
-static BYTE store_pcr(via_context_t *via_context, BYTE byte, WORD addr)
+static uint8_t store_pcr(via_context_t *via_context, uint8_t byte, uint16_t addr)
 {
     return byte;
 }
 
-static BYTE read_pra(via_context_t *via_context, WORD addr)
+static uint8_t read_pra(via_context_t *via_context, uint16_t addr, bool peek_only)
 {
     return 0xff;
 }
 
-static BYTE read_prb(via_context_t *via_context)
+static uint8_t read_prb(via_context_t *via_context, bool peek_only)
 {
-    BYTE byte;
+    uint8_t byte;
 
-    drivecpu_execute_all(maincpu_clk);
+    if (!peek_only) {
+        drive_catch_up_hook(maincpu_clk);
+    }
 
     byte = 255
-        - (parallel_atn  ? 0x80 : 0)
-        - (parallel_ndac ? 0x40 : 0)
-        - (parallel_nrfd ? 0x20 : 0)
-        - (parallel_dav  ? 0x10 : 0)
-        - (parallel_eoi  ? 0x08 : 0);
+           - (parallel_atn ? 0x80 : 0)
+           - (parallel_ndac ? 0x40 : 0)
+           - (parallel_nrfd ? 0x20 : 0)
+           - (parallel_dav ? 0x10 : 0)
+           - (parallel_eoi ? 0x08 : 0);
 
     /* none of the load changes output register value -> std. masking */
     byte = ((byte & ~(via_context->via[VIA_DDRB]))
-           | (via_context->via[VIA_PRB] & via_context->via[VIA_DDRB]));
+            | (via_context->via[VIA_PRB] & via_context->via[VIA_DDRB]));
     return byte;
 }
 
 void ieeevia1_init(via_context_t *via_context)
 {
     viacore_init(machine_context.ieeevia1, maincpu_alarm_context,
-                 maincpu_int_status, maincpu_clk_guard);
+                 maincpu_int_status);
 }
 
-void vic20ieeevia1_setup_context(machine_context_t *machine_context)
+void vic20ieeevia1_setup_context(machine_context_t *machinecontext)
 {
     via_context_t *via;
 
-    machine_context->ieeevia1 = lib_malloc(sizeof(via_context_t));
-    via = machine_context->ieeevia1;
+    machinecontext->ieeevia1 = lib_malloc(sizeof(via_context_t));
+    via = machinecontext->ieeevia1;
 
     via->prv = NULL;
     via->context = NULL;
@@ -201,4 +206,3 @@ void vic20ieeevia1_setup_context(machine_context_t *machine_context)
     via->set_cb2 = set_cb2;
     via->reset = reset;
 }
-

@@ -9,7 +9,7 @@
  *  Jarkko Sonninen <sonninen@lut.fi>
  *  Jouko Valta <jopi@stekt.oulu.fi>
  *  Olaf Seibert <rhialto@mbfys.kun.nl>
- *  André Fachat <a.fachat@physik.tu-chemnitz.de>
+ *  Andre Fachat <a.fachat@physik.tu-chemnitz.de>
  *  Ettore Perazzoli <ettore@comm2000.it>
  *  pottendo <pottendo@gmx.net>
  *
@@ -39,8 +39,9 @@
 #include "cbmdos.h"
 #include "fileio.h"
 #include "fsdevice-close.h"
+#include "fsdevice-read.h"
 #include "fsdevicetypes.h"
-#include "ioutil.h"
+#include "archdep.h"
 #include "tape.h"
 #include "vdrive.h"
 
@@ -49,37 +50,40 @@ int fsdevice_close(vdrive_t *vdrive, unsigned int secondary)
 {
     bufinfo_t *bufinfo;
 
-    bufinfo = fsdevice_dev[vdrive->unit - 8].bufinfo;
+    bufinfo = &fsdevice_dev[vdrive->unit - 8].bufinfo[secondary];
 
     if (secondary == 15) {
         fsdevice_error(vdrive, CBMDOS_IPE_OK);
         return FLOPPY_COMMAND_OK;
     }
 
-    switch (bufinfo[secondary].mode) {
-      case Write:
-      case Read:
-      case Append:
-        if (bufinfo[secondary].tape->name) {
-            tape_image_close(bufinfo[secondary].tape);
-        } else {
-            if (bufinfo[secondary].fileio_info != NULL) {
-                fileio_close(bufinfo[secondary].fileio_info);
-                bufinfo[secondary].fileio_info = NULL;
+    switch (bufinfo->mode) {
+        case Relative:
+            fsdevice_relative_pad_record(bufinfo);
+            /* fall through */
+        case Write:
+        case Read:
+        case Append:
+            if (bufinfo->tape->name) {
+                tape_image_close(bufinfo->tape);
             } else {
+                if (bufinfo->fileio_info != NULL) {
+                    fileio_close(bufinfo->fileio_info);
+                    bufinfo->fileio_info = NULL;
+                } else {
+                    return FLOPPY_ERROR;
+                }
+            }
+            break;
+        case Directory:
+            if (bufinfo->host_dir == NULL) {
                 return FLOPPY_ERROR;
             }
-        }
-        break;
-      case Directory:
-        if (bufinfo[secondary].ioutil_dir == NULL)
-            return FLOPPY_ERROR;
 
-        ioutil_closedir(bufinfo[secondary].ioutil_dir);
-        bufinfo[secondary].ioutil_dir = NULL;
-        break;
+            archdep_closedir(bufinfo->host_dir);
+            bufinfo->host_dir = NULL;
+            break;
     }
 
     return FLOPPY_COMMAND_OK;
 }
-

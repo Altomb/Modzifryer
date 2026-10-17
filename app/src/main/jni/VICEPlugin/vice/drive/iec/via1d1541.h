@@ -2,7 +2,7 @@
  * via1d1541.h - Drive 15x1 VIA definitions.
  *
  * Written by
- *  Andre' Fachat <fachat@physik.tu-chemnitz.de>
+ *  Andre Fachat <fachat@physik.tu-chemnitz.de>
  *  Andreas Boose <viceteam@t-online.de>
  *
  * This file is part of VICE, the Versatile Commodore Emulator.
@@ -30,16 +30,15 @@
 
 #include "types.h"
 
-struct drive_context_s;
+struct diskunit_context_s;
 struct via_context_s;
 
-extern void via1d1541_setup_context(struct drive_context_s *ctxptr);
-extern void via1d1541_init(struct drive_context_s *ctxptr);
+void via1d1541_setup_context(struct diskunit_context_s *ctxptr);
+void via1d1541_init(struct diskunit_context_s *ctxptr);
 
-extern void via1d1541_store(struct drive_context_s *ctxptr, WORD addr,
-                                     BYTE byte);
-extern BYTE via1d1541_read(struct drive_context_s *ctxptr, WORD addr);
-extern BYTE via1d1541_peek(struct drive_context_s *ctxptr, WORD addr);
+void via1d1541_store(struct diskunit_context_s *ctxptr, uint16_t addr, uint8_t byte);
+uint8_t via1d1541_read(struct diskunit_context_s *ctxptr, uint16_t addr);
+uint8_t via1d1541_peek(struct diskunit_context_s *ctxptr, uint16_t addr);
+int via1d1541_dump(diskunit_context_t *ctxptr, uint16_t addr);
 
 #endif
-

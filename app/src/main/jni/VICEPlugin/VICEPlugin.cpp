@@ -24,6 +24,7 @@ extern "C" {
 
 /* In our overridden maincpu.c */
 extern void psid_play(short *buf, int size);
+
 }
 
 /*
@@ -65,7 +66,7 @@ static void c64_song_init()
     resources_set_int("SidModel", sid);
 
     /* Reset C64, which also initializes PSID for us. */
-    machine_trigger_reset(MACHINE_RESET_MODE_SOFT);
+    machine_trigger_reset(MACHINE_RESET_MODE_RESET_CPU);
 
     /* Now force video mode if we are asked to. */
     if (videomode_is_forced)
@@ -107,9 +108,8 @@ JNIEXPORT void JNICALL Java_com_ssb_droidsound_plugins_VICEPlugin_N_1setOption(J
     }
 }
 
-int console_mode = 1;
-int vsid_mode = 1;
-int video_disabled_mode = 1;
+/* console_mode/video_disabled_mode are provided by vice/main.c in 3.x;
+   vsid_mode no longer exists (VSID selected via machine class). */
 
 
 JNIEXPORT jstring JNICALL Java_com_ssb_droidsound_plugins_VICEPlugin_N_1loadFile(JNIEnv *env, jclass cl, jstring name)
@@ -148,14 +148,11 @@ JNIEXPORT void JNICALL Java_com_ssb_droidsound_plugins_VICEPlugin_N_1unload(JNIE
 JNIEXPORT jint JNICALL Java_com_ssb_droidsound_plugins_VICEPlugin_N_1getSoundData(JNIEnv *env, jclass cl, jshortArray sArray, jint size)
 {
     jshort *ptr = env->GetShortArrayElements(sArray, NULL);
-    
-    
+
     psid_play(ptr, size);
-    //fifo->processBytes((char*)ptr, size);
-    //__android_log_print(ANDROID_LOG_VERBOSE, "VICEPlugin", "SILENCE %d", fifo->getSilence());
 
     env->ReleaseShortArrayElements(sArray, ptr, 0);
-    
+
     return size;
 }
 
@@ -181,7 +178,7 @@ JNIEXPORT void JNICALL Java_com_ssb_droidsound_plugins_VICEPlugin_N_1setDataDir(
     machine_early_init();
     sysfile_init("C64");
 
-    gfxoutput_early_init();
+    gfxoutput_early_init(0);
 
     if (init_resources() < 0)
     {
@@ -198,6 +195,11 @@ JNIEXPORT void JNICALL Java_com_ssb_droidsound_plugins_VICEPlugin_N_1setDataDir(
 
     resources_set_int("SidResidSampling", 0);
     resources_set_int("VICIIVideoCache", 0);
+    /* The plugin API has no sample-rate negotiation: the Android player
+       (Player/AsyncAudioPlayer) always consumes getSoundData() output at
+       44100 Hz.  VICE 3.x defaults SoundSampleRate to 48000, which would make
+       every tune play ~9% fast; force 44100 to match the player. */
+    resources_set_int("SoundSampleRate", 44100);
     resources_set_string("Directory", cpath);
 
     if (init_main() < 0)

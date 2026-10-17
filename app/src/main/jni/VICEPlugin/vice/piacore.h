@@ -3,7 +3,7 @@
  *
  * Written by
  *  Jouko Valta <jopi@stekt.oulu.fi>
- *  Andre' Fachat <fachat@physik.tu-chemnitz.de>
+ *  Andre Fachat <fachat@physik.tu-chemnitz.de>
  *
  * This file is part of VICE, the Versatile Commodore Emulator.
  * See README for copyright notice.
@@ -47,14 +47,14 @@
 #define P_CTRL_B        3
 
 typedef struct {
-    BYTE  port_a;       /* output register, i.e. what has been written by
+    uint8_t port_a;        /* output register, i.e. what has been written by
                            the CPU. input is assembled at read time */
-    BYTE  ddr_a;        /* PIA Port A DDR */
-    BYTE  ctrl_a;
+    uint8_t ddr_a;         /* PIA Port A DDR */
+    uint8_t ctrl_a;
 
-    BYTE  port_b;
-    BYTE  ddr_b;        /* PIA Port B DDR */
-    BYTE  ctrl_b;
+    uint8_t port_b;
+    uint8_t ddr_b;         /* PIA Port B DDR */
+    uint8_t ctrl_b;
 
     int ca_state;
     int cb_state;
@@ -64,7 +64,6 @@ typedef struct {
 
 static int is_peek_access = 0;
 
-static log_t mypia_log = LOG_ERR;
+static log_t mypia_log = LOG_DEFAULT;
 
 #endif
-

@@ -3,7 +3,7 @@
  *
  * Written by
  *  Daniel Sladic <sladic@eecg.toronto.edu>
- *  André Fachat <fachat@physik.tu-chemnitz.de>
+ *  Andre Fachat <fachat@physik.tu-chemnitz.de>
  *  Andreas Boose <viceteam@t-online.de>
  *
  * This file is part of VICE, the Versatile Commodore Emulator.
@@ -31,10 +31,10 @@
 
 #include "types.h"
 
-extern void vic20iec_init(void);
-extern BYTE iec_pa_read(void);
-extern void iec_pa_write(BYTE data);
-extern void iec_pcr_write(BYTE data);
+void vic20iec_init(void);
+uint8_t iec_pa_peek(void);
+uint8_t iec_pa_read(void);
+void iec_pa_write(uint8_t data);
+void iec_pcr_write(uint8_t data);
 
 #endif
-

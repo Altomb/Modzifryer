@@ -31,33 +31,38 @@
 
 #include "types.h"
 
-extern BYTE finalexpansion_ram123_read(WORD addr);
-extern void finalexpansion_ram123_store(WORD addr, BYTE value);
-extern BYTE finalexpansion_blk1_read(WORD addr);
-extern void finalexpansion_blk1_store(WORD addr, BYTE value);
-extern BYTE finalexpansion_blk2_read(WORD addr);
-extern void finalexpansion_blk2_store(WORD addr, BYTE value);
-extern BYTE finalexpansion_blk3_read(WORD addr);
-extern void finalexpansion_blk3_store(WORD addr, BYTE value);
-extern BYTE finalexpansion_blk5_read(WORD addr);
-extern void finalexpansion_blk5_store(WORD addr, BYTE value);
+uint8_t finalexpansion_ram123_read(uint16_t addr);
+void finalexpansion_ram123_store(uint16_t addr, uint8_t value);
+uint8_t finalexpansion_blk1_read(uint16_t addr);
+void finalexpansion_blk1_store(uint16_t addr, uint8_t value);
+uint8_t finalexpansion_blk2_read(uint16_t addr);
+void finalexpansion_blk2_store(uint16_t addr, uint8_t value);
+uint8_t finalexpansion_blk3_read(uint16_t addr);
+void finalexpansion_blk3_store(uint16_t addr, uint8_t value);
+uint8_t finalexpansion_blk5_read(uint16_t addr);
+void finalexpansion_blk5_store(uint16_t addr, uint8_t value);
 
-extern void finalexpansion_init(void);
-extern void finalexpansion_reset(void);
+void finalexpansion_init(void);
+void finalexpansion_reset(void);
+void finalexpansion_powerup(void);
 
-extern void finalexpansion_config_setup(BYTE *rawcart);
-extern int finalexpansion_bin_attach(const char *filename);
-/* extern int finalexpansion_bin_attach(const char *filename, BYTE *rawcart); */
-/* extern int finalexpansion_crt_attach(FILE *fd, BYTE *rawcart); */
-extern void finalexpansion_detach(void);
+void finalexpansion_config_setup(uint8_t *rawcart);
+int finalexpansion_bin_attach(const char *filename);
+/* int finalexpansion_bin_attach(const char *filename, uint8_t *rawcart); */
+int finalexpansion_crt_attach(FILE *fd, uint8_t *rawcart, const char *filename);
+void finalexpansion_detach(void);
 
-extern int finalexpansion_resources_init(void);
-extern void finalexpansion_resources_shutdown(void);
-extern int finalexpansion_cmdline_options_init(void);
+int finalexpansion_bin_save(const char *filename);
+int finalexpansion_crt_save(const char *filename);
+int finalexpansion_flush_image(void);
+
+int finalexpansion_resources_init(void);
+void finalexpansion_resources_shutdown(void);
+int finalexpansion_cmdline_options_init(void);
 
 struct snapshot_s;
 
-extern int finalexpansion_snapshot_write_module(struct snapshot_s *s);
-extern int finalexpansion_snapshot_read_module(struct snapshot_s *s);
+int finalexpansion_snapshot_write_module(struct snapshot_s *s);
+int finalexpansion_snapshot_read_module(struct snapshot_s *s);
 
 #endif

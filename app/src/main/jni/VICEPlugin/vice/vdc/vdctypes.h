@@ -5,6 +5,7 @@
  *  Markus Brenner <markus@brenner.de>
  *  Ettore Perazzoli <ettore@comm2000.it>
  *  Andreas Boose <viceteam@t-online.de>
+ *  Errol Smith <strobey@users.sourceforge.net>
  *
  * This file is part of VICE, the Versatile Commodore Emulator.
  * See README for copyright notice.
@@ -40,7 +41,7 @@
 
 #define VDC_DOT_CLOCK 16000000.0
 
-#define VDC_SCREEN_WIDTH              848 /* Approx resolution based on experiment - real vdc has ~106 columns * 8 = 848 */
+#define VDC_SCREEN_WIDTH              856 /* Approx resolution based on experiment - real vdc shows ~107 columns * 8 = 856 */
 #define VDC_SCREEN_HEIGHT             312 /* Vertical resolution (PAL) based on default kernal settings */
 
 #define VDC_SCREEN_XPIX               800
@@ -72,8 +73,7 @@ enum vdc_video_mode_s {
 };
 typedef enum vdc_video_mode_s vdc_video_mode_t;
 
-#define VDC_IS_ILLEGAL_MODE(x)  ((x) >= VDC_ILLEGAL_TEXT_MODE \
-                                         && (x) != VDC_IDLE_MODE)
+#define VDC_IS_ILLEGAL_MODE(x)  ((x) >= VDC_ILLEGAL_TEXT_MODE && (x) != VDC_IDLE_MODE)
 #define VDC_IS_BITMAP_MODE(x)   ((x) & 0x02)
 
 /* VDC structures.  This is meant to be used by VDC modules
@@ -88,27 +88,23 @@ typedef struct vdc_light_pen_s vdc_light_pen_t;
 struct alarm_s;
 struct video_chip_cap_s;
 
-#define VDC_REVISION_0  0 /* 8563 R7A */
-#define VDC_REVISION_1  1 /* 8563 R8/R9 */
-#define VDC_REVISION_2  2 /* 8568 */
-
-#define VDC_NUM_REVISIONS 3
-
 struct vdc_s {
     /* Flag: Are we initialized?  */
     int initialized;            /* = 0; */
 
     /* VDC registers.  */
-    BYTE regs[64];
+    uint8_t regs[64];
 
-    /* VDC geometry constants that differ in doulbe size mode.  */
+    /* VDC geometry constants that differ in double size mode.  */
     unsigned int screen_height;
     unsigned int screen_xpix;
     unsigned int screen_ypix;
     unsigned int first_displayed_line;
     unsigned int last_displayed_line;
     unsigned int border_height;
-    unsigned int border_width;
+    unsigned int v0xscroll;
+    unsigned int iborder_width; /* internal */
+    unsigned int border_width;  /* including v0 xscroll */
     unsigned int raster_ycounter_max;
     unsigned int screen_textlines;
 
@@ -138,11 +134,15 @@ struct vdc_s {
     unsigned int mem_counter;
     unsigned int bitmap_counter;
 
-    /* Bytes per character.  */
+    /* Bytes per character, either 16 or 32 */
     unsigned int bytes_per_char;
 
+    /* Character width - width of each character on screen in physical pixels */
+    unsigned int charwidth;
+
     /* Value to add to `mem_counter' after the graphics has been painted.  */
-    unsigned int mem_counter_inc;
+    unsigned int mem_counter_inc;   /* FIXME - always the same as screen_text_cols! */
+    unsigned int skip_after_line;   /* derived from reg27 */
 
     /* All the VDC logging goes here.  */
     signed int log;
@@ -154,11 +154,11 @@ struct vdc_s {
     /* Memory address mask.  */
     int vdc_address_mask;
 
-	/* Frame counter (required for character blink, cursor blink and interlace) */
-	int frame_counter;
+    /* Frame counter (required for character blink, cursor blink and interlace) */
+    int frame_counter;
 
-	/* Character attribute blink */
-	int attribute_blink;
+    /* Character attribute blink */
+    int attribute_blink;
 
     /* Cursor position.  */
     int crsrpos;
@@ -175,7 +175,7 @@ struct vdc_s {
     /* The screen geometry has changed.  */
     int update_geometry;
 
-    /* 0..7 pixel x shift.  */
+    /* 0..7 pixel x shift. FIXME - should be 0..15! */
     unsigned int xsmooth;
 
     /* VDC Revision.  */
@@ -188,7 +188,7 @@ struct vdc_s {
     struct video_chip_cap_s *video_chip_cap;
 
     /* Internal VDC video memory */
-    BYTE ram[0x10000];
+    uint8_t ram[0x10000];
 
     /* used to record the value of the cpu clock at the start of a raster line */
     CLOCK vdc_line_start;
@@ -196,32 +196,90 @@ struct vdc_s {
     current_x_pixel = pixels_per_line / (vdc.xsync_increment >> 16) * (current_cycle - vdc_line_start) */
 
     /* record register 27 in case of a change between raster updates */
+    /* FIXME - never used! */
     int old_reg27;
 
     /* Row counter (required for comparison with reg[6] - number of visible screen rows - to know if we are at the end of the visible data) */
-	unsigned int row_counter;
+    unsigned int row_counter;
 
     /* Row counter_y counts individual raster lines of the current row to know if we are at the end of the current row. */
-    int row_counter_y;
+    unsigned int row_counter_y;
+
+    /* Row counter latch is set if the previous raster line was the last of its character row */
+    unsigned int row_counter_latch;
 
     /* offset into the attribute memory - used for emulating the 8x1 attribute VDC quirk */
     unsigned int attribute_offset;
 
+    /* flag as to whether the VDC is actually rendering active raster lines, or is idle (i.e in the top or bottom border) */
+    unsigned int display_enable;
+
+    /* flag as to whether the VDC is preparing to draw but hasn't actually started yet, usually when it's reset to internal row # 0 */
+    unsigned int prime_draw;
+
+    /* flag as to whether the VDC is drawing (e.g. reading from screen memory) or if it is stopped. This is different to above, because the VDC can be drawing inside the top or bottom border */
+    unsigned int draw_active;
+
+    /* flag as to whether the VDC is finished drawing or not, to make sure end of frame stuff like video pointers is handled properly */
+    unsigned int draw_finished;
+
+    /* flag as to whether the VDC is in VSYNC or not */
+    unsigned int vsync;
+
+    /* internal VDC counter so the vsync is the correct height (in rows) */
+    unsigned int vsync_counter;
+
+    /* height of the vsync pulse in raster lines, this varies by video standard/video mode */
+    unsigned int vsync_height;
+
+    /* Row counter used by drawing code. Separate from row_counter above because the drawing can be asynch with the main video signal */
+    unsigned int draw_counter;
+
+    /* Raster line counter used by drawing code as above. */
+    unsigned int draw_counter_y;
+
+    /* Draw counter latch is set if the previous raster line was the last of its character row */
+    unsigned int draw_counter_latch;
+
+    /* Flag as to whether we are in the vertical fine adjust area or not where things work different */
+    unsigned int vert_fine_adj;
+
+    /* Count of frames since the last change of geometry - used to resize the window only after multiple frames of stable geometry, otherwise the window goes crazy */
+    unsigned int stable_size_count;
+
+    /* used to monitor for changes in screen and/or attribute addresses, as the cache can't cope with that */
+    unsigned int old_screen_adr, old_attribute_adr;
+
+    /* Interlace flag - 0 if normal/non-interlaced, 1 if interlaced */
+    unsigned int interlaced;
+
     /* Light pen. */
     vdc_light_pen_t light_pen;
 
+    /* Size of vdc canvas, i.e. total visible screen area in pixels */
+    unsigned int canvas_width;
+    unsigned int canvas_height;
+
+    /* To compare if it changes since last frame */
+    unsigned int canvas_width_old;
+    unsigned int canvas_height_old;
+
+    /* Internal character and attribute buffers */
+    uint8_t scrnbuf[0x200];
+    unsigned int scrnbufdraw;
+    uint8_t attrbuf[0x200];
+    unsigned int attrbufdraw;
 };
 typedef struct vdc_s vdc_t;
 
 extern vdc_t vdc;
 
 /* Private function calls, used by the other VDC modules.  */
-extern int vdc_load_palette(const char *name);
-extern void vdc_fetch_matrix(int offs, int num);
-extern void vdc_update_memory_ptrs(unsigned int cycle);
-extern void vdc_update_video_mode(unsigned int cycle);
-extern void vdc_set_set_canvas_refresh(int enable);
-extern void vdc_calculate_xsync(void);
+int vdc_load_palette(const char *name);
+void vdc_fetch_matrix(int offs, int num);
+void vdc_update_memory_ptrs(unsigned int cycle);
+void vdc_update_video_mode(unsigned int cycle);
+void vdc_set_set_canvas_refresh(int enable);
+void vdc_calculate_xsync(void);
 
 #endif
-

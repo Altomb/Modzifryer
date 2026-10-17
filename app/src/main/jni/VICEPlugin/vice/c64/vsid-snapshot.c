@@ -37,8 +37,6 @@
 #include "cia.h"
 #include "drive-snapshot.h"
 #include "drive.h"
-#include "drivecpu.h"
-#include "ioutil.h"
 #include "joystick.h"
 #include "keyboard.h"
 #include "log.h"
@@ -52,6 +50,7 @@
 #include "vice-event.h"
 #include "vicii.h"
 
+
 #define SNAP_MAJOR 1
 #define SNAP_MINOR 1
 
@@ -59,7 +58,7 @@ int c64_snapshot_write(const char *name, int save_roms, int save_disks, int even
 {
     snapshot_t *s;
 
-    s = snapshot_create(name, ((BYTE)(SNAP_MAJOR)), ((BYTE)(SNAP_MINOR)), machine_get_name());
+    s = snapshot_create(name, ((uint8_t)(SNAP_MAJOR)), ((uint8_t)(SNAP_MINOR)), machine_get_name());
     if (s == NULL) {
         return -1;
     }
@@ -67,7 +66,7 @@ int c64_snapshot_write(const char *name, int save_roms, int save_disks, int even
     sound_snapshot_prepare();
 
     /* Execute drive CPUs to get in sync with the main CPU.  */
-    drivecpu_execute_all(maincpu_clk);
+    drive_cpu_execute_all(maincpu_clk);
 
     if (maincpu_snapshot_write_module(s) < 0
         || c64_snapshot_write_module(s, save_roms) < 0
@@ -79,7 +78,7 @@ int c64_snapshot_write(const char *name, int save_roms, int save_disks, int even
         || event_snapshot_write_module(s, event_mode) < 0
         || keyboard_snapshot_write_module(s)) {
         snapshot_close(s);
-        ioutil_remove(name);
+        archdep_remove(name);
         return -1;
     }
 
@@ -90,15 +89,16 @@ int c64_snapshot_write(const char *name, int save_roms, int save_disks, int even
 int c64_snapshot_read(const char *name, int event_mode)
 {
     snapshot_t *s;
-    BYTE minor, major;
+    uint8_t minor, major;
 
     s = snapshot_open(name, &major, &minor, machine_get_name());
     if (s == NULL) {
         return -1;
     }
 
-    if (major != SNAP_MAJOR || minor != SNAP_MINOR) {
+    if (!snapshot_version_is_equal(major, minor, SNAP_MAJOR, SNAP_MINOR)) {
         log_error(LOG_DEFAULT, "Snapshot version (%d.%d) not valid: expecting %d.%d.", major, minor, SNAP_MAJOR, SNAP_MINOR);
+        snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
         goto fail;
     }
 
@@ -127,7 +127,7 @@ fail:
         snapshot_close(s);
     }
 
-    machine_trigger_reset(MACHINE_RESET_MODE_SOFT);
+    machine_trigger_reset(MACHINE_RESET_MODE_RESET_CPU);
 
     return -1;
 }

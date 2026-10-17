@@ -53,50 +53,48 @@ int tcbm_drive_cmdline_options_init(void)
     return tcbm_cmdline_options_init();
 }
 
-void tcbm_drive_init(struct drive_context_s *drv)
+void tcbm_drive_init(struct diskunit_context_s *drv)
 {
     tcbmrom_init();
     tpid_init(drv);
     glue1551_init(drv);
 }
 
-void tcbm_drive_shutdown(struct drive_context_s *drv)
+void tcbm_drive_shutdown(struct diskunit_context_s *drv)
 {
     tpicore_shutdown(drv->tpid);
 }
 
-void tcbm_drive_reset(struct drive_context_s *drv)
+void tcbm_drive_reset(struct diskunit_context_s *drv)
 {
     tpicore_reset(drv->tpid);
     glue1551_reset(drv);
     drive_sound_update(DRIVE_SOUND_MOTOR_ON, drv->mynumber);
 }
 
-void tcbm_drive_mem_init(struct drive_context_s *drv, unsigned int type)
+void tcbm_drive_mem_init(struct diskunit_context_s *drv, unsigned int type)
 {
     mem1551_init(drv, type);
 }
 
-void tcbm_drive_setup_context(struct drive_context_s *drv)
+void tcbm_drive_setup_context(struct diskunit_context_s *drv)
 {
     tpid_setup_context(drv);
 }
 
-void tcbm_drive_rom_load(void)
+/* test all ROMs for existence, size */
+void tcbm_drive_rom_probe(void)
 {
-    tcbmrom_load_1551();
+    tcbmrom_probe_1551();
 }
 
+/* setup (=load) the ROM for a given disk unit nr */
 void tcbm_drive_rom_setup_image(unsigned int dnr)
 {
-    tcbmrom_setup_image(drive_context[dnr]->drive);
+    tcbmrom_setup_image(diskunit_context[dnr]);
 }
 
-int tcbm_drive_rom_read(unsigned int type, WORD addr, BYTE *data)
-{
-    return tcbmrom_read(type, addr, data);
-}
-
+/* check if the drive ROM is available for a given drive type, returns -1 on error */
 int tcbm_drive_rom_check_loaded(unsigned int type)
 {
     return tcbmrom_check_loaded(type);
@@ -106,15 +104,14 @@ void tcbm_drive_rom_do_checksum(unsigned int dnr)
 {
 }
 
-int tcbm_drive_snapshot_read(struct drive_context_s *ctxptr,
+int tcbm_drive_snapshot_read(struct diskunit_context_s *ctxptr,
                              struct snapshot_s *s)
 {
     return 0;
 }
 
-int tcbm_drive_snapshot_write(struct drive_context_s *ctxptr,
+int tcbm_drive_snapshot_write(struct diskunit_context_s *ctxptr,
                               struct snapshot_s *s)
 {
     return 0;
 }
-

@@ -1,5 +1,5 @@
 /*
- * plus4cpu.c - Emulation of the main 7501 processor.
+ * plus4cpu.c - Emulation of the main 7501/8501 processor.
  *
  * Written by
  *  Andreas Boose <viceteam@t-online.de>
@@ -30,6 +30,46 @@
 #include "tedtypes.h"
 #include "types.h"
 
+#ifdef FEATURE_CPUMEMHISTORY
+#include "monitor.h"
+#endif
+
 #define CPU_DELAY_CLK ted_delay_clk();
+
+#ifdef FEATURE_CPUMEMHISTORY
+
+/* FIXME: the following functions should handle IO/RAM/ROM and -dummy accesses
+ * for the memmap feature - see mainc64cpu.c */
+
+static void memmap_mem_store(unsigned int addr, unsigned int value)
+{
+    monitor_memmap_store(addr, MEMMAP_RAM_W);
+    (*_mem_write_tab_ptr[(addr) >> 8])((uint16_t)(addr), (uint8_t)(value));
+}
+
+static void memmap_mark_read(unsigned int addr)
+{
+    monitor_memmap_store(addr, (memmap_state & MEMMAP_STATE_OPCODE) ? MEMMAP_RAM_X : (memmap_state & MEMMAP_STATE_INSTR) ? 0 : MEMMAP_RAM_R);
+    memmap_state &= ~(MEMMAP_STATE_OPCODE);
+}
+
+static uint8_t memmap_mem_read(unsigned int addr)
+{
+    memmap_mark_read(addr);
+    return (*_mem_read_tab_ptr[(addr) >> 8])((uint16_t)(addr));
+}
+
+static uint8_t memmap_mem_read_dummy(unsigned int addr)
+{
+    memmap_mark_read(addr);
+    return (*_mem_read_tab_ptr_dummy[(addr) >> 8])((uint16_t)(addr));
+}
+
+static void memmap_mem_store_dummy(unsigned int addr, unsigned int value)
+{
+    monitor_memmap_store(addr, MEMMAP_RAM_W);
+    (*_mem_write_tab_ptr_dummy[(addr) >> 8])((uint16_t)(addr), (uint8_t)(value));
+}
+#endif
 
 #include "../maincpu.c"

@@ -32,13 +32,13 @@
 #define CARTRIDGE_INCLUDE_SLOTMAIN_API
 #include "c64cartsystem.h"
 #undef CARTRIDGE_INCLUDE_SLOTMAIN_API
-#include "c64export.h"
 #include "c64mem.h"
-#include "c64meminit.h"
 #include "c64memrom.h"
 #include "capture.h"
 #include "cartio.h"
 #include "cartridge.h"
+#include "export.h"
+#include "ram.h"
 #include "snapshot.h"
 #include "types.h"
 #include "util.h"
@@ -96,16 +96,18 @@
 #define DBG(x)
 #endif
 
-static const c64export_resource_t export_res = {
+static const export_resource_t export_res = {
     CARTRIDGE_NAME_CAPTURE, 1, 1, NULL, NULL, CARTRIDGE_CAPTURE
 };
+
+#define CART_RAM_SIZE (8 * 1024)
 
 static int cart_enabled = 0;
 static int freeze_pressed = 0;
 static int register_enabled = 0;
 static int romh_enabled = 0;
 
-static void capture_reg(WORD addr)
+static void capture_reg(uint16_t addr)
 {
     if (register_enabled) {
         if ((addr & 0xffff) == 0xfff7) {
@@ -124,7 +126,7 @@ static void capture_reg(WORD addr)
     }
 }
 
-static void capture_romhflip(WORD addr)
+static void capture_romhflip(uint16_t addr)
 {
     if (freeze_pressed) {
         if ((addr & 0xff00) == 0xfe00) {
@@ -135,7 +137,7 @@ static void capture_romhflip(WORD addr)
     }
 }
 
-BYTE capture_romh_read(WORD addr)
+uint8_t capture_romh_read(uint16_t addr)
 {
     capture_reg(addr);
     capture_romhflip(addr);
@@ -148,7 +150,7 @@ BYTE capture_romh_read(WORD addr)
     return mem_read_without_ultimax(addr);
 }
 
-void capture_romh_store(WORD addr, BYTE value)
+void capture_romh_store(uint16_t addr, uint8_t value)
 {
     capture_reg(addr);
     /* capture_romhflip(addr); */
@@ -160,43 +162,43 @@ void capture_romh_store(WORD addr, BYTE value)
 /*
     there is Cartridge RAM at 0x6000..0x7fff
 */
-BYTE capture_1000_7fff_read(WORD addr)
+uint8_t capture_1000_7fff_read(uint16_t addr)
 {
     if (cart_enabled) {
-        if (addr>=0x6000) {
-            return export_ram0[addr-0x6000];
+        if (addr >= 0x6000) {
+            return export_ram0[addr - 0x6000];
         }
     }
 
     return mem_read_without_ultimax(addr);
 }
 
-void capture_1000_7fff_store(WORD addr, BYTE value)
+void capture_1000_7fff_store(uint16_t addr, uint8_t value)
 {
     if (cart_enabled) {
-        if (addr>=0x6000) {
-            export_ram0[addr-0x6000] = value;
+        if (addr >= 0x6000) {
+            export_ram0[addr - 0x6000] = value;
         }
     } else {
         mem_store_without_ultimax(addr, value);
     }
 }
 
-int capture_romh_phi1_read(WORD addr, BYTE *value)
+int capture_romh_phi1_read(uint16_t addr, uint8_t *value)
 {
     return CART_READ_C64MEM;
 }
 
-int capture_romh_phi2_read(WORD addr, BYTE *value)
+int capture_romh_phi2_read(uint16_t addr, uint8_t *value)
 {
     return capture_romh_phi1_read(addr, value);
 }
 
-int capture_peek_mem(struct export_s *export, WORD addr, BYTE *value)
+int capture_peek_mem(export_t *ex, uint16_t addr, uint8_t *value)
 {
     if (cart_enabled == 1) {
         if (addr >= 0x6000 && addr <= 0x7fff) {
-            *value = export_ram0[addr-0x6000];
+            *value = export_ram0[addr - 0x6000];
             return CART_READ_VALID;
         }
         if (romh_enabled) {
@@ -210,11 +212,30 @@ int capture_peek_mem(struct export_s *export, WORD addr, BYTE *value)
 }
 /******************************************************************************/
 
+/* FIXME: this still needs to be tweaked to match the hardware */
+static RAMINITPARAM ramparam = {
+    .start_value = 255,
+    .value_invert = 2,
+    .value_offset = 1,
+
+    .pattern_invert = 0x100,
+    .pattern_invert_value = 255,
+
+    .random_start = 0,
+    .random_repeat = 0,
+    .random_chance = 0,
+};
+
+void capture_powerup(void)
+{
+    ram_init_with_pattern(export_ram0, CART_RAM_SIZE, &ramparam);
+}
+
 void capture_freeze(void)
 {
     DBG(("CAPTURE: freeze\n"));
     if (freeze_pressed == 0) {
-        cart_config_changed_slotmain(2, 3, CMODE_READ | CMODE_RELEASE_FREEZE);
+        cart_config_changed_slotmain(CMODE_RAM, CMODE_ULTIMAX, CMODE_READ | CMODE_RELEASE_FREEZE);
         cart_enabled = 1;
         freeze_pressed = 1;
         register_enabled = 1;
@@ -225,7 +246,7 @@ void capture_freeze(void)
 void capture_config_init(void)
 {
     DBG(("CAPTURE: config init\n"));
-    cart_config_changed_slotmain(2, 2, CMODE_READ);
+    cart_config_changed_slotmain(CMODE_RAM, CMODE_RAM, CMODE_READ);
 }
 
 void capture_reset(void)
@@ -234,10 +255,10 @@ void capture_reset(void)
     cart_enabled = 0;
     register_enabled = 0;
     freeze_pressed = 0;
-    cart_config_changed_slotmain(2, 2, CMODE_READ);
+    cart_config_changed_slotmain(CMODE_RAM, CMODE_RAM, CMODE_READ);
 }
 
-void capture_config_setup(BYTE *rawcart)
+void capture_config_setup(uint8_t *rawcart)
 {
     DBG(("CAPTURE: config setup\n"));
     memcpy(romh_banks, rawcart, 0x2000);
@@ -248,13 +269,13 @@ void capture_config_setup(BYTE *rawcart)
 static int capture_common_attach(void)
 {
     DBG(("CAPTURE: attach\n"));
-    if (c64export_add(&export_res) < 0) {
+    if (export_add(&export_res) < 0) {
         return -1;
     }
     return 0;
 }
 
-int capture_bin_attach(const char *filename, BYTE *rawcart)
+int capture_bin_attach(const char *filename, uint8_t *rawcart)
 {
     if (util_file_load(filename, rawcart, 0x2000, UTIL_FILE_LOAD_SKIP_ADDRESS) < 0) {
         return -1;
@@ -262,7 +283,7 @@ int capture_bin_attach(const char *filename, BYTE *rawcart)
     return capture_common_attach();
 }
 
-int capture_crt_attach(FILE *fd, BYTE *rawcart)
+int capture_crt_attach(FILE *fd, uint8_t *rawcart)
 {
     crt_chip_header_t chip;
 
@@ -283,53 +304,67 @@ int capture_crt_attach(FILE *fd, BYTE *rawcart)
 
 void capture_detach(void)
 {
-    c64export_remove(&export_res);
+    export_remove(&export_res);
 }
 
 /* ---------------------------------------------------------------------*/
 
-#define CART_DUMP_VER_MAJOR   0
-#define CART_DUMP_VER_MINOR   0
-#define SNAP_MODULE_NAME  "CARTCAPTURE"
+
+/* CARTCAPTURE snapshot module format:
+
+   type  | name            | description
+   -------------------------------------
+   BYTE  | enabled         | cartridge enabled flag
+   BYTE  | freeze pressed  | freeze button pressed flag
+   BYTE  | register enable | register enable flag
+   BYTE  | ROMH enable     | ROMH enable flag
+   ARRAY | ROMH            | 8192 BYTES of ROMH data
+   ARRAY | RAM             | 8192 BYTES of RAM data
+ */
+
+static const char snap_module_name[] = "CARTCAPTURE";
+#define SNAP_MAJOR   0
+#define SNAP_MINOR   0
 
 int capture_snapshot_write_module(snapshot_t *s)
 {
     snapshot_module_t *m;
 
-    m = snapshot_module_create(s, SNAP_MODULE_NAME,
-                          CART_DUMP_VER_MAJOR, CART_DUMP_VER_MINOR);
+    m = snapshot_module_create(s, snap_module_name, SNAP_MAJOR, SNAP_MINOR);
+
     if (m == NULL) {
         return -1;
     }
 
     if (0
-        || (SMW_B(m, (BYTE)cart_enabled) < 0)
-        || (SMW_B(m, (BYTE)freeze_pressed) < 0)
-        || (SMW_B(m, (BYTE)register_enabled) < 0)
-        || (SMW_B(m, (BYTE)romh_enabled) < 0)
+        || (SMW_B(m, (uint8_t)cart_enabled) < 0)
+        || (SMW_B(m, (uint8_t)freeze_pressed) < 0)
+        || (SMW_B(m, (uint8_t)register_enabled) < 0)
+        || (SMW_B(m, (uint8_t)romh_enabled) < 0)
         || (SMW_BA(m, romh_banks, 0x2000) < 0)
         || (SMW_BA(m, export_ram0, 0x2000) < 0)) {
         snapshot_module_close(m);
         return -1;
     }
 
-    snapshot_module_close(m);
-    return 0;
+    return snapshot_module_close(m);
 }
 
 int capture_snapshot_read_module(snapshot_t *s)
 {
-    BYTE vmajor, vminor;
+    uint8_t vmajor, vminor;
     snapshot_module_t *m;
 
-    m = snapshot_module_open(s, SNAP_MODULE_NAME, &vmajor, &vminor);
+    m = snapshot_module_open(s, snap_module_name, &vmajor, &vminor);
+
     if (m == NULL) {
         return -1;
     }
 
-    if ((vmajor != CART_DUMP_VER_MAJOR) || (vminor != CART_DUMP_VER_MINOR)) {
-        snapshot_module_close(m);
-        return -1;
+    /* Do not accept versions higher than current */
+    if (snapshot_version_is_bigger(vmajor, vminor, SNAP_MAJOR, SNAP_MINOR)) {
+        snapshot_set_error(SNAPSHOT_MODULE_HIGHER_VERSION);
+        goto fail;
     }
 
     if (0
@@ -339,11 +374,14 @@ int capture_snapshot_read_module(snapshot_t *s)
         || (SMR_B_INT(m, &romh_enabled) < 0)
         || (SMR_BA(m, romh_banks, 0x2000) < 0)
         || (SMR_BA(m, export_ram0, 0x2000) < 0)) {
-        snapshot_module_close(m);
-        return -1;
+        goto fail;
     }
 
     snapshot_module_close(m);
 
     return capture_common_attach();
+
+fail:
+    snapshot_module_close(m);
+    return -1;
 }

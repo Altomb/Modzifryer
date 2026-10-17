@@ -2,8 +2,9 @@
  * plus4acia.h - Definitions for a 6551 ACIA interface
  *
  * Written by
- *  Andre' Fachat <fachat@physik.tu-chemnitz.de>
+ *  Andre Fachat <fachat@physik.tu-chemnitz.de>
  *  Andreas Boose <viceteam@t-online.de>
+ *  Marco van den Heuvel <blackystardust68@yahoo.com>
  *
  * This file is part of VICE, the Versatile Commodore Emulator.
  * See README for copyright notice.
@@ -32,20 +33,18 @@
 
 struct snapshot_s;
 
-extern void acia_init(void);
-extern BYTE acia_read(WORD a);
-extern BYTE acia_peek(WORD a);
-extern void acia_store(WORD a, BYTE b);
-extern void acia_reset(void);
+void acia_init(void);
+uint8_t acia_read(uint16_t a);
+uint8_t acia_peek(uint16_t a);
+void acia_store(uint16_t a, uint8_t b);
+void acia_reset(void);
 
-extern int acia_cmdline_options_init(void);
-extern int acia_resources_init(void);
+int acia_cmdline_options_init(void);
+int acia_resources_init(void);
 
-extern int acia_snapshot_read_module(struct snapshot_s *);
-extern int acia_snapshot_write_module(struct snapshot_s *);
+int acia_snapshot_read_module(struct snapshot_s *);
+int acia_snapshot_write_module(struct snapshot_s *);
 
-extern int acia_enabled(void);
-extern int acia_dump(void *ctx);
+int acia_enabled(void);
 
 #endif
-

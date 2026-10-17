@@ -42,11 +42,11 @@
    care of the 10-bit counter wraparound.  */
 void ted_fetch_matrix(int offs, int num)
 {
-    BYTE *p;
+    uint8_t *p;
     int start_char;
     int c;
-	int dma_offset = (ted.ted_raster_counter & 7)
-		== (unsigned int)((ted.raster.ysmooth + 1) & 7) ? 0x0400 : 0;
+    int dma_offset = (ted.ted_raster_counter & 7)
+                     == (unsigned int)((ted.raster.ysmooth + 1) & 7) ? 0x0400 : 0;
 
     /* Matrix fetches are done during Phi2, the fabulous "bad lines" */
     p = ted.screen_ptr;
@@ -62,7 +62,7 @@ void ted_fetch_matrix(int offs, int num)
     }
     /*memcpy(ted.cbuf, ted.cbuf_tmp, TED_SCREEN_TEXTCOLS);*/
 
-/*    log_debug("Fetch line  : %03x, %03x", ted.ted_raster_counter, start_char);*/
+/*    log_debug(LOG_DEFAULT, "Fetch line  : %03x, %03x", ted.ted_raster_counter, start_char);*/
 }
 
 inline void ted_fetch_color(int offs, int num)
@@ -74,19 +74,19 @@ inline void ted_fetch_color(int offs, int num)
     c = 0x3ff - start_char + 1;
 
     if (c >= num) {
-        memcpy(ted.cbuf_tmp + offs,  ted.color_ptr + start_char, num);
+        memcpy(ted.cbuf_tmp + offs, ted.color_ptr + start_char, num);
     } else {
-        memcpy(ted.cbuf_tmp + offs,  ted.color_ptr + start_char, c);
+        memcpy(ted.cbuf_tmp + offs, ted.color_ptr + start_char, c);
         memcpy(ted.cbuf_tmp + offs + c, ted.color_ptr, num - c);
     }
-/*    log_debug("Color fetch : %03x, %03x", ted.ted_raster_counter, start_char);*/
+/*    log_debug(LOG_DEFAULT, "Color fetch : %03x, %03x", ted.ted_raster_counter, start_char);*/
 }
 
 /* If we are on a bad line, do the DMA.  Return nonzero if cycles have been
    stolen.  */
 inline static int do_matrix_fetch(CLOCK sub)
 {
-	int reval = 0;
+    int reval = 0;
 
     if (!ted.memory_fetch_done) {
         raster_t *raster;
@@ -95,18 +95,18 @@ inline static int do_matrix_fetch(CLOCK sub)
 
         ted.memory_fetch_done = 1;
         ted.mem_counter = ted.memptr_col;
-		ted.chr_pos_count = ted.memptr; /* FIXME this is not here */
+        ted.chr_pos_count = ted.memptr;         /* FIXME this is not here */
 
         if ((ted.ted_raster_counter & 7)
             == (unsigned int)((raster->ysmooth + 1) & 7)
             && ted.allow_bad_lines
             && ted.ted_raster_counter > ted.first_dma_line
-			//&& ted.bad_line 
+            /* && ted.bad_line */
             && ted.ted_raster_counter <= ted.last_dma_line) {
             ted_fetch_matrix(0, TED_SCREEN_TEXTCOLS);
 
             raster->draw_idle_state = 0;
-            //raster->ycounter = 0;
+            /* raster->ycounter = 0; */
 
             ted.idle_state = 0;
             ted.idle_data_location = IDLE_NONE;
@@ -141,7 +141,6 @@ inline static int do_matrix_fetch(CLOCK sub)
             ted.bad_line = 1;
             reval = 1;
         }
-
     }
 
     return reval;
@@ -150,11 +149,7 @@ inline static int do_matrix_fetch(CLOCK sub)
 inline static void handle_fetch_matrix(long offset, CLOCK sub,
                                        CLOCK *write_offset)
 {
-    raster_t *raster;
-
     *write_offset = 0;
-
-    raster = &ted.raster;
 
     do_matrix_fetch(sub);
 
@@ -173,7 +168,10 @@ inline static void handle_fetch_matrix(long offset, CLOCK sub,
 /* Handle matrix fetch events.  FIXME: could be made slightly faster.  */
 void ted_fetch_alarm_handler(CLOCK offset, void *data)
 {
-    CLOCK last_opcode_first_write_clk, last_opcode_last_write_clk;
+    CLOCK last_opcode_first_write_clk;
+    CLOCK last_opcode_last_write_clk;
+    CLOCK sub;
+    CLOCK write_offset;
 
     /* This kludgy thing is used to emulate the behavior of the 6510 when BA
        goes low.  When BA goes low, every read access stops the processor
@@ -181,32 +179,32 @@ void ted_fetch_alarm_handler(CLOCK offset, void *data)
 
     if (offset > 0) {
         switch (OPINFO_NUMBER(last_opcode_info)) {
-          case 0:
-            /* In BRK, IRQ and NMI the 3rd, 4th and 5th cycles are write
-               accesses, while the 1st, 2nd, 6th and 7th are read accesses.  */
-            last_opcode_first_write_clk = maincpu_clk - 10;
-            last_opcode_last_write_clk = maincpu_clk - 6;
-            break;
+            case 0:
+                /* In BRK, IRQ and NMI the 3rd, 4th and 5th cycles are write
+                   accesses, while the 1st, 2nd, 6th and 7th are read accesses.  */
+                last_opcode_first_write_clk = maincpu_clk - 10;
+                last_opcode_last_write_clk = maincpu_clk - 6;
+                break;
 
-          case 0x20:
-            /* In JSR, the 4th and 5th cycles are write accesses, while the
-               1st, 2nd, 3rd and 6th are read accesses.  */
-            last_opcode_first_write_clk = maincpu_clk - 6;
-            last_opcode_last_write_clk = maincpu_clk - 4;
-            break;
+            case 0x20:
+                /* In JSR, the 4th and 5th cycles are write accesses, while the
+                   1st, 2nd, 3rd and 6th are read accesses.  */
+                last_opcode_first_write_clk = maincpu_clk - 6;
+                last_opcode_last_write_clk = maincpu_clk - 4;
+                break;
 
-          default:
-            /* In all the other opcodes, all the write accesses are the last
-               ones.  */
-            if (maincpu_num_write_cycles() != 0) {
-                last_opcode_last_write_clk = maincpu_clk - 2;
-                last_opcode_first_write_clk = maincpu_clk
-                                              - maincpu_num_write_cycles() * 2;
-            } else {
-                last_opcode_first_write_clk = (CLOCK)0;
-                last_opcode_last_write_clk = last_opcode_first_write_clk;
-            }
-            break;
+            default:
+                /* In all the other opcodes, all the write accesses are the last
+                   ones.  */
+                if (maincpu_num_write_cycles() != 0) {
+                    last_opcode_last_write_clk = maincpu_clk - 2;
+                    last_opcode_first_write_clk = maincpu_clk
+                                                  - maincpu_num_write_cycles() * 2;
+                } else {
+                    last_opcode_first_write_clk = (CLOCK)0;
+                    last_opcode_last_write_clk = last_opcode_first_write_clk;
+                }
+                break;
         }
     } else { /* offset <= 0, i.e. offset == 0 */
         /* If we are called with no offset, we don't have to care about write
@@ -214,20 +212,16 @@ void ted_fetch_alarm_handler(CLOCK offset, void *data)
         last_opcode_first_write_clk = last_opcode_last_write_clk = 0;
     }
 
-    {
-        CLOCK sub;
-        CLOCK write_offset;
-
-        if (ted.fetch_clk < (last_opcode_first_write_clk - 1)
-            || ted.fetch_clk > last_opcode_last_write_clk)
-            sub = 0;
-        else
-            sub = last_opcode_last_write_clk - ted.fetch_clk + 1;
-
-        handle_fetch_matrix(offset, sub, &write_offset);
-        last_opcode_first_write_clk += write_offset;
-        last_opcode_last_write_clk += write_offset;
+    if (ted.fetch_clk < (last_opcode_first_write_clk - 1)
+        || ted.fetch_clk > last_opcode_last_write_clk) {
+        sub = 0;
+    } else {
+        sub = last_opcode_last_write_clk - ted.fetch_clk + 1;
     }
+
+    handle_fetch_matrix(offset, sub, &write_offset);
+    last_opcode_last_write_clk += write_offset;
+
     if ((offset > 11) && (ted.fastmode)) {
         dma_maincpu_steal_cycles(ted.fetch_clk, -(((signed)offset - 11) / 2), 0);
         ted_delay_oldclk(-(((signed)offset - 11) / 2));
@@ -239,4 +233,3 @@ void ted_fetch_init(void)
     ted.raster_fetch_alarm = alarm_new(maincpu_alarm_context, "TEDRasterFetch",
                                        ted_fetch_alarm_handler, NULL);
 }
-

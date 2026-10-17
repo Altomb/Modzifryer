@@ -1,5 +1,5 @@
 /*
- * c64romset.c
+ * c128romset.c
  *
  * Written by
  *  Andreas Boose <viceteam@t-online.de>
@@ -28,12 +28,16 @@
 
 #include <stdio.h>
 
+#include "machine.h"
 #include "romset.h"
 
-const char *machine_romset_resources_list[] = {
+static const char * const machine_romset_resources_list[] = {
     "ChargenIntName",
     "ChargenDEName",
+    "ChargenFIName",
     "ChargenFRName",
+    "ChargenITName",
+    "ChargenNOName",
     "ChargenSEName",
     "KernalIntName",
     "KernalDEName",
@@ -46,10 +50,12 @@ const char *machine_romset_resources_list[] = {
     "BasicHiName",
     "Kernal64Name",
     "Basic64Name",
+    "DosName1540",
     "DosName1541",
     "DosName1541ii",
     "DosName1570",
     "DosName1571",
+    "DosName1571cr",
     "DosName1581",
     "DosName2000",
     "DosName4000",
@@ -58,7 +64,7 @@ const char *machine_romset_resources_list[] = {
     "DosName3040",
     "DosName4040",
     "DosName1001",
-    "DosName1571cr",
+    "DosName9000",
     NULL
 };
 

@@ -29,10 +29,11 @@
 #include "cartio.h"
 #include "cartridge.h"
 #include "cmdline.h"
+#include "export.h"
 #include "machine.h"
+#include "parallel.h"
 #include "resources.h"
 #include "snapshot.h"
-#include "translate.h"
 #include "uiapi.h"
 #include "vic20-ieee488.h"
 #include "vic20ieeevia.h"
@@ -42,7 +43,7 @@ static int ieee488_enabled;
 
 /* ---------------------------------------------------------------------*/
 
-static BYTE ieee488_read(WORD address)
+static uint8_t ieee488_read(uint16_t address)
 {
     if (address & 0x10) {
         return ieeevia2_read(address);
@@ -50,7 +51,7 @@ static BYTE ieee488_read(WORD address)
     return ieeevia1_read(address);
 }
 
-static void ieee488_store(WORD address, BYTE value)
+static void ieee488_store(uint16_t address, uint8_t value)
 {
     if (address & 0x10) {
         ieeevia2_store(address, value);
@@ -59,39 +60,57 @@ static void ieee488_store(WORD address, BYTE value)
     }
 }
 
+static int ieee488_dump(void)
+{
+    if (ieeevia1_dump() < 0) {
+        return -1;
+    }
+    return ieeevia2_dump();
+}
+
 /* ---------------------------------------------------------------------*/
 
 static io_source_t ieee488_device = {
-    "IEEE488",
-    IO_DETACH_RESOURCE,
-    "IEEE488",
-    0x9800, 0x9bff, 0x3ff,
-    1, /* read is always valid */
-    ieee488_store,
-    ieee488_read,
-    NULL, /* TODO: peek */
-    NULL, /* TODO: dump */
-    CARTRIDGE_VIC20_IEEE488,
-    0,
-    0
+    CARTRIDGE_VIC20_NAME_IEEE488, /* name of the device */
+    IO_DETACH_RESOURCE,           /* use resource to detach the device when involved in a read-collision */
+    "IEEE488",                    /* resource to set to '0' */
+    0x9800, 0x9bff, 0x3ff,        /* range for the device, regs:$9800-$981f, mirrors:$9820-$9bff */
+    1,                            /* read is always valid */
+    ieee488_store,                /* store function */
+    NULL,                         /* NO poke function */
+    ieee488_read,                 /* read function */
+    NULL,                         /* TODO: peek function */
+    ieee488_dump,                 /* device state information dump function */
+    CARTRIDGE_VIC20_IEEE488,      /* cartridge ID */
+    IO_PRIO_NORMAL,               /* normal priority, device read needs to be checked for collisions */
+    0,                            /* insertion order, gets filled in by the registration function */
+    IO_MIRROR_NONE                /* NO mirroring */
 };
 
 static io_source_list_t *ieee488_list_item = NULL;
 
+static const export_resource_t export_res = {
+    CARTRIDGE_VIC20_NAME_IEEE488, 0, 0, &ieee488_device, NULL, CARTRIDGE_VIC20_IEEE488
+};
+
 /* ---------------------------------------------------------------------*/
 
-static int set_ieee488_enabled(int val, void *param)
+static int set_ieee488_enabled(int value, void *param)
 {
+    int val = value ? 1 : 0;
+
     if (!ieee488_enabled && val) {
+        if (export_add(&export_res) < 0) {
+            return -1;
+        }
         ieee488_list_item = io_source_register(&ieee488_device);
         ieee488_enabled = 1;
     } else if (ieee488_enabled && !val) {
+        export_remove(&export_res);
         io_source_unregister(ieee488_list_item);
         ieee488_list_item = NULL;
         ieee488_enabled = 0;
     }
-
-    ui_update_menus();
 
     return 0;
 }
@@ -99,31 +118,33 @@ static int set_ieee488_enabled(int val, void *param)
 static const resource_int_t resources_int[] = {
     { "IEEE488", 0, RES_EVENT_SAME, NULL,
       &ieee488_enabled, set_ieee488_enabled, NULL },
-    { NULL }
+    RESOURCE_INT_LIST_END
 };
 
 int vic20_ieee488_resources_init(void)
 {
+    if (parallel_resources_init() < 0) {
+        return -1;
+    }
     return resources_register_int(resources_int);
 }
 
 static cmdline_option_t const cmdline_options[] =
 {
-    { "-ieee488", SET_RESOURCE, 0,
+    { "-ieee488", SET_RESOURCE, CMDLINE_ATTRIB_NONE,
       NULL, NULL, "IEEE488", (resource_value_t)1,
-      USE_PARAM_STRING, USE_DESCRIPTION_ID,
-      IDCLS_UNUSED, IDCLS_ENABLE_VIC1112_IEEE488,
-      NULL, NULL },
-    { "+ieee488", SET_RESOURCE, 0,
+      NULL, "Enable VIC-1112 IEEE488 interface" },
+    { "+ieee488", SET_RESOURCE, CMDLINE_ATTRIB_NONE,
       NULL, NULL, "IEEE488", (resource_value_t)0,
-      USE_PARAM_STRING, USE_DESCRIPTION_ID,
-      IDCLS_UNUSED, IDCLS_DISABLE_VIC1112_IEEE488,
-      NULL, NULL },
-    { NULL}
+      NULL, "Disable VIC-1112 IEEE488 interface" },
+    CMDLINE_LIST_END
 };
 
 int vic20_ieee488_cmdline_options_init(void)
 {
+    if (parallel_cmdline_options_init() < 0) {
+        return -1;
+    }
     return cmdline_register_options(cmdline_options);
 }
 
@@ -141,8 +162,7 @@ int vic20_ieee488_snapshot_write_module(snapshot_t *s)
 #if 0
     snapshot_module_t *m;
 
-    m = snapshot_module_create(s, SNAP_MODULE_NAME,
-                          CART_DUMP_VER_MAJOR, CART_DUMP_VER_MINOR);
+    m = snapshot_module_create(s, SNAP_MODULE_NAME, CART_DUMP_VER_MAJOR, CART_DUMP_VER_MINOR);
     if (m == NULL) {
         return -1;
     }
@@ -161,7 +181,7 @@ int vic20_ieee488_snapshot_read_module(snapshot_t *s)
 {
     return -1;
 #if 0
-    BYTE vmajor, vminor;
+    uint8_t vmajor, vminor;
     snapshot_module_t *m;
 
     m = snapshot_module_open(s, SNAP_MODULE_NAME, &vmajor, &vminor);
@@ -182,4 +202,11 @@ int vic20_ieee488_snapshot_read_module(snapshot_t *s)
     snapshot_module_close(m);
     return 0;
 #endif
+}
+
+/* ---------------------------------------------------------------------*/
+
+void vic20_ieee488_detach(void)
+{
+    set_ieee488_enabled(0, NULL);
 }

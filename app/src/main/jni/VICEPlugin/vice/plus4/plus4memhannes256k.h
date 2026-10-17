@@ -29,17 +29,21 @@
 
 #include "types.h"
 
+#define H256K_DISABLED  0
+#define H256K_256K      1
+#define H256K_1024K     2
+
 extern int h256k_enabled;
 
-extern int h256k_resources_init(void);
-extern int h256k_cmdline_options_init(void);
-extern void h256k_init(void);
-extern void h256k_reset(void);
-extern void h256k_shutdown(void);
+void h256k_init(void);
+void h256k_reset(void);
+void h256k_shutdown(void);
 
-extern BYTE h256k_reg_read(WORD addr);
-extern void h256k_reg_store(WORD addr, BYTE value);
-extern void h256k_store(WORD addr, BYTE value);
-extern BYTE h256k_read(WORD addr);
+void h256k_store(uint16_t addr, uint8_t value);
+uint8_t h256k_read(uint16_t addr);
+
+void h256k_ram_inject(uint16_t addr, uint8_t value);
+
+int set_h256k_enabled(int val);
 
 #endif

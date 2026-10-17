@@ -28,8 +28,7 @@
 #define VICE_TED_RESOURCES_H
 
 /* TED resources.  */
-struct ted_resources_s
-{
+struct ted_resources_s {
     /* TED border mode, 0..3 */
     int border_mode;
 };
@@ -37,7 +36,6 @@ typedef struct ted_resources_s ted_resources_t;
 
 extern ted_resources_t ted_resources;
 
-extern int ted_resources_init(void);
+int ted_resources_init(void);
 
 #endif
-

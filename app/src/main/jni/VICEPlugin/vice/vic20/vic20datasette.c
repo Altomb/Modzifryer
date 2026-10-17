@@ -3,6 +3,7 @@
  *
  * Written by
  *  Andreas Boose <viceteam@t-online.de>
+ *  Marco van den Heuvel <blackystardust68@yahoo.com>
  *
  * This file is part of VICE, the Versatile Commodore Emulator.
  * See README for copyright notice.
@@ -27,18 +28,44 @@
 #include "vice.h"
 
 #include "datasette.h"
+#include "tapeport.h"
 #include "via.h"
 #include "vic20.h"
 #include "vic20via.h"
 
 
-void datasette_trigger_flux_change(unsigned int on)
+void machine_trigger_flux_change(int port, unsigned int on)
 {
-    viacore_signal(machine_context.via1, VIA_SIG_CA1, VIA_SIG_FALL);
+    if (port == TAPEPORT_PORT_1) {
+        viacore_signal(machine_context.via2, VIA_SIG_CA1, VIA_SIG_FALL);
+    }
 }
 
-void datasette_set_tape_sense(int sense)
+void machine_set_tape_read_in(int port, unsigned int on)
 {
-    via2_set_tape_sense(sense);
+    if (port == TAPEPORT_PORT_1) {
+        viacore_signal(machine_context.via2, VIA_SIG_CA1,
+                       on ? VIA_SIG_RISE : VIA_SIG_FALL);
+    }
 }
 
+void machine_set_tape_sense(int port, int sense)
+{
+    if (port == TAPEPORT_PORT_1) {
+        via1_set_tape_sense(sense);
+    }
+}
+
+void machine_set_tape_write_in(int port, int val)
+{
+    if (port == TAPEPORT_PORT_1) {
+        via1_set_tape_write_in(val);
+    }
+}
+
+void machine_set_tape_motor_in(int port, int val)
+{
+    if (port == TAPEPORT_PORT_1) {
+        via1_set_tape_motor_in(val);
+    }
+}

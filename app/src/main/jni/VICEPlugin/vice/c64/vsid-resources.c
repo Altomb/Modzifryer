@@ -3,6 +3,7 @@
  *
  * Written by
  *  Andreas Boose <viceteam@t-online.de>
+ *  Marco van den Heuvel <blackystardust68@yahoo.com>
  *
  * This file is part of VICE, the Versatile Commodore Emulator.
  * See README for copyright notice.
@@ -33,6 +34,8 @@
 #include "c64acia.h"
 #include "c64cart.h"
 #include "c64cia.h"
+#include "c64mem.h"
+#include "c64memrom.h"
 #include "c64rom.h"
 #include "cartio.h"
 #include "cartridge.h"
@@ -40,6 +43,7 @@
 #include "kbd.h"
 #include "keyboard.h"
 #include "lib.h"
+#include "log.h"
 #include "machine.h"
 #include "resources.h"
 #include "reu.h"
@@ -49,6 +53,10 @@
 #include "vicii-resources.h"
 #include "vicii.h"
 #include "c64fastiec.h"
+#include "hvsc.h"
+#include "archdep.h"
+
+/* force  commit */
 
 #define KBD_INDEX_C64_SYM   0
 #define KBD_INDEX_C64_POS   1
@@ -60,6 +68,9 @@
    calculated as 65536 * drive_clk / clk_[main machine] */
 static int sync_factor;
 
+/* Frequency of the power grid in Hz */
+static int power_freq = 1;
+
 /* Name of the character ROM.  */
 static char *chargen_rom_name = NULL;
 
@@ -69,11 +80,16 @@ static char *basic_rom_name = NULL;
 /* Name of the Kernal ROM.  */
 static char *kernal_rom_name = NULL;
 
-/* Kernal revision for ROM patcher.  */
-char *kernal_revision = NULL;
+/** \brief  Root directory of the High Voltage collection
+ */
+static char *hvsc_root = NULL;
 
-int cia1_model;
-int cia2_model;
+
+/* Kernal revision for ROM patcher.  */
+int kernal_revision = C64_KERNAL_REV3;
+
+int cia1_model = CIA_MODEL_6526;
+int cia2_model = CIA_MODEL_6526;
 
 static int set_chargen_rom_name(const char *val, void *param)
 {
@@ -91,7 +107,7 @@ static int set_kernal_rom_name(const char *val, void *param)
     }
 
     /* load kernal without a kernal overriding buffer */
-    return c64rom_load_kernal(kernal_rom_name, NULL);
+    return c64rom_load_kernal(kernal_rom_name);
 }
 
 static int set_basic_rom_name(const char *val, void *param)
@@ -103,57 +119,70 @@ static int set_basic_rom_name(const char *val, void *param)
     return c64rom_load_basic(basic_rom_name);
 }
 
-static int set_cia1_model(int val, void *param)
+struct kernal_s {
+    const char *name;
+    int rev;
+};
+
+static struct kernal_s kernal_match[] = {
+    { C64_KERNAL_REV1_NAME, C64_KERNAL_REV1 },
+    { C64_KERNAL_REV2_NAME, C64_KERNAL_REV2 },
+    { C64_KERNAL_REV3_NAME, C64_KERNAL_REV3 },
+    { C64_KERNAL_JAP_NAME,  C64_KERNAL_JAP },
+    { C64_KERNAL_SX64_NAME, C64_KERNAL_SX64 },
+    { C64_KERNAL_GS64_NAME, C64_KERNAL_GS64 },
+    { C64_KERNAL_4064_NAME, C64_KERNAL_4064 },
+    { C64_KERNAL_NONE_NAME, C64_KERNAL_NONE },
+    { NULL, C64_KERNAL_UNKNOWN }
+};
+
+static int set_kernal_revision(int val, void *param)
 {
-    int old_cia_model = cia1_model;
+    int n = 0, rev = C64_KERNAL_UNKNOWN;
+    const char *name = NULL;
+    log_verbose(LOG_DEFAULT, "set_kernal_revision was kernal_revision: %d new val:%d", kernal_revision, val);
 
-    switch (val) {
-        case CIA_MODEL_6526:
-        case CIA_MODEL_6526A:
-            cia1_model = val;
-            break;
-        default:
-            return -1;
+    if (val == C64_KERNAL_UNKNOWN) {
+        kernal_revision = C64_KERNAL_UNKNOWN;
+        return 0;
     }
 
-    if (old_cia_model != cia1_model) {
-        cia1_update_model();
+    /* find given revision */
+    do {
+        if (kernal_match[n].rev == val) {
+            rev = kernal_match[n].rev;
+            name = kernal_match[n].name;
+        }
+        ++n;
+    } while ((rev == C64_KERNAL_UNKNOWN) && (kernal_match[n].name != NULL));
+
+    if (rev == C64_KERNAL_UNKNOWN) {
+        log_error(LOG_DEFAULT, "invalid kernal revision (%d)", val);
+        return -1;
     }
 
-    return 0;
-}
+    log_verbose(LOG_DEFAULT, "set_kernal_revision found rev:%d name: %s", rev, name);
 
-static int set_cia2_model(int val, void *param)
-{
-    int old_cia_model = cia2_model;
-
-    switch (val) {
-        case CIA_MODEL_6526:
-        case CIA_MODEL_6526A:
-            cia2_model = val;
-            break;
-        default:
-            return -1;
+    if (resources_set_string("KernalName", name) < 0) {
+        log_error(LOG_DEFAULT, "failed to set kernal name (%s)", name);
+        return -1;
     }
 
-    if (old_cia_model != cia2_model) {
-        cia2_update_model();
+    memcpy(c64memrom_kernal64_trap_rom, c64memrom_kernal64_rom, C64_KERNAL_ROM_SIZE);
+
+    if (kernal_revision != rev) {
+        machine_trigger_reset(MACHINE_RESET_MODE_POWER_CYCLE);
     }
 
-    return 0;
-}
-
-/* FIXME: Should patch the ROM on-the-fly.  */
-static int set_kernal_revision(const char *val, void *param)
-{
-    util_string_set(&kernal_revision, val);
+    kernal_revision = rev;
+    log_verbose(LOG_DEFAULT, "set_kernal_revision new kernal_revision: %d", kernal_revision);
     return 0;
 }
 
 static int set_sync_factor(int val, void *param)
 {
     int change_timing = 0;
-    int border_mode = VICII_BORDER_MODE(vicii_resources.border_mode);
+    int pf;
 
     if (sync_factor != val) {
         change_timing = 1;
@@ -161,92 +190,117 @@ static int set_sync_factor(int val, void *param)
 
     switch (val) {
         case MACHINE_SYNC_PAL:
-            sync_factor = val;
-            if (change_timing) {
-                machine_change_timing(MACHINE_SYNC_PAL ^ border_mode);
-            }
+        case MACHINE_SYNC_PALN:
+            pf = 50;
             break;
         case MACHINE_SYNC_NTSC:
-            sync_factor = val;
-            if (change_timing) {
-                machine_change_timing(MACHINE_SYNC_NTSC ^ border_mode);
-            }
-            break;
         case MACHINE_SYNC_NTSCOLD:
-            sync_factor = val;
-            if (change_timing) {
-                machine_change_timing(MACHINE_SYNC_NTSCOLD ^ border_mode);
-            }
-            break;
-        case MACHINE_SYNC_PALN:
-            sync_factor = val;
-            if (change_timing) {
-                machine_change_timing(MACHINE_SYNC_PALN ^ border_mode);
-            }
+            pf = 60;
             break;
         default:
             return -1;
+    }
+    sync_factor = val;
+    if (change_timing) {
+        machine_change_timing(val, pf, 0);
     }
 
     return 0;
 }
 
+static int set_power_freq(int val, void *param)
+{
+    int change_timing = 0;
+
+    if (power_freq != val) {
+        change_timing = 1;
+    }
+
+    switch (val) {
+        case 50:
+        case 60:
+            break;
+        default:
+            return -1;
+    }
+    power_freq = val;
+    if (change_timing) {
+        if (sync_factor > 0) {
+            machine_change_timing(sync_factor, val, 0);
+        }
+    }
+    return 0;
+}
+
+static int set_hvsc_root(const char *path, void *param)
+{
+    char *result = NULL;
+
+    /* empty means use the 'HVSC_BASE' env var */
+    if (path != NULL && *path != '\0') {
+        /* expand ~, no effect on Windows */
+        archdep_expand_path(&result, path);
+    }
+
+    util_string_set(&hvsc_root, result);
+
+    /* "reboot" hvsclib */
+    hvsc_exit();
+    hvsc_init(result);
+    lib_free(result);
+    return 0;
+}
+
+
 static const resource_string_t resources_string[] = {
-    { "ChargenName", "chargen", RES_EVENT_NO, NULL,
-       /* FIXME: should be same but names may differ */
+    { "ChargenName", C64_CHARGEN_NAME, RES_EVENT_NO, NULL,
+      /* FIXME: should be same but names may differ */
       &chargen_rom_name, set_chargen_rom_name, NULL },
-    { "KernalName", "kernal", RES_EVENT_NO, NULL,
+    { "KernalName", C64_KERNAL_REV3_NAME, RES_EVENT_NO, NULL,
       /* FIXME: should be same but names may differ */
       &kernal_rom_name, set_kernal_rom_name, NULL },
-    { "BasicName", "basic", RES_EVENT_NO, NULL,
+    { "BasicName", C64_BASIC_NAME, RES_EVENT_NO, NULL,
       /* FIXME: should be same but names may differ */
       &basic_rom_name, set_basic_rom_name, NULL },
-    { "KernalRev", "", RES_EVENT_SAME, NULL,
-      &kernal_revision, set_kernal_revision, NULL },
-#ifdef COMMON_KBD
-    { "KeymapSymFile", KBD_C64_SYM_US, RES_EVENT_NO, NULL,
-      &machine_keymap_file_list[0],
-      keyboard_set_keymap_file, (void *)0 },
-    { "KeymapPosFile", KBD_C64_POS, RES_EVENT_NO, NULL,
-      &machine_keymap_file_list[1],
-      keyboard_set_keymap_file, (void *)1 },
-    { "KeymapSymDeFile", KBD_C64_SYM_DE, RES_EVENT_NO, NULL,
-      &machine_keymap_file_list[2],
-      keyboard_set_keymap_file, (void *)2 },
-#endif
-    { NULL }
+    /* When empty the HVSC_BASE env var is used */
+    { "HVSCRoot", "", RES_EVENT_NO, NULL,
+      &hvsc_root, set_hvsc_root, NULL },
+    RESOURCE_STRING_LIST_END
 };
 
 static const resource_int_t resources_int[] = {
     { "MachineVideoStandard", MACHINE_SYNC_PAL, RES_EVENT_SAME, NULL,
       &sync_factor, set_sync_factor, NULL },
-    { "CIA1Model", CIA_MODEL_6526, RES_EVENT_SAME, NULL,
-      &cia1_model, set_cia1_model, NULL },
-    { "CIA2Model", CIA_MODEL_6526, RES_EVENT_SAME, NULL,
-      &cia2_model, set_cia2_model, NULL },
-#ifdef COMMON_KBD
-    { "KeymapIndex", KBD_INDEX_C64_DEFAULT, RES_EVENT_NO, NULL,
-      &machine_keymap_index, keyboard_set_keymap_index, NULL },
-#endif
-    { "SidStereoAddressStart", 0xde00, RES_EVENT_SAME, NULL,
-      (int *)&sid_stereo_address_start, sid_set_sid_stereo_address, NULL },
-    { "SidTripleAddressStart", 0xdf00, RES_EVENT_SAME, NULL,
-      (int *)&sid_triple_address_start, sid_set_sid_triple_address, NULL },
-    { NULL }
+    { "MachinePowerFrequency", 50, RES_EVENT_SAME, NULL,
+      &power_freq, set_power_freq, NULL },
+    { "KernalRev", C64_KERNAL_REV3, RES_EVENT_SAME, NULL,
+      &kernal_revision, set_kernal_revision, NULL },
+    { "Sid2AddressStart", 0xde00, RES_EVENT_SAME, NULL,
+      (int *)&sid2_address_start, sid_set_sid2_address, NULL },
+    { "Sid3AddressStart", 0xdf00, RES_EVENT_SAME, NULL,
+      (int *)&sid3_address_start, sid_set_sid3_address, NULL },
+    { "Sid4AddressStart", 0xdf80, RES_EVENT_SAME, NULL,
+      (int *)&sid4_address_start, sid_set_sid4_address, NULL },
+    { "Sid5AddressStart", 0xde80, RES_EVENT_SAME, NULL,
+      (int *)&sid5_address_start, sid_set_sid5_address, NULL },
+    { "Sid6AddressStart", 0xdf40, RES_EVENT_SAME, NULL,
+      (int *)&sid6_address_start, sid_set_sid6_address, NULL },
+    { "Sid7AddressStart", 0xde40, RES_EVENT_SAME, NULL,
+      (int *)&sid7_address_start, sid_set_sid7_address, NULL },
+    { "Sid8AddressStart", 0xdfc0, RES_EVENT_SAME, NULL,
+      (int *)&sid8_address_start, sid_set_sid8_address, NULL },
+    { "Sid9AddressStart", 0xde20, RES_EVENT_SAME, NULL,
+      (int *)&sid9_address_start, sid_set_sid9_address, NULL },
+    { "Sid10AddressStart", 0xdf20, RES_EVENT_SAME, NULL,
+      (int *)&sid10_address_start, sid_set_sid10_address, NULL },
+    RESOURCE_INT_LIST_END
 };
-
-void c64_resources_update_cia_models(int model)
-{
-    set_cia1_model(model, NULL);
-    set_cia2_model(model, NULL);
-}
 
 int c64_resources_init(void)
 {
     if (resources_register_string(resources_string) < 0) {
         return -1;
     }
-
     return resources_register_int(resources_int);
 }
 
@@ -255,8 +309,8 @@ void c64_resources_shutdown(void)
     lib_free(chargen_rom_name);
     lib_free(basic_rom_name);
     lib_free(kernal_rom_name);
-    lib_free(kernal_revision);
-    lib_free(machine_keymap_file_list[0]);
-    lib_free(machine_keymap_file_list[1]);
-    lib_free(machine_keymap_file_list[2]);
+    if (hvsc_root != NULL) {
+        lib_free(hvsc_root);
+    }
+    hvsc_exit();
 }

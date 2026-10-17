@@ -3,6 +3,7 @@
  *
  * Written by
  *  Andreas Boose <viceteam@t-online.de>
+ *  Marco van den Heuvel <blackystardust68@yahoo.com>
  *
  * This file is part of VICE, the Versatile Commodore Emulator.
  * See README for copyright notice.
@@ -29,22 +30,22 @@
 
 #include "types.h"
 
-extern BYTE int_function_rom[];
-extern BYTE ext_function_rom[];
+extern uint8_t int_function_rom[];
 
-extern BYTE internal_function_rom_read(WORD addr);
-extern void internal_function_rom_store(WORD addr, BYTE value);
-extern void internal_function_top_shared_store(WORD addr, BYTE value);
-extern BYTE external_function_rom_read(WORD addr);
-extern void external_function_rom_store(WORD addr, BYTE value);
+uint8_t internal_function_rom_read(uint16_t addr);
+void internal_function_rom_store(uint16_t addr, uint8_t value);
+void internal_function_top_shared_store(uint16_t addr, uint8_t value);
+uint8_t internal_function_rom_peek(uint16_t addr);
 
-extern int functionrom_resources_init(void);
-extern void functionrom_resources_shutdown(void);
-extern int functionrom_cmdline_options_init(void);
+int functionrom_resources_init(void);
+void functionrom_resources_shutdown(void);
+int functionrom_cmdline_options_init(void);
 
-#define INT_FUNCTION_NONE   0
-#define INT_FUNCTION_ROM    1
-#define INT_FUNCTION_RAM    2
-#define INT_FUNCTION_RTC    3
+enum {
+    INT_FUNCTION_NONE = 0,
+    INT_FUNCTION_ROM,
+    INT_FUNCTION_RAM,
+    INT_FUNCTION_RTC
+};
 
 #endif

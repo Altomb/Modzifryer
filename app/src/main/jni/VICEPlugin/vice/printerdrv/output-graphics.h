@@ -27,11 +27,8 @@
 #ifndef VICE_OUTPUT_GRAPHICS_H
 #define VICE_OUTPUT_GRAPHICS_H
 
-extern int output_graphics_init_resources(void);
-extern int output_graphics_init_cmdline_options(void);
-extern void output_graphics_init(void);
-
-extern void output_graphics_reset(void);
+int output_graphics_init_resources(void);
+void output_graphics_init(void);
+void output_graphics_shutdown(void);
 
 #endif
-

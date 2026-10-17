@@ -3,9 +3,10 @@
  * ($DC00).
  *
  * Written by
- *  André Fachat <fachat@physik.tu-chemnitz.de>
+ *  Andre Fachat <fachat@physik.tu-chemnitz.de>
  *  Ettore Perazzoli <ettore@comm2000.it>
  *  Andreas Boose <viceteam@t-online.de>
+ *  Marco van den Heuvel <blackystardust68@yahoo.com>
  *
  * This file is part of VICE, the Versatile Commodore Emulator.
  * See README for copyright notice.
@@ -35,9 +36,9 @@
 #include "c64.h"
 #include "c64cia.h"
 #include "cia.h"
-#include "clkguard.h"
-#include "drivecpu.h"
+#include "drive.h"
 #include "interrupt.h"
+#include "joyport.h"
 #include "joystick.h"
 #include "keyboard.h"
 #include "lib.h"
@@ -45,28 +46,24 @@
 #include "machine.h"
 #include "maincpu.h"
 #include "types.h"
-#include "userport_joystick.h"
+#include "userport.h"
 #include "vicii.h"
-
-#ifdef HAVE_RS232
-#include "rsuser.h"
-#endif
 
 #ifdef HAVE_MOUSE
 #include "mouse.h"
 #endif
 
-void cia1_store(WORD addr, BYTE data)
+void cia1_store(uint16_t addr, uint8_t data)
 {
     ciacore_store(machine_context.cia1, addr, data);
 }
 
-BYTE cia1_read(WORD addr)
+uint8_t cia1_read(uint16_t addr)
 {
     return ciacore_read(machine_context.cia1, addr);
 }
 
-BYTE cia1_peek(WORD addr)
+uint8_t cia1_peek(uint16_t addr)
 {
     return ciacore_peek(machine_context.cia1, addr);
 }
@@ -93,9 +90,9 @@ static void cia_restore_int(cia_context_t *cia_context, int value)
  */
 
 /* Mask for the extended keyboard rows.  */
-static BYTE extended_keyboard_rows_mask;
+static uint8_t extended_keyboard_rows_mask;
 
-void cia1_set_extended_keyboard_rows_mask(BYTE value)
+void cia1_set_extended_keyboard_rows_mask(uint8_t value)
 {
     extended_keyboard_rows_mask = value;
 }
@@ -123,20 +120,20 @@ static void do_reset_cia(cia_context_t *cia_context)
 {
 }
 
-static void cia1_internal_lightpen_check(BYTE pa, BYTE pb)
+static void cia1_internal_lightpen_check(uint8_t pa, uint8_t pb)
 {
-    BYTE val = 0xff;
-    BYTE msk = pa & ~joystick_value[2];
-    BYTE m;
+    uint8_t val = 0xff;
+    uint8_t msk = pa & read_joyport_dig(JOYPORT_2);
+    uint8_t m;
     int i;
 
-    for (m = 0x1, i = 0; i < 8; m <<= 1, i++) {
+    for (m = 0x1, i = 0; i < 8; m = (uint8_t)(m << 1), i++) {
         if (!(msk & m)) {
             val &= ~keyarr[i];
         }
     }
 
-    m = val & pb & ~joystick_value[1];
+    m = val & pb & read_joyport_dig(JOYPORT_1);
 
     vicii_set_light_pen(maincpu_clk, !(m & 0x10));
 }
@@ -146,52 +143,36 @@ void cia1_check_lightpen(void)
     cia1_internal_lightpen_check(machine_context.cia1->old_pa, machine_context.cia1->old_pb);
 }
 
-static void store_ciapa(cia_context_t *cia_context, CLOCK rclk, BYTE b)
+static void store_ciapa(cia_context_t *cia_context, CLOCK rclk, uint8_t b)
 {
-    cia1_internal_lightpen_check(b,  machine_context.cia1->old_pb);
+    cia1_internal_lightpen_check(b, machine_context.cia1->old_pb);
 
-#ifdef HAVE_MOUSE
-    mouse_set_input((b >> 6) & 0x03);
+    set_joyport_pot_mask((b >> 6) & 3);
 
-    if (_mouse_enabled && (mouse_port == 2)) {
-        if (mouse_type == MOUSE_TYPE_NEOS) {
-            neos_mouse_store(b);
-        } else if (mouse_type == MOUSE_TYPE_SMART) {
-            smart_mouse_store(b);
-        }
-    }
-#endif
+    store_joyport_dig(JOYPORT_2, b, 0xff);
 }
 
-static void undump_ciapa(cia_context_t *cia_context, CLOCK rclk, BYTE b)
+static void undump_ciapa(cia_context_t *cia_context, CLOCK rclk, uint8_t b)
 {
 }
 
-static void store_ciapb(cia_context_t *cia_context, CLOCK rclk, BYTE byte)
+static void store_ciapb(cia_context_t *cia_context, CLOCK rclk, uint8_t byte)
 {
     cia1_internal_lightpen_check(machine_context.cia1->old_pa, byte);
 
-#ifdef HAVE_MOUSE
-    if (_mouse_enabled && (mouse_port == 1)) {
-        if (mouse_type == MOUSE_TYPE_NEOS) {
-            neos_mouse_store(byte);
-        } else if (mouse_type == MOUSE_TYPE_SMART) {
-            smart_mouse_store(byte);
-        }
-    }
-#endif
+    store_joyport_dig(JOYPORT_1, byte, 0xff);
 }
 
-static void undump_ciapb(cia_context_t *cia_context, CLOCK rclk, BYTE byte)
+static void undump_ciapb(cia_context_t *cia_context, CLOCK rclk, uint8_t byte)
 {
 }
 
-static BYTE read_ciapa(cia_context_t *cia_context)
+static uint8_t read_ciapa(cia_context_t *cia_context)
 {
-    BYTE byte;
-    BYTE val = 0xff;
-    BYTE msk = cia_context->old_pb & ~joystick_value[1];
-    BYTE m;
+    uint8_t byte;
+    uint8_t val = 0xff;
+    uint8_t msk = cia_context->old_pb & read_joyport_dig(JOYPORT_1);
+    uint8_t m;
     int i;
 
     for (m = 0x1, i = 0; i < 8; m <<= 1, i++) {
@@ -200,31 +181,17 @@ static BYTE read_ciapa(cia_context_t *cia_context)
         }
     }
 
-    byte = (val & (cia_context->c_cia[CIA_PRA] | ~(cia_context->c_cia[CIA_DDRA]))) & ~joystick_value[2];
-
-#ifdef HAVE_MOUSE
-    if (_mouse_enabled && (mouse_port == 2)) {
-        if (mouse_type == MOUSE_TYPE_NEOS) {
-            byte &= neos_mouse_read();
-        } else if (mouse_type == MOUSE_TYPE_SMART) {
-            byte &= smart_mouse_read();
-        } else if (mouse_kind == MOUSE_KIND_POLLED) {
-            byte &= mouse_poll();
-        }
-    }
-#endif
+    byte = (val & (cia_context->c_cia[CIA_PRA] | ~(cia_context->c_cia[CIA_DDRA]))) & read_joyport_dig(JOYPORT_2);
 
     return byte;
 }
 
 inline static int ciapb_forcelow(int i)
 {
-    BYTE v;
+    uint8_t v;
 
-    /* Check for shift lock.
-       FIXME: keyboard_shiftlock state may be inconsistent
-              with the (rev_)keyarr state. */
-    if ((i == 7) && keyboard_shiftlock) {
+    /* Check for shift lock. */
+    if ((i == 7) && keyboard_get_shiftlock()) {
         return 1;
     }
 
@@ -238,13 +205,13 @@ inline static int ciapb_forcelow(int i)
     return 0;
 }
 
-static BYTE read_ciapb(cia_context_t *cia_context)
+static uint8_t read_ciapb(cia_context_t *cia_context)
 {
-    BYTE byte;
-    BYTE val = 0xff;
-    BYTE val_outhi = ((cia_context->c_cia[CIA_DDRA]) & (cia_context->c_cia[CIA_DDRB])) & (cia_context->c_cia[CIA_PRB]);
-    BYTE msk = cia_context->old_pa & ~joystick_value[2];
-    BYTE m;
+    uint8_t byte;
+    uint8_t val = 0xff;
+    uint8_t val_outhi = ((cia_context->c_cia[CIA_DDRA]) & (cia_context->c_cia[CIA_DDRB])) & (cia_context->c_cia[CIA_PRB]);
+    uint8_t msk = cia_context->old_pa & read_joyport_dig(JOYPORT_2);
+    uint8_t m;
     int i;
 
     for (m = 0x1, i = 0; i < 8; m <<= 1, i++) {
@@ -277,56 +244,42 @@ static BYTE read_ciapb(cia_context_t *cia_context)
 
     byte = val & (cia_context->c_cia[CIA_PRB] | ~(cia_context->c_cia[CIA_DDRB]));
     byte |= val_outhi;
-    byte &= ~joystick_value[1];
-
-#ifdef HAVE_MOUSE
-    if (_mouse_enabled && (mouse_port == 1)) {
-        if (mouse_type == MOUSE_TYPE_NEOS) {
-            byte &= neos_mouse_read();
-        } else if (mouse_type == MOUSE_TYPE_SMART) {
-            byte &= smart_mouse_read();
-        } else if (mouse_kind == MOUSE_KIND_POLLED) {
-            byte &= mouse_poll();
-        }
-    }
-#endif
+    byte &= read_joyport_dig(JOYPORT_1);
 
     return byte;
 }
 
 static void read_ciaicr(cia_context_t *cia_context)
 {
-    drivecpu_execute_all(maincpu_clk);
+    drive_catch_up_hook(maincpu_clk);
 }
 
 static void read_sdr(cia_context_t *cia_context)
 {
-    drivecpu_execute_all(maincpu_clk);
+    drive_catch_up_hook(maincpu_clk);
+
+    cia_context->c_cia[CIA_SDR] = read_userport_sp1(cia_context->c_cia[CIA_SDR]);
 }
 
-static void store_sdr(cia_context_t *cia_context, BYTE byte)
+static void store_sdr(cia_context_t *cia_context, uint8_t byte)
 {
-    c128fastiec_fast_cpu_write(byte);
-#ifdef HAVE_RS232
-    if (rsuser_enabled) {
-        rsuser_tx_byte(byte);
+    if ((cia_context->c_cia[CIA_CRA] & 0x49) == 0x41) {
+        store_userport_sp1(byte);
     }
-#endif
-    /* FIXME: in the upcoming userport system this call needs to be conditional */
-    userport_joystick_store_sdr(byte);
+    c128fastiec_fast_cpu_write(byte);
 }
 
 void cia1_init(cia_context_t *cia_context)
 {
-    ciacore_init(machine_context.cia1, maincpu_alarm_context, maincpu_int_status, maincpu_clk_guard);
+    ciacore_init(machine_context.cia1, maincpu_alarm_context, maincpu_int_status);
 }
 
-void cia1_setup_context(machine_context_t *machine_context)
+void cia1_setup_context(machine_context_t *machine_ctx)
 {
     cia_context_t *cia;
 
-    machine_context->cia1 = lib_calloc(1, sizeof(cia_context_t));
-    cia = machine_context->cia1;
+    machine_ctx->cia1 = lib_calloc(1, sizeof(cia_context_t));
+    cia = machine_ctx->cia1;
 
     cia->prv = NULL;
     cia->context = NULL;
@@ -334,7 +287,7 @@ void cia1_setup_context(machine_context_t *machine_context)
     cia->rmw_flag = &maincpu_rmw_flag;
     cia->clk_ptr = &maincpu_clk;
 
-    cia->todticks = C64_PAL_CYCLES_PER_RFSH;
+    cia1_set_timing(cia, C64_PAL_CYCLES_PER_SEC, 50);
 
     ciacore_setup_context(cia);
 
@@ -362,7 +315,11 @@ void cia1_setup_context(machine_context_t *machine_context)
     cia->pre_peek = pre_peek;
 }
 
-void cia1_set_timing(cia_context_t *cia_context, int todticks)
+void cia1_set_timing(cia_context_t *cia_context, int tickspersec, int powerfreq)
 {
-    cia_context->todticks = todticks;
+    cia_context->power_freq = powerfreq;
+    cia_context->ticks_per_sec = tickspersec;
+    cia_context->todticks = tickspersec / powerfreq;
+    cia_context->power_tickcounter = 0;
+    cia_context->power_ticks = 0;
 }

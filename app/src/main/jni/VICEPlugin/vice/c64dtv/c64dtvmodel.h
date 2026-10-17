@@ -29,19 +29,28 @@
 
 #include "types.h"
 
-#define DTVMODEL_V2_PAL        0 /* DTV v2 (pal) */
-#define DTVMODEL_V2_NTSC       1 /* DTV v2 (ntsc) */
-#define DTVMODEL_V3_PAL        2 /* DTV v3 (pal) */
-#define DTVMODEL_V3_NTSC       3 /* DTV v3 (ntsc) */
-#define DTVMODEL_HUMMER_NTSC   4 /* Hummer (ntsc) */
+/* NOTE: we use the same enum for the Flash ROM Revision */
+enum {
+    DTVMODEL_V2_PAL = 0,   /* DTV v2 (pal) */
+    DTVMODEL_V2_NTSC,      /* DTV v2 (ntsc) */
+    DTVMODEL_V3_PAL,       /* DTV v3 (pal) */
+    DTVMODEL_V3_NTSC,      /* DTV v3 (ntsc) */
+    DTVMODEL_HUMMER_PAL,   /* Hummer (pal) */
+    DTVMODEL_HUMMER_NTSC,  /* Hummer (ntsc) */
 
-#define DTVMODEL_NUM 5
+    /* This entry always needs to be at the end */
+    DTVMODEL_NUM
+};
 
 #define DTVMODEL_UNKNOWN 99
 
-extern int dtvmodel_get(void);
-extern int dtvmodel_get_temp(int video, int asic, int hummeradc);
-extern void dtvmodel_set(int model);
-extern void dtvmodel_set_temp(int model, int *vic_model, int *asic, int *hummeradc);
+#define DTVREV_2  2
+#define DTVREV_3  3
+
+#define IS_DTV     0
+#define IS_HUMMER  1
+
+int dtvmodel_get(void);
+void dtvmodel_set(int model);
 
 #endif

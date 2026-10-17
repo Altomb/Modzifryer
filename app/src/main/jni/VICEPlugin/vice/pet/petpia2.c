@@ -3,7 +3,7 @@
  *
  * Written by
  *  Jouko Valta <jopi@stekt.oulu.fi>
- *  Andre' Fachat <fachat@physik.tu-chemnitz.de>
+ *  Andre Fachat <fachat@physik.tu-chemnitz.de>
  *
  * This file is part of VICE, the Versatile Commodore Emulator.
  * See README for copyright notice.
@@ -27,7 +27,7 @@
 
 #include "vice.h"
 
-#include "drivecpu.h"
+#include "drive.h"
 #include "interrupt.h"
 #include "maincpu.h"
 #include "parallel.h"
@@ -55,9 +55,9 @@ static piareg mypia;
 /* ------------------------------------------------------------------------- */
 /* CPU binding */
 
-static void my_set_int(unsigned int pia_int_num, int a)
+static void my_set_int(unsigned int pia_int_num, int a, CLOCK offset)
 {
-    maincpu_set_irq(pia_int_num, a ? IK_IRQ : IK_NONE);
+    maincpu_set_irq_clk(pia_int_num, a ? IK_IRQ : IK_NONE, maincpu_clk - offset);
 }
 
 static void my_restore_int(unsigned int pia_int_num, int a)
@@ -75,17 +75,18 @@ static void my_restore_int(unsigned int pia_int_num, int a)
 
 static void pia_set_ca2(int a)
 {
-    parallel_cpu_set_ndac((BYTE)((a) ? 0 : 1));
+    parallel_cpu_set_ndac((uint8_t)((a) ? 0 : 1));
 }
 
 static void pia_set_cb2(int a)
 {
-    parallel_cpu_set_dav((BYTE)((a) ? 0 : 1));
+    parallel_cpu_set_dav((uint8_t)((a) ? 0 : 1));
 }
 
 static void pia_reset(void)
 {
-    parallel_cpu_set_bus(0xff); /* all data lines high, because of input mode */}
+    parallel_cpu_set_bus(0xff); /* all data lines high, because of input mode */
+}
 
 
 /*
@@ -97,46 +98,47 @@ E823    CB2         IEEE DAV out
         CB1         IEEE SRQ in
 */
 
-static void store_pa(BYTE byte)
+static void store_pa(uint8_t byte)
 {
 }
 
-static void undump_pa(BYTE byte)
+static void undump_pa(uint8_t byte)
 {
 }
 
-
-static void store_pb(BYTE byte)
+static void store_pb(uint8_t byte)
 {
     parallel_cpu_set_bus(byte);
 }
 
-static void undump_pb(BYTE byte)
+static void undump_pb(uint8_t byte)
 {
     parallel_cpu_set_bus(byte);
 }
 
-static BYTE read_pa(void)
+static uint8_t read_pa(void)
 {
-    BYTE byte;
+    uint8_t byte;
 
-    drivecpu_execute_all(maincpu_clk);
+    drive_catch_up_hook(maincpu_clk);
 
-    if (parallel_debug)
+#ifdef DEBUG
+    if (debug.ieee) {
         log_message(mypia_log,
-                "read pia2 port A %x, parallel_bus=%x, gives %x.",
-                mypia.port_a, parallel_bus,
-                ((parallel_bus & ~mypia.ddr_a)
-                | (mypia.port_a & mypia.ddr_a)));
+                    "read pia2 port A %x, parallel_bus=%x, gives %x.",
+                    mypia.port_a, parallel_bus,
+                    (unsigned int)((parallel_bus & ~mypia.ddr_a)
+                     | (mypia.port_a & mypia.ddr_a)));
+    }
+#endif
 
     byte = (parallel_bus & ~mypia.ddr_a) | (mypia.port_a & mypia.ddr_a);
     return byte;
 }
 
-static BYTE read_pb(void)
+static uint8_t read_pb(void)
 {
     return 0xff;
 }
 
 #include "piacore.c"
-

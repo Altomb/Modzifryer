@@ -31,9 +31,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <inttypes.h>
+
+#include "videoarch.h"
 
 #include "alarm.h"
-#include "clkguard.h"
 #include "dma.h"
 #include "lib.h"
 #include "log.h"
@@ -63,29 +65,20 @@
 #include "tedtypes.h"
 #include "types.h"
 #include "vsync.h"
-#include "videoarch.h"
 #include "video.h"
+#include "monitor.h"
 
 
 ted_t ted;
 static CLOCK old_maincpu_clk = 0;
 static CLOCK old_cycle = 0;
 
-CLOCK   last_write_cycle;
-CLOCK   first_write_cycle;
+CLOCK last_write_cycle;
+CLOCK first_write_cycle;
 
 
 static void ted_set_geometry(void);
 
-
-static void clk_overflow_callback(CLOCK sub, void *unused_data)
-{
-    ted.raster_irq_clk -= sub;
-    ted.last_emulate_line_clk -= sub;
-    ted.fetch_clk -= sub;
-    ted.draw_clk -= sub;
-    old_maincpu_clk -= sub;
-}
 
 void ted_change_timing(machine_timing_t *machine_timing, int bordermode)
 {
@@ -95,6 +88,8 @@ void ted_change_timing(machine_timing_t *machine_timing, int bordermode)
         ted_set_geometry();
         raster_mode_change();
     }
+    /* this should go to ted_chip_model_init() incase we ever go that far */
+    ted_color_update_palette(ted.raster.canvas);
 }
 
 void ted_delay_oldclk(CLOCK num)
@@ -107,7 +102,7 @@ void ted_delay_clk(void)
 {
     CLOCK diff;
 
-    /*log_debug("MCLK %d OMCLK %d", maincpu_clk, old_maincpu_clk);*/
+    /*log_debug(LOG_DEFAULT, "MCLK %d OMCLK %d", maincpu_clk, old_maincpu_clk);*/
 
     if (ted.fastmode == 0) {
         diff = maincpu_clk - old_maincpu_clk - ((old_cycle & 1) ^ 1);
@@ -129,7 +124,9 @@ fastloop:
                 } else {
                     diff -= 3 - old_cycle;
                 }
-                if (diff > max) diff = max;
+                if (diff > max) {
+                    diff = max;
+                }
                 dma_maincpu_steal_cycles(maincpu_clk, diff, 0);
             } else if (old_cycle + diff >= 118) {
                 /* Instruction crosses into next line, and potentially
@@ -153,7 +150,9 @@ fastloop:
                 } else {
                     diff -= 91 - old_cycle;
                 }
-                if (diff > max) diff = max;
+                if (diff > max) {
+                    diff = max;
+                }
                 dma_maincpu_steal_cycles(maincpu_clk, diff, 0);
             } else if (old_cycle + diff >= 118) {
                 /* Instruction crosses into next line, and potentially
@@ -174,9 +173,8 @@ fastloop:
     return;
 }
 
-inline void ted_handle_pending_alarms(int num_write_cycles)
+inline void ted_handle_pending_alarms(CLOCK num_write_cycles)
 {
-
     if (num_write_cycles != 0) {
         int f;
 
@@ -195,8 +193,7 @@ inline void ted_handle_pending_alarms(int num_write_cycles)
         do {
             f = 0;
             if (maincpu_clk >= ted.draw_clk) {
-                ted_raster_draw_alarm_handler((CLOCK)(maincpu_clk
-                                              - ted.draw_clk), NULL);
+                ted_raster_draw_alarm_handler(maincpu_clk - ted.draw_clk, NULL);
                 f = 1;
             }
             if (maincpu_clk > ted.fetch_clk + 1) {
@@ -217,17 +214,16 @@ inline void ted_handle_pending_alarms(int num_write_cycles)
             ted_delay_clk();
         } else if (num_write_cycles == 2) {
             first_write_cycle = maincpu_clk;
-            maincpu_clk ++;
+            maincpu_clk++;
             ted_delay_clk();
             last_write_cycle = maincpu_clk;
-            maincpu_clk ++;
+            maincpu_clk++;
             ted_delay_clk();
         } else {
             maincpu_clk += num_write_cycles;
             ted_delay_clk();
         }
-
-      } else {
+    } else {
         int f;
 
         ted_delay_clk();
@@ -272,9 +268,9 @@ static int ted_get_crt_type(void)
     switch (video) {
         case MACHINE_SYNC_PAL:
         case MACHINE_SYNC_PALN:
-            return 1; /* PAL */
+            return VIDEO_CRT_TYPE_PAL;
         default:
-            return 0; /* NTSC */
+            return VIDEO_CRT_TYPE_NTSC;
     }
 }
 
@@ -301,16 +297,13 @@ static void ted_set_geometry(void)
                         width, ted.screen_height, /* screen dimensions */
                         TED_SCREEN_XPIX, TED_SCREEN_YPIX, /* gfx dimensions */
                         TED_SCREEN_TEXTCOLS, TED_SCREEN_TEXTLINES, /* text dimensions */
-                        ted.screen_leftborderwidth, ted.row_25_start_line, /* gfx position */
+                        ted.screen_leftborderwidth, ted.row_25_start_line + ted.screen_height - ted.vsync_line, /* gfx position */
                         0, /* gfx area doesn't move */
                         ted.first_displayed_line,
                         ted.last_displayed_line,
-                        - TED_RASTER_X(0), /* extra offscreen border left */
+                        -TED_RASTER_X(0),  /* extra offscreen border left */
                         0 + TED_SCREEN_XPIX -
                         ted.screen_leftborderwidth - ted.screen_rightborderwidth + TED_RASTER_X(0)) /* extra offscreen border right */;
-#ifdef __MSDOS__
-    video_ack_vga_mode();
-#endif
     ted.raster.geometry->pixel_aspect_ratio = ted_get_pixel_aspect();
     ted.raster.viewport->crt_type = ted_get_crt_type();
 }
@@ -324,8 +317,9 @@ static int init_raster(void)
     raster->sprite_status = NULL;
     raster_line_changes_init(raster);
 
-    if (raster_init(raster, TED_NUM_VMODES) < 0)
+    if (raster_init(raster, TED_NUM_VMODES) < 0) {
         return -1;
+    }
 
     raster_modes_set_idle_mode(raster->modes, TED_IDLE_MODE);
     resources_touch("TEDVideoCache");
@@ -337,10 +331,9 @@ static int init_raster(void)
         return -1;
     }
 
-    raster_set_title(raster, machine_name);
-
-    if (raster_realize(raster) < 0)
+    if (raster_realize(raster) < 0) {
         return -1;
+    }
 
     raster->display_ystart = raster->display_ystop = -1;
     raster->display_xstart = TED_40COL_START_PIXEL;
@@ -368,7 +361,7 @@ raster_t *ted_init(void)
 
     if (init_raster() < 0) {
         return NULL;
-    }    
+    }
 
     ted_powerup();
 
@@ -378,8 +371,6 @@ raster_t *ted_init(void)
     ted_draw_init();
 
     ted.initialized = 1;
-
-    clk_guard_add_callback(maincpu_clk_guard, clk_overflow_callback, NULL);
 
     return &ted.raster;
 }
@@ -400,7 +391,7 @@ void ted_reset(void)
 
     /* FIXME this should be in powerup */
     ted.tv_current_line = 0;
-    ted.ted_raster_counter = ted.vsync_line;   
+    ted.ted_raster_counter = ted.vsync_line;
 
 /*    ted_set_geometry();*/
 
@@ -438,13 +429,19 @@ void ted_reset(void)
 
 void ted_reset_registers(void)
 {
-    WORD i;
+    uint16_t i;
 
-    if (!ted.initialized)
+    if (!ted.initialized) {
         return;
+    }
 
-    for (i = 0; i <= 0x3f; i++)
+    /* don't reset 0x3e and 0x3f */
+    for (i = 0; i <= 0x3d; i++) {
         ted_store(i, 0);
+    }
+    /* turn on the ROMs. don't know what the real reset state of this is,
+       but turning on the ROMs makes the emulator work. */
+    ted_store(0x3e, 0);
 }
 
 void ted_powerup(void)
@@ -488,13 +485,13 @@ void ted_powerup(void)
 void ted_update_memory_ptrs(unsigned int cycle)
 {
     /* FIXME: This is *horrible*!  */
-    static BYTE *old_screen_ptr, *old_bitmap_ptr, *old_chargen_ptr;
-    static BYTE *old_color_ptr;
-    WORD screen_addr, char_addr, bitmap_addr, color_addr;
-    BYTE *screen_base;            /* Pointer to screen memory.  */
-    BYTE *char_base;              /* Pointer to character memory.  */
-    BYTE *bitmap_base;            /* Pointer to bitmap memory.  */
-    BYTE *color_base;             /* Pointer to color memory.  */
+    static uint8_t *old_screen_ptr, *old_bitmap_ptr, *old_chargen_ptr;
+    static uint8_t *old_color_ptr;
+    uint16_t screen_addr, char_addr, bitmap_addr, color_addr;
+    uint8_t *screen_base;            /* Pointer to screen memory.  */
+    uint8_t *char_base;              /* Pointer to character memory.  */
+    uint8_t *bitmap_base;            /* Pointer to bitmap memory.  */
+    uint8_t *color_base;             /* Pointer to color memory.  */
     int tmp;
     unsigned int video_romsel;
     unsigned int cpu_romsel;
@@ -505,46 +502,60 @@ void ted_update_memory_ptrs(unsigned int cycle)
     screen_addr = ((ted.regs[0x14] & 0xf8) << 8) | 0x400;
     screen_base = mem_get_tedmem_base((screen_addr >> 14) | cpu_romsel)
                   + (screen_addr & 0x3fff);
-
+#if 0
+    if (cpu_romsel && (screen_addr < 0x8000)) {
+        screen_base = mem_get_open_space();
+    }
+#endif
     TED_DEBUG_REGISTER(("\tVideo memory at $%04X", screen_addr));
 
     bitmap_addr = (ted.regs[0x12] & 0x38) << 10;
     bitmap_base = mem_get_tedmem_base((bitmap_addr >> 14) | video_romsel)
                   + (bitmap_addr & 0x3fff);
+    if (video_romsel && (bitmap_addr < 0x8000)) {
+        bitmap_base = mem_get_open_space();
+    }
 
     TED_DEBUG_REGISTER(("\tBitmap memory at $%04X", bitmap_addr));
 
     char_addr = (ted.regs[0x13] & (((ted.regs[0x06] & 0x40)
-                | (ted.regs[0x07] & 0x80)) ? 0xf8 : 0xfc)) << 8;
+                                    | (ted.regs[0x07] & 0x80)) ? 0xf8 : 0xfc)) << 8;
     char_base = mem_get_tedmem_base((char_addr >> 14) | video_romsel)
                 + (char_addr & 0x3fff);
+    if (video_romsel && (char_addr < 0x8000)) {
+        char_base = mem_get_open_space();
+    }
 
     TED_DEBUG_REGISTER(("\tUser-defined character set at $%04X", char_addr));
 
     color_addr = ((ted.regs[0x14] & 0xf8) << 8);
     color_base = mem_get_tedmem_base((color_addr >> 14) | cpu_romsel)
                  + (color_addr & 0x3fff);
-
+#if 0
+    if (cpu_romsel && (color_addr < 0x8000)) {
+        color_base = mem_get_open_space();
+    }
+#endif
     TED_DEBUG_REGISTER(("\tColor memory at $%04X", color_addr));
-
 
     tmp = TED_RASTER_CHAR(cycle);
 
     /* FIXME */
     if (ted.idle_data_location != IDLE_NONE) {
-        if (ted.idle_data_location == IDLE_39FF)
+        if (ted.idle_data_location == IDLE_39FF) {
             raster_changes_foreground_add_int(&ted.raster,
                                               TED_RASTER_CHAR(cycle),
                                               &ted.idle_data,
                                               mem_ram[0x39ff]);
-        else
+        } else {
             raster_changes_foreground_add_int(&ted.raster,
                                               TED_RASTER_CHAR(cycle),
                                               &ted.idle_data,
                                               mem_ram[0x3fff]);
+        }
     }
 
-    if (ted.raster.skip_frame || (tmp <= 0 && maincpu_clk < ted.draw_clk)) {
+    if (tmp <= 0 && maincpu_clk < ted.draw_clk) {
         old_screen_ptr = ted.screen_ptr = screen_base;
         old_bitmap_ptr = ted.bitmap_ptr = bitmap_base;
         old_chargen_ptr = ted.chargen_ptr = char_base;
@@ -610,11 +621,10 @@ void ted_update_memory_ptrs(unsigned int cycle)
 /* Set the video mode according to the values in registers 6 and 7 of TED */
 void ted_update_video_mode(unsigned int cycle)
 {
-   static int old_video_mode = -1;
+    static int old_video_mode = -1;
     int new_video_mode;
 
-    new_video_mode = ((ted.regs[0x06] & 0x60)
-                     | (ted.regs[0x07] & 0x10)) >> 4;
+    new_video_mode = ((ted.regs[0x06] & 0x60) | (ted.regs[0x07] & 0x10)) >> 4;
 
     if (new_video_mode != old_video_mode) {
         if (TED_IS_ILLEGAL_MODE(new_video_mode)) {
@@ -654,14 +664,15 @@ void ted_update_video_mode(unsigned int cycle)
                                               new_video_mode);
 
             if (ted.idle_data_location != IDLE_NONE) {
-                if (ted.regs[0x06] & 0x40)
+                if (ted.regs[0x06] & 0x40) {
                     raster_changes_foreground_add_int
                         (&ted.raster, pos, (void *)&ted.idle_data,
                         mem_ram[0xffff]);
-                else
+                } else {
                     raster_changes_foreground_add_int
                         (&ted.raster, pos, (void *)&ted.idle_data,
                         mem_ram[0xffff]);
+                }
             }
         }
 
@@ -670,36 +681,36 @@ void ted_update_video_mode(unsigned int cycle)
 
 #ifdef TED_VMODE_DEBUG
     switch (new_video_mode) {
-      case TED_NORMAL_TEXT_MODE:
-        TED_DEBUG_VMODE(("Standard Text"));
-        break;
-      case TED_MULTICOLOR_TEXT_MODE:
-        TED_DEBUG_VMODE(("Multicolor Text"));
-        break;
-      case TED_HIRES_BITMAP_MODE:
-        TED_DEBUG_VMODE(("Hires Bitmap"));
-        break;
-      case TED_MULTICOLOR_BITMAP_MODE:
-        TED_DEBUG_VMODE(("Multicolor Bitmap"));
-        break;
-      case TED_EXTENDED_TEXT_MODE:
-        TED_DEBUG_VMODE(("Extended Text"));
-        break;
-      case TED_ILLEGAL_TEXT_MODE:
-        TED_DEBUG_VMODE(("Illegal Text"));
-        break;
-      case TED_ILLEGAL_BITMAP_MODE_1:
-        TED_DEBUG_VMODE(("Invalid Bitmap"));
-        break;
-      case TED_ILLEGAL_BITMAP_MODE_2:
-        TED_DEBUG_VMODE(("Invalid Bitmap"));
-        break;
-      default:                    /* cannot happen */
-        TED_DEBUG_VMODE(("???"));
+        case TED_NORMAL_TEXT_MODE:
+            TED_DEBUG_VMODE(("Standard Text"));
+            break;
+        case TED_MULTICOLOR_TEXT_MODE:
+            TED_DEBUG_VMODE(("Multicolor Text"));
+            break;
+        case TED_HIRES_BITMAP_MODE:
+            TED_DEBUG_VMODE(("Hires Bitmap"));
+            break;
+        case TED_MULTICOLOR_BITMAP_MODE:
+            TED_DEBUG_VMODE(("Multicolor Bitmap"));
+            break;
+        case TED_EXTENDED_TEXT_MODE:
+            TED_DEBUG_VMODE(("Extended Text"));
+            break;
+        case TED_ILLEGAL_TEXT_MODE:
+            TED_DEBUG_VMODE(("Illegal Text"));
+            break;
+        case TED_ILLEGAL_BITMAP_MODE_1:
+            TED_DEBUG_VMODE(("Invalid Bitmap"));
+            break;
+        case TED_ILLEGAL_BITMAP_MODE_2:
+            TED_DEBUG_VMODE(("Invalid Bitmap"));
+            break;
+        default:                  /* cannot happen */
+            TED_DEBUG_VMODE(("???"));
     }
 
-    TED_DEBUG_VMODE((" Mode enabled at line $%04X, cycle %d.",
-                    TED_RASTER_Y(clk), cycle));
+    TED_DEBUG_VMODE((" Mode enabled at line $%04X, cycle %u.",
+                     TED_RASTER_Y(maincpu_clk), cycle));
 #endif
 }
 
@@ -710,14 +721,14 @@ void ted_raster_draw_alarm_handler(CLOCK offset, void *data)
     int in_visible_area;
 
     in_visible_area = (ted.tv_current_line
-                      >= (unsigned int)ted.first_displayed_line
-                      && ted.tv_current_line
-                      <= (unsigned int)ted.last_displayed_line);
+                       >= (unsigned int)ted.first_displayed_line
+                       && ted.tv_current_line
+                       <= (unsigned int)ted.last_displayed_line);
 
     if (ted.tv_current_line < ted.screen_height) {
         raster_line_emulate(&ted.raster);
     } else {
-        log_debug("Skip line %d %d",ted.tv_current_line, ted.screen_height);
+        log_debug(LOG_DEFAULT, "Skip line %u %u", ted.tv_current_line, ted.screen_height);
     }
 
     if (ted.ted_raster_counter == ted.last_dma_line) {
@@ -730,65 +741,67 @@ void ted_raster_draw_alarm_handler(CLOCK offset, void *data)
         ted.memptr = 0;
         ted.memptr_col = 0;
         ted.mem_counter = 0;
-		ted.chr_pos_count = 0;
+        ted.chr_pos_count = 0;
         ted.ted_raster_counter = 0;
-        if (!ted.raster.blank) ted.character_fetch_on = 1;
-		ted.raster.ycounter = 0;
+        if (!ted.raster.blank) {
+            ted.character_fetch_on = 1;
+        }
+        ted.raster.ycounter = 0;
     }
-    if (ted.ted_raster_counter == 512) ted.ted_raster_counter = 0;
+    if (ted.ted_raster_counter == 512) {
+        ted.ted_raster_counter = 0;
+    }
 
-    if (ted.ted_raster_counter == 0xcc) ted.character_fetch_on = 0;
+    if (ted.ted_raster_counter == 0xcc) {
+        ted.character_fetch_on = 0;
+    }
 
     if (ted.regs[0x06] & 8) {
         if (ted.ted_raster_counter == ted.row_25_start_line && (!ted.raster.blank
-            || ted.raster.blank_off))
+                                                                || ted.raster.blank_off)) {
             ted.raster.blank_enabled = 0;
-        if (ted.ted_raster_counter == ted.row_25_stop_line + 1) ted.raster.blank_enabled = 1;
+        }
+        if (ted.ted_raster_counter == ted.row_25_stop_line + 1) {
+            ted.raster.blank_enabled = 1;
+        }
     } else {
         if (ted.ted_raster_counter == ted.row_24_start_line && (!ted.raster.blank
-            || ted.raster.blank_off))
+                                                                || ted.raster.blank_off)) {
             ted.raster.blank_enabled = 0;
-        if (ted.ted_raster_counter == ted.row_24_stop_line + 1) ted.raster.blank_enabled = 1;
+        }
+        if (ted.ted_raster_counter == ted.row_24_stop_line + 1) {
+            ted.raster.blank_enabled = 1;
+        }
     }
+
+    vsync_do_end_of_line();
 
     /* DO VSYNC if the raster_counter in the TED reached the VSYNC signal */
     /* Also do VSYNC if oversized screen reached a certain threashold, this will result in rolling screen just like on the real thing */
-    if (((signed int)(ted.tv_current_line - ted.screen_height) > 40) || (ted.ted_raster_counter == ted.vsync_line )) {
-
+    if (((signed int)(ted.tv_current_line - ted.screen_height) > 40) ||
+        (ted.ted_raster_counter == ted.vsync_line )) {
         if (ted.tv_current_line < ted.screen_height) {
             ted.raster.current_line = 0;
             raster_canvas_handle_end_of_frame(&ted.raster);
         }
 
-        /*log_debug("Vsync %d %d",ted.tv_current_line, ted.ted_raster_counter);*/
+        /*log_debug(LOG_DEFAULT, "Vsync %d %d",ted.tv_current_line, ted.ted_raster_counter);*/
 
-        raster_skip_frame(&ted.raster,
-                          vsync_do_vsync(ted.raster.canvas,
-                                         ted.raster.skip_frame));
+        vsync_do_vsync(ted.raster.canvas);
+
         ted.tv_current_line = 0;
 
         /* FIXME increment at appropriate cycle */
         ted.cursor_phase = (ted.cursor_phase + 1) & 0x1f;
         ted.cursor_visible = ted.cursor_phase & 0x10;
 
-#ifdef __MSDOS__
-        if (ted.raster.canvas->draw_buffer->canvas_width
-            <= TED_SCREEN_XPIX
-            && ted.raster.canvas->draw_buffer->canvas_height
-            <= TED_SCREEN_YPIX)
-            canvas_set_border_color(ted.raster.canvas,
-                                    ted.raster.border_color);
-#endif
     }
 
     if (in_visible_area) {
-/*        log_debug("Idle state %03x, %03x, %d",ted.ted_raster_counter, ted.idle_state, ted.raster.ycounter);*/
+/*        log_debug(LOG_DEFAULT, "Idle state %03x, %03x, %d",ted.ted_raster_counter, ted.idle_state, ted.raster.ycounter);*/
         if (!ted.idle_state) {
-            ted.mem_counter = (ted.mem_counter
-                              + ted.mem_counter_inc) & 0x3ff;
-			ted.chr_pos_count = (ted.chr_pos_count
-                              + ted.mem_counter_inc) & 0x3ff;				
-
+            ted.mem_counter = (ted.mem_counter + ted.mem_counter_inc) & 0x3ff;
+            ted.chr_pos_count = (ted.chr_pos_count + ted.mem_counter_inc) & 0x3ff;
         }
 
         ted.mem_counter_inc = TED_SCREEN_TEXTCOLS;
@@ -801,7 +814,7 @@ void ted_raster_draw_alarm_handler(CLOCK offset, void *data)
             ted.memptr = ted.chr_pos_count;
 /*            ted.idle_state = 1;*/
         }
-        if (!ted.idle_state && ted.allow_bad_lines /*|| ted.bad_line*/ ) {
+        if (!ted.idle_state && ted.allow_bad_lines /*|| ted.bad_line*/) {
             ted.raster.ycounter = (ted.raster.ycounter + 1) & 0x7;
             ted.idle_state = 0;
         }
@@ -816,13 +829,13 @@ void ted_raster_draw_alarm_handler(CLOCK offset, void *data)
     ted.ycounter_reset_checked = 0;
     ted.memory_fetch_done = 0;
 
-    if (ted.ted_raster_counter == ted.first_dma_line)
+    if (ted.ted_raster_counter == ted.first_dma_line) {
         ted.allow_bad_lines = !ted.raster.blank;
-	if (ted.allow_bad_lines 
-		&& (ted.ted_raster_counter & 7) == (unsigned int)((ted.raster.ysmooth + 1) & 7)) {
-		
-		memcpy(ted.cbuf, ted.cbuf_tmp, ted.mem_counter_inc);
-	}
+    }
+    if (ted.allow_bad_lines &&
+        ((ted.ted_raster_counter & 7) == ((ted.raster.ysmooth + 1) & 7))) {
+        memcpy(ted.cbuf, ted.cbuf_tmp, ted.mem_counter_inc);
+    }
     /* FIXME */
     if (ted.idle_state) {
         if (ted.regs[0x6] & 0x40) {
@@ -863,4 +876,86 @@ void ted_screenshot(screenshot_t *screenshot)
 void ted_async_refresh(struct canvas_refresh_s *refresh)
 {
     raster_async_refresh(&ted.raster, refresh);
+}
+
+int ted_dump(void)
+{
+    static const char * const mode_name[] = {
+        "Standard Text",
+        "Multicolor Text",
+        "Hires Bitmap",
+        "Multicolor Bitmap",
+        "Extended Text",
+        "Illegal Text",
+        "Invalid Bitmap 1",
+        "Invalid Bitmap 2"
+    };
+
+    int video_mode, m_mcm, m_bmm, m_ecm;
+    unsigned int cgen, bmap , vram;
+    int rasterx;
+    int i;
+
+    video_mode = ((ted.regs[0x06] & 0x60) | (ted.regs[0x07] & 0x10)) >> 4;
+
+    m_ecm = (video_mode & 4) >> 2;  /* 0 standard, 1 extended */
+    m_bmm = (video_mode & 2) >> 1;  /* 0 text, 1 bitmap */
+    m_mcm = video_mode & 1;         /* 0 hires, 1 multi */
+
+    rasterx = ((int)TED_RASTER_CYCLE(maincpu_clk) - 16) * 4;  /* x raster position */
+    if (rasterx < 0) {
+        rasterx = ted.cycles_per_line * 4 + rasterx;
+    }
+
+    mon_out("Timer 1 IRQ: enabled: %s  pending: %s  running: %s \n",
+            ((ted.regs[0x0a] >> 3) & 0x01)? "yes" : "no",
+            ((ted.irq_status >> 3) & 0x01)? "yes" : "no",
+            (ted.timer_running[0]) ? "yes" : "no");
+    mon_out("Timer 1: $%04x (latched $%04"PRIx64")\n", (unsigned int)((ted_timer_read(0x01) << 8) | ted_timer_read(0x00)), ted.t1_start);
+    mon_out("Timer 2 IRQ: enabled: %s  pending: %s  running: %s \n",
+            ((ted.regs[0x0a] >> 4) & 0x01)? "yes" : "no",
+            ((ted.irq_status >> 4) & 0x01)? "yes" : "no",
+            (ted.timer_running[1]) ? "yes" : "no");
+    mon_out("Timer 2: $%04x\n", (unsigned int)((ted_timer_read(0x03) << 8) | ted_timer_read(0x02)));
+    mon_out("Timer 3 IRQ: enabled: %s  pending: %s  running: %s \n",
+            ((ted.regs[0x0a] >> 6) & 0x01)? "yes" : "no",
+            ((ted.irq_status >> 6) & 0x01)? "yes" : "no",
+            (ted.timer_running[2]) ? "yes" : "no");
+    mon_out("Timer 3: $%04x\n\n", (unsigned int)((ted_timer_read(0x05) << 8) | ted_timer_read(0x04)));
+
+    mon_out("Raster IRQ line: %u  enabled: %s  pending: %s\n",
+            (unsigned int)(ted.regs[0x0b] | ((ted.regs[0x0a] & 1) << 8)),
+            ((ted.regs[0x0a] >> 1) & 0x01)? "yes" : "no",
+            ((ted.irq_status >> 1) & 0x01)? "yes" : "no");
+    mon_out("Raster X/Y: %u/%u\n\n", (unsigned int)rasterx, TED_RASTER_Y(maincpu_clk));
+
+    mon_out("Mode: %s (ECM/BMM/MCM=%d/%d/%d)\n", mode_name[video_mode], m_ecm, m_bmm, m_mcm);
+    mon_out("Colors: Border: $%02x BG: $%02x\n", ted.regs[0x19], ted.regs[0x15]);
+    mon_out("Scroll X/Y: %d/%d, RC %u,", ted.regs[0x07] & 0x07, ted.regs[0x06] & 0x07, ted.raster.ycounter);
+    mon_out(" %dx%d\n",38 + ((ted.regs[0x07] >> 2) & 2), 24 + ((ted.regs[0x06] >> 3) & 1));
+    mon_out("Cursor X/Y: ");
+    i = ((ted.regs[0x0c] & 0x03) << 8) | ted.regs[0x0d];
+    if (i < 1000){
+        mon_out("%d/%d ", i % 40, (int) (i / 40));
+    } else {
+        mon_out("-/- ");
+    }
+    mon_out("($%03x)\n", (unsigned int)i);
+
+    vram = (unsigned int)(ted.regs[0x14] & 0xf8) << 8;
+    mon_out("Video $%04x (%s), ", vram, (vram < 0x8000)? "RAM" : ((ted.regs[0x13] & 0x01) ? "ROM" : "RAM"));
+    i = ((ted.regs[0x07] & 0x80) == 0x80 || m_ecm == 1)? 0xf8 : 0xf0;
+    cgen = (unsigned int)((ted.regs[0x13] & i) << 8);
+    bmap = (unsigned int)((ted.regs[0x12] & 0x38) << 10);
+    mon_out("Bitmap $%04x (%s), ", bmap, ((ted.regs[0x12] & 0x04) ? ((bmap >= 0x8000) ? "ROM" : "OPEN BUS") : "RAM"));
+    mon_out("Charset $%04x (%s)\n\n", cgen, ((ted.regs[0x12] & 0x04) ? ((cgen >= 0x8000) ? "ROM" : "OPEN BUS") : "RAM"));
+
+    i = (((ted_sound_read(0x11) & 0x0f) >= 8) ? 0x08 : (ted_sound_read(0x11) & 0x07));
+    mon_out("Sound mode: %s  Vol: %01x\n", (ted_sound_read(0x11) & 0x80) ? "Digital" : "Analog",(unsigned int) i);
+    i = ((ted_sound_read(0x12) & 0x03) << 8) | ted_sound_read(0x0e);
+    mon_out("Voice 1: %s  Freq: $%03x\n", (ted_sound_read(0x11) & 0x10) ? "on" : "off", (unsigned int) i);
+    i = ((ted_sound_read(0x10) & 0x03) << 8) | ted_sound_read(0x0f);
+    mon_out("Voice 2: %s  Freq: $%03x\n", (ted_sound_read(0x11) & 0x20) ? "tone" : ((ted_sound_read(0x11) & 0x40) ? "noise" : "off"), (unsigned int) i);
+
+    return 0;
 }

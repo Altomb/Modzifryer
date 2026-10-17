@@ -29,22 +29,35 @@
 
 #include "types.h"
 
-extern void reset_try_flags(void);
-extern int try_cartridge_attach(int c);
+#define TRY_RESOURCE_CARTTYPE  (1 << 0)
+#define TRY_RESOURCE_CARTNAME  (1 << 1)
+#define TRY_RESOURCE_CARTRESET (1 << 2)
 
-#define TRY_RESOURCE_CARTTYPE (1<<0)
-#define TRY_RESOURCE_CARTNAME (1<<1)
-#define TRY_RESOURCE_CARTRESET (1<<2)
+#define TRY_RESOURCE_CARTFILE2 (1 << 8)
+#define TRY_RESOURCE_CARTFILE4 (1 << 9)
+#define TRY_RESOURCE_CARTFILE6 (1 << 10)
+#define TRY_RESOURCE_CARTFILEA (1 << 11)
+#define TRY_RESOURCE_CARTFILEB (1 << 12)
+
+int try_cartridge_attach(int c);
+
+
+/* Cartridge ROM limit = 1MB */
+#define VIC20CART_ROM_LIMIT (1024 * 1024)
+/* Cartridge RAM limit = 64kB */
+#define VIC20CART_RAM_LIMIT (64 * 1024)
+/* maximum size of a full "all inclusive" cartridge image */
+#define VIC20CART_IMAGE_LIMIT (VIC20CART_ROM_LIMIT)
 
 extern int cartridge_is_from_snapshot;
 
 struct snapshot_s;
 /* FIXME: rename functions to cartridge_... and remove these prototypes (they are in cartridge.h) */
-extern int vic20cart_snapshot_write_module(struct snapshot_s *s);
-extern int vic20cart_snapshot_read_module(struct snapshot_s *s);
+int vic20cart_snapshot_write_module(struct snapshot_s *s);
+int vic20cart_snapshot_read_module(struct snapshot_s *s);
 
 /* used internally, don't call from UI or other non cart related code */
-extern void cartridge_attach(int type, BYTE *rawcart);
-extern void cartridge_detach(int type);
+void cartridge_attach(int type, uint8_t *rawcart);
+void cartridge_detach(int type);
 
 #endif

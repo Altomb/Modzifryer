@@ -1,3 +1,10 @@
+/** \file   src/imagecontents.c
+ * \brief   Extract the directory listing from disk/tape images
+ *
+ * Used in c1541, autostart, mon_file and the 'attach disk image' dialogs in
+ * various ports
+ */
+
 /*
  * imagecontents.c - Extract the directory from disk/tape images.
  *
@@ -43,6 +50,14 @@
 
 /* ------------------------------------------------------------------------- */
 
+
+/** \brief  Create a new directory listing object
+ *
+ * This allocates memory on the heap, so the pointer returned should be passed
+ * to image_contents_destroy() when done.
+ *
+ * \return  image contents object
+ */
 image_contents_t *image_contents_new(void)
 {
     image_contents_t *newimg;
@@ -55,15 +70,27 @@ image_contents_t *image_contents_new(void)
     return newimg;
 }
 
+/** \brief  Free memory used by \a contents and its members
+ *
+ * \param[in/out]   contents    image contents object
+ */
 void image_contents_destroy(image_contents_t *contents)
 {
-    image_contents_file_list_t *p, *h;
+    image_contents_file_list_t *node = contents->file_list;
 
-    for (p = contents->file_list; p != NULL; h = p, p = p->next, lib_free(h));
-
+    while (node != NULL) {
+        image_contents_file_list_t *next = node->next;
+        lib_free(node);
+        node = next;
+    }
     lib_free(contents);
 }
 
+
+/** \brief  Free memory used by image contents as a list of screen codes
+ *
+ * \param[in,out]   c   screencode contents object
+ */
 void image_contents_screencode_destroy(image_contents_screencode_t *c)
 {
     image_contents_screencode_t *h;
@@ -76,10 +103,24 @@ void image_contents_screencode_destroy(image_contents_screencode_t *c)
     }
 }
 
+/* FIXME: DEAD CODE
+ * Also this function formats the listing slightly wrong (different than a real
+ * drive would) */
+#if 0
+/** \brief  Write out directory listing as a list of screencodes
+ *
+ * This function allocates memory on the heap, so after use call
+ * image_contents_screen_code_destroy() to clean up.
+ *
+ * \param[in]   constents   image contents object
+ *
+ * \return  image contents as a list of screencode strings
+ */
 image_contents_screencode_t *image_contents_to_screencode(image_contents_t
                                                           *contents)
 {
-    BYTE *buf, rawline[50];
+    uint8_t *buf;
+    uint8_t rawline[64];   /* FIXME: shouldn't be an integer literal */
     unsigned int len, i;
     image_contents_screencode_t *image_contents_screencode, *screencode_ptr;
     image_contents_file_list_t *p;
@@ -88,20 +129,15 @@ image_contents_screencode_t *image_contents_to_screencode(image_contents_t
 
     screencode_ptr = image_contents_screencode;
 
-    sprintf((char *)rawline, "0 \"%s\" %s", contents->name, contents->id);
+    sprintf((char *)rawline, "%d \"%s\" %s", contents->partition, contents->name,
+            contents->id);
     charset_petcii_to_screencode_line(rawline, &buf, &len);
     screencode_ptr->line = buf;
     screencode_ptr->length = len;
     screencode_ptr->next = NULL;
 
-    /*
-     I removed this for OS/2 because I want to have an output
-     which looks like a directory listing which you can load in
-     the emulator.
-     */
-#ifndef __OS2__
     if (contents->file_list == NULL) {
-        charset_petcii_to_screencode_line((BYTE *)"(eMPTY IMAGE.)", &buf, &len);
+        charset_petcii_to_screencode_line((uint8_t *)"(eMPTY IMAGE.)", &buf, &len);
         screencode_ptr->next = lib_malloc(sizeof(image_contents_screencode_t));
         screencode_ptr = screencode_ptr->next;
 
@@ -109,11 +145,9 @@ image_contents_screencode_t *image_contents_to_screencode(image_contents_t
         screencode_ptr->length = len;
         screencode_ptr->next = NULL;
     }
-#endif
 
     for (p = contents->file_list; p != NULL; p = p->next) {
-
-        sprintf((char *)rawline, "%-5d \"                  ", p->size);
+        sprintf((char *)rawline, "%-5u \"                  ", p->size);
         memcpy(&rawline[7], p->name, IMAGE_CONTENTS_FILE_NAME_LEN);
 
         for (i = 0; i < IMAGE_CONTENTS_FILE_NAME_LEN; i++) {
@@ -123,8 +157,9 @@ image_contents_screencode_t *image_contents_to_screencode(image_contents_t
             }
         }
 
-        if (i == IMAGE_CONTENTS_FILE_NAME_LEN)
+        if (i == IMAGE_CONTENTS_FILE_NAME_LEN) {
             rawline[7 + IMAGE_CONTENTS_FILE_NAME_LEN] = '"';
+        }
 
         memcpy(&rawline[7 + IMAGE_CONTENTS_FILE_NAME_LEN + 2], p->type, 5);
         charset_petcii_to_screencode_line(rawline, &buf, &len);
@@ -151,88 +186,154 @@ image_contents_screencode_t *image_contents_to_screencode(image_contents_t
 
     return image_contents_screencode;
 }
+#endif
 
-char *image_contents_to_string(image_contents_t * contents,
-                               char convert_to_ascii)
+/** \brief  Generate the first line of a directory listing (0 name id)
+ *
+ * \param[in]   contents        image contents object
+ * \param[in]   out_charset     selects output charset
+ *
+ * \return  heap allocated string, free with lib_free()
+ */
+char *image_contents_to_string(image_contents_t * contents, char out_charset)
 {
-    char *string = lib_msprintf("0 \"%s\" %s", contents->name, contents->id);
-    if (convert_to_ascii)
-        charset_petconvstring((unsigned char *)string, 1);
+    uint8_t *str = (uint8_t *)lib_msprintf("%d \"%s\" %s", contents->partition,
+                                           contents->name, contents->id);
 
-    return string;
+    if (out_charset == IMAGE_CONTENTS_STRING_PETSCII) {
+        return (char *)str;
+    } else {
+        uint8_t *conv_str = charset_petconv_stralloc(str, out_charset);
+        lib_free(str);
+        return (char *)conv_str;
+    }
 }
 
+
+/** \brief  Convert filename in \a p to '\"<filename>\"'
+ *
+ * \param[in]   p   image contents file list
+ *
+ * \return  converted string, _not_ allocated on the heap, _not_ MT safe
+ */
 static char *image_contents_get_filename(image_contents_file_list_t * p)
 {
     int i;
+    /* WTF? */
     static char print_name[IMAGE_CONTENTS_FILE_NAME_LEN + 3] = { 0 };
     char encountered_a0 = 0;
 
-    memset(print_name, 0x20, sizeof(print_name)-1); /* redundant? better safe than sorry */
+    memset(print_name, 0x20, sizeof(print_name) - 1); /* redundant? better safe than sorry */
     print_name[0] = '\"';
 
     for (i = 0; i < IMAGE_CONTENTS_FILE_NAME_LEN; i++) {
         if (p->name[i] == 0) { /* a 0x00 would mess a dir on real thing anyway */
-            print_name[i+1] = '?'; /* better than showing a reversed @ */
+            print_name[i + 1] = '?'; /* better than showing a reversed @ */
         } else if (p->name[i] == 0xa0) {
             encountered_a0++;
-            if(encountered_a0 == 1) {
-                print_name[i+1] = '\"';
+            if (encountered_a0 == 1) {
+                print_name[i + 1] = '\"';
             } else {
-                print_name[i+1] = 0x20;
+                print_name[i + 1] = 0x20;
             }
         } else {
-            print_name[i+1] = (char)p->name[i];
+            print_name[i + 1] = (char)p->name[i];
         }
     }
 
     if (!encountered_a0) {
-        print_name[i+1] = '\"';
+        print_name[i + 1] = '\"';
     }
 
     return print_name;
 }
 
+
+/** \brief  Get filename for directory listing, optionally converting charset
+ *
+ * \param[in]   p               image contents file list
+ * \param[in]   out_charset     selects output charset
+ *
+ * \return  allocated string, free with lib_free()
+ */
 char *image_contents_filename_to_string(image_contents_file_list_t * p,
-                                    char convert_to_ascii)
+                                        char out_charset)
 {
     char *print_name;
-    char *string;
 
     print_name = image_contents_get_filename(p);
-    string = strdup(print_name);
 
-    if (convert_to_ascii) {
-        charset_petconvstring((unsigned char *)string, 1);
+    if (out_charset == IMAGE_CONTENTS_STRING_PETSCII) {
+        return lib_strdup(print_name);
+    } else {
+        return (char *)charset_petconv_stralloc((uint8_t *)print_name, out_charset);
     }
-
-    return string;
 }
 
-char *image_contents_file_to_string(image_contents_file_list_t * p,
-                                    char convert_to_ascii)
+
+/** \brief  Get the file type and flags for a file
+ *
+ * \param[in]   p               image contents file entry
+ * \param[in]   out_charset     selects output charset
+ *
+ * \return  5-character string: 'SFFFL', where S is the scratched '*' char or
+ *          a space, FFF is the file type (PRG etc) and L is the locked '<'
+ *          char or space.
+ */
+char *image_contents_filetype_to_string(image_contents_file_list_t *p,
+                                        char out_charset)
+{
+    if (out_charset == IMAGE_CONTENTS_STRING_PETSCII) {
+        return  lib_strdup((const char *)(p->type));
+    } else {
+        return (char *)charset_petconv_stralloc((p->type), out_charset);
+    }
+}
+
+
+/** \brief  Generate a '<blocks> "<filename>" *prg<' line from \a p
+ *
+ * \param[in]   p               image contents file list
+ * \param[in]   out_charset     selects output charset
+ *
+ * \return  allocated string, free with lib_free()
+ */
+char *image_contents_file_to_string(image_contents_file_list_t *p,
+                                    char out_charset)
 {
     char *print_name;
-    char *string;
+    uint8_t *str;
 
     print_name = image_contents_get_filename(p);
-    string = lib_msprintf("%-5d %s %s", p->size, print_name, p->type);
+    str = (uint8_t *)lib_msprintf("%-4u %s%s", p->size, print_name, p->type);
 
-    if (convert_to_ascii) {
-        charset_petconvstring((unsigned char *)string, 1);
+    if (out_charset == IMAGE_CONTENTS_STRING_PETSCII) {
+        return (char *)str;
+    } else {
+        uint8_t *conv_str = charset_petconv_stralloc(str, out_charset);
+        lib_free(str);
+        return (char *)conv_str;
     }
-
-    return string;
 }
 
+
+/** \brief  Get image contents file name by index
+ *
+ * \param[in]   contents    image contents object
+ * \param[in]   file_index  index in \a contents' file list
+ *
+ * \return  allocated string, free with lib_free(), or `NULL` when
+ *          \a file_index was too large
+ */
 char *image_contents_filename_by_number(image_contents_t *contents,
                                         unsigned int file_index)
 {
     image_contents_file_list_t *current;
     char *s = NULL;
 
-    if (contents == NULL)
+    if (contents == NULL) {
         return NULL;
+    }
 
     if (file_index != 0) {
         current = contents->file_list;
@@ -242,12 +343,9 @@ char *image_contents_filename_by_number(image_contents_t *contents,
             file_index--;
         }
         if (current != NULL) {
-            s = lib_stralloc((char *)(current->name));
+            s = lib_strdup((char *)(current->name));
         }
     }
-
-    image_contents_destroy(contents);
-
     return s;
 }
 

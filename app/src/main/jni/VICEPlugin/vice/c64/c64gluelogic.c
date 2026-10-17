@@ -34,14 +34,14 @@
 #include "c64mem.h"
 #include "cmdline.h"
 #include "log.h"
+#include "machine.h"
 #include "maincpu.h"
 #include "resources.h"
 #include "snapshot.h"
-#include "translate.h"
 #include "types.h"
 #include "vicii.h"
 
-static int glue_logic_type = 0;
+static int glue_logic_type = GLUE_LOGIC_DISCRETE;
 static int old_vbank = 0;
 static int glue_alarm_active = 0;
 static alarm_t *glue_alarm = NULL;
@@ -120,28 +120,38 @@ void c64_glue_reset(void)
 
 static int set_glue_type(int val, void *param)
 {
+    switch (val) {
+        case GLUE_LOGIC_DISCRETE:
+        case GLUE_LOGIC_CUSTOM_IC:
+            break;
+        default:
+            return -1;
+    }
+
     glue_logic_type = val;
     return 0;
 }
 
-static const resource_int_t resources_int[] = {
-    { "GlueLogic", 0, RES_EVENT_NO, NULL,
+static resource_int_t resources_int[] = {
+    { "GlueLogic", GLUE_LOGIC_CUSTOM_IC, RES_EVENT_NO, NULL,
       &glue_logic_type, set_glue_type, NULL },
-    { NULL }
+    RESOURCE_INT_LIST_END
 };
 
 int c64_glue_resources_init(void)
 {
+    if (machine_class == VICE_MACHINE_C64) {
+        resources_int[0].factory_value = GLUE_LOGIC_DISCRETE;
+    }
     return resources_register_int(resources_int);
 }
 
-static const cmdline_option_t cmdline_options[] = {
-    { "-gluelogictype", SET_RESOURCE, 1,
+static const cmdline_option_t cmdline_options[] =
+{
+    { "-gluelogictype", SET_RESOURCE, CMDLINE_ATTRIB_NEED_ARGS,
       NULL, NULL, "GlueLogic", NULL,
-      USE_PARAM_ID, USE_DESCRIPTION_ID,
-      IDCLS_P_TYPE, IDCLS_SET_GLUE_LOGIC_TYPE,
-      NULL, NULL },
-    { NULL }
+      "<Type>", "Set glue logic type (0 = discrete, 1 = 252535-01)" },
+    CMDLINE_LIST_END
 };
 
 int c64_glue_cmdline_options_init(void)
@@ -156,9 +166,20 @@ void c64_glue_init(void)
 
 /* ------------------------------------------------------------------------- */
 
-static char snap_module_name[] = "GLUE";
+/* C64GLUE 1.1 snapshot module format:
+
+   type | name         | description
+   ------------------------------
+   BYTE | type         | glue logic type
+   BYTE | old vbank    | old video bank
+   BYTE | alarm active | alarm is active
+
+   NOTE: renamed from "GLUE" to "C64GLUE" in 1.1
+ */
+
+static char snap_module_name[] = "C64GLUE";
 #define SNAP_MAJOR 1
-#define SNAP_MINOR 0
+#define SNAP_MINOR 1
 
 int c64_glue_snapshot_write_module(snapshot_t *s)
 {
@@ -169,10 +190,9 @@ int c64_glue_snapshot_write_module(snapshot_t *s)
         return -1;
     }
 
-    if (0
-        || SMW_B(m, (BYTE)glue_logic_type) < 0
-        || SMW_B(m, (BYTE)old_vbank) < 0
-        || SMW_B(m, (BYTE)glue_alarm_active) < 0) {
+    if (SMW_B(m, (uint8_t)glue_logic_type) < 0
+            || SMW_B(m, (uint8_t)old_vbank) < 0
+            || SMW_B(m, (uint8_t)glue_alarm_active) < 0) {
         goto fail;
     }
 
@@ -187,28 +207,24 @@ fail:
 
 int c64_glue_snapshot_read_module(snapshot_t *s)
 {
-    BYTE major_version, minor_version;
+    uint8_t major_version, minor_version;
     int snap_type, snap_alarm_active;
     snapshot_module_t *m;
 
-    m = snapshot_module_open(s, snap_module_name,
-                             &major_version, &minor_version);
+    m = snapshot_module_open(s, snap_module_name, &major_version, &minor_version);
     if (m == NULL) {
         return -1;
     }
 
-    if (major_version > SNAP_MAJOR || minor_version > SNAP_MINOR) {
-        log_error(LOG_ERR,
-                  "GlueLogic: Snapshot module version (%d.%d) newer than %d.%d.",
-                  major_version, minor_version,
-                  SNAP_MAJOR, SNAP_MINOR);
+    /* Do not accept versions higher than current */
+    if (snapshot_version_is_bigger(major_version, minor_version, SNAP_MAJOR, SNAP_MINOR)) {
+        snapshot_set_error(SNAPSHOT_MODULE_HIGHER_VERSION);
         goto fail;
     }
 
-    if (0
-        || SMR_B_INT(m, &snap_type) < 0
-        || SMR_B_INT(m, &old_vbank) < 0
-        || SMR_B_INT(m, &snap_alarm_active) < 0) {
+    if (SMR_B_INT(m, &snap_type) < 0
+            || SMR_B_INT(m, &old_vbank) < 0
+            || SMR_B_INT(m, &snap_alarm_active) < 0) {
         goto fail;
     }
 
@@ -238,4 +254,3 @@ fail:
     }
     return -1;
 }
-

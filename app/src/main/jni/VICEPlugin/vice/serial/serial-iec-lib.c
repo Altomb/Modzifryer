@@ -38,10 +38,10 @@
 
 
 int serial_iec_lib_directory(unsigned int unit, const char *pattern,
-                             BYTE **buf)
+                             uint8_t **buf)
 {
     int length, status;
-    BYTE data, *tmpbuf;
+    uint8_t data, *tmpbuf;
     size_t maxlen = 0;
 
     serial_iec_open(unit, 0, pattern, (unsigned int)strlen(pattern));
@@ -51,7 +51,7 @@ int serial_iec_lib_directory(unsigned int unit, const char *pattern,
 
     do {
         status = serial_iec_read(unit, 0, &data);
-        tmpbuf = util_bufcat(tmpbuf, &length, &maxlen, &data, sizeof(BYTE));
+        tmpbuf = util_bufcat(tmpbuf, &length, &maxlen, &data, sizeof(uint8_t));
     } while (status == 0);
 
     serial_iec_close(unit, 0);
@@ -61,18 +61,19 @@ int serial_iec_lib_directory(unsigned int unit, const char *pattern,
 }
 
 int serial_iec_lib_read_sector(unsigned int unit, unsigned int track,
-                               unsigned int sector, BYTE *buf)
+                               unsigned int sector, uint8_t *buf)
 {
     char *command;
     unsigned int i;
 
-    command = lib_msprintf("U1 2 0 %i %i", track, sector);
+    command = lib_msprintf("U1 2 0 %u %u", track, sector);
 
     serial_iec_open(unit, 2, "#", (unsigned int)strlen("#"));
     serial_iec_open(unit, 15, command, (unsigned int)strlen(command));
 
-    for (i = 0; i < 256; i++)
+    for (i = 0; i < 256; i++) {
         serial_iec_read(unit, 2, &buf[i]);
+    }
 
     serial_iec_close(unit, 15);
     serial_iec_close(unit, 2);
@@ -83,8 +84,7 @@ int serial_iec_lib_read_sector(unsigned int unit, unsigned int track,
 }
 
 int serial_iec_lib_write_sector(unsigned int unit, unsigned int track,
-                                unsigned int sector, BYTE *buf)
+                                unsigned int sector, uint8_t *buf)
 {
     return 0;
 }
-

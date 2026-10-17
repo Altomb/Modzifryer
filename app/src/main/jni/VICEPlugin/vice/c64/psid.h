@@ -27,16 +27,20 @@
 #ifndef VICE_PSID_H
 #define VICE_PSID_H
 
-extern int psid_init_resources(void);
-extern int psid_init_cmdline_options(void);
-extern int psid_load_file(const char* filename);
-extern void psid_init_tune(void);
-extern void psid_set_tune(int tune);
-extern int psid_tunes(int* default_tune);
-extern void psid_init_driver(void);
-extern unsigned int psid_increment_frames(void);
-extern int reloc65(char** buf, int* fsize, int addr);
+#include "types.h"
 
-extern const char * csidmodel[];
+
+int psid_resources_init(void);
+int psid_cmdline_options_init(void);
+void psid_shutdown(void);
+int psid_load_file(const char* filename);
+void psid_init_tune(int install_driver_hook);
+void psid_set_tune(int tune);
+int psid_tunes(int* default_tune);
+int psid_basic_rsid_to_autostart(uint16_t *address, uint8_t **data, uint16_t *length);
+void psid_init_driver(void);
+unsigned int psid_increment_frames(void);
+int reloc65(char** buf, int* fsize, int addr);
+int psid_ui_set_tune(int, void *param);
 
 #endif

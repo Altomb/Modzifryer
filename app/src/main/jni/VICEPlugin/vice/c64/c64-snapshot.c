@@ -29,15 +29,16 @@
 
 #include <stdio.h>
 
-#include "c64-snapshot.h"
+#include "archdep.h"
+#include "c64-memory-hacks.h"
 #include "c64.h"
 #include "c64gluelogic.h"
 #include "c64memsnapshot.h"
 #include "cia.h"
 #include "drive-snapshot.h"
 #include "drive.h"
-#include "drivecpu.h"
-#include "ioutil.h"
+#include "serial.h"
+#include "joyport.h"
 #include "joystick.h"
 #include "keyboard.h"
 #include "log.h"
@@ -46,19 +47,23 @@
 #include "sid-snapshot.h"
 #include "snapshot.h"
 #include "sound.h"
-#include "tape-snapshot.h"
+#include "tapeport.h"
 #include "types.h"
+#include "userport.h"
 #include "vice-event.h"
 #include "vicii.h"
 
-#define SNAP_MAJOR 1
-#define SNAP_MINOR 1
+#include "c64-snapshot.h"
+
+
+#define SNAP_MAJOR 2
+#define SNAP_MINOR 0
 
 int c64_snapshot_write(const char *name, int save_roms, int save_disks, int event_mode)
 {
     snapshot_t *s;
 
-    s = snapshot_create(name, ((BYTE)(SNAP_MAJOR)), ((BYTE)(SNAP_MINOR)), machine_get_name());
+    s = snapshot_create(name, ((uint8_t)(SNAP_MAJOR)), ((uint8_t)(SNAP_MINOR)), machine_get_name());
     if (s == NULL) {
         return -1;
     }
@@ -66,7 +71,7 @@ int c64_snapshot_write(const char *name, int save_roms, int save_disks, int even
     sound_snapshot_prepare();
 
     /* Execute drive CPUs to get in sync with the main CPU.  */
-    drivecpu_execute_all(maincpu_clk);
+    drive_cpu_execute_all(maincpu_clk);
 
     if (maincpu_snapshot_write_module(s) < 0
         || c64_snapshot_write_module(s, save_roms) < 0
@@ -74,14 +79,18 @@ int c64_snapshot_write(const char *name, int save_roms, int save_disks, int even
         || ciacore_snapshot_write_module(machine_context.cia2, s) < 0
         || sid_snapshot_write_module(s) < 0
         || drive_snapshot_write_module(s, save_disks, save_roms) < 0
+        || fsdrive_snapshot_write_module(s) < 0
         || vicii_snapshot_write_module(s) < 0
         || c64_glue_snapshot_write_module(s) < 0
         || event_snapshot_write_module(s, event_mode) < 0
-        || tape_snapshot_write_module(s, save_disks) < 0
-        || keyboard_snapshot_write_module(s)
-        || joystick_snapshot_write_module(s)) {
+        || memhacks_snapshot_write_modules(s) < 0
+        || tapeport_snapshot_write_module(s, save_disks) < 0
+        || keyboard_snapshot_write_module(s) < 0
+        || joyport_snapshot_write_module(s, JOYPORT_1) < 0
+        || joyport_snapshot_write_module(s, JOYPORT_2) < 0
+        || userport_snapshot_write_module(s) < 0) {
         snapshot_close(s);
-        ioutil_remove(name);
+        archdep_remove(name);
         return -1;
     }
 
@@ -92,19 +101,22 @@ int c64_snapshot_write(const char *name, int save_roms, int save_disks, int even
 int c64_snapshot_read(const char *name, int event_mode)
 {
     snapshot_t *s;
-    BYTE minor, major;
+    uint8_t minor, major;
 
     s = snapshot_open(name, &major, &minor, machine_get_name());
     if (s == NULL) {
         return -1;
     }
 
-    if (major != SNAP_MAJOR || minor != SNAP_MINOR) {
+    if (!snapshot_version_is_equal(major, minor, SNAP_MAJOR, SNAP_MINOR)) {
         log_error(LOG_DEFAULT, "Snapshot version (%d.%d) not valid: expecting %d.%d.", major, minor, SNAP_MAJOR, SNAP_MINOR);
+        snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
         goto fail;
     }
 
     vicii_snapshot_prepare();
+
+    joyport_clear_devices();
 
     if (maincpu_snapshot_read_module(s) < 0
         || c64_snapshot_read_module(s) < 0
@@ -112,12 +124,16 @@ int c64_snapshot_read(const char *name, int event_mode)
         || ciacore_snapshot_read_module(machine_context.cia2, s) < 0
         || sid_snapshot_read_module(s) < 0
         || drive_snapshot_read_module(s) < 0
+        || fsdrive_snapshot_read_module(s) < 0
         || vicii_snapshot_read_module(s) < 0
         || c64_glue_snapshot_read_module(s) < 0
         || event_snapshot_read_module(s, event_mode) < 0
-        || tape_snapshot_read_module(s) < 0
+        || memhacks_snapshot_read_modules(s) < 0
+        || tapeport_snapshot_read_module(s) < 0
         || keyboard_snapshot_read_module(s) < 0
-        || joystick_snapshot_read_module(s) < 0) {
+        || joyport_snapshot_read_module(s, JOYPORT_1) < 0
+        || joyport_snapshot_read_module(s, JOYPORT_2) < 0
+        || userport_snapshot_read_module(s) < 0) {
         goto fail;
     }
 
@@ -132,7 +148,7 @@ fail:
         snapshot_close(s);
     }
 
-    machine_trigger_reset(MACHINE_RESET_MODE_SOFT);
+    machine_trigger_reset(MACHINE_RESET_MODE_RESET_CPU);
 
     return -1;
 }

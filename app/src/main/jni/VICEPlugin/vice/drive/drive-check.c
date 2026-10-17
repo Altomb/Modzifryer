@@ -30,37 +30,42 @@
 #include "drive.h"
 #include "drivetypes.h"
 #include "iecdrive.h"
+#include "machine.h"
 #include "machine-drive.h"
+#include "resources.h"
 
-
+/* FIXME: what is the difference between drive_check_ieee and drive_check_old ? */
 static unsigned int drive_check_ieee(unsigned int type)
 {
     switch (type) {
-      case DRIVE_TYPE_2031:
-      case DRIVE_TYPE_2040:
-      case DRIVE_TYPE_3040:
-      case DRIVE_TYPE_4040:
-      case DRIVE_TYPE_1001:
-      case DRIVE_TYPE_8050:
-      case DRIVE_TYPE_8250:
-        return 1;
+        case DRIVE_TYPE_2031:
+        case DRIVE_TYPE_2040:
+        case DRIVE_TYPE_3040:
+        case DRIVE_TYPE_4040:
+        case DRIVE_TYPE_1001:
+        case DRIVE_TYPE_8050:
+        case DRIVE_TYPE_8250:
+        case DRIVE_TYPE_9000:
+            return 1;
     }
 
     return 0;
 }
 
-static unsigned int drive_check_iec(unsigned int type)
+int drive_check_iec(int type)
 {
     switch (type) {
-      case DRIVE_TYPE_1541:
-      case DRIVE_TYPE_1541II:
-      case DRIVE_TYPE_1570:
-      case DRIVE_TYPE_1571:
-      case DRIVE_TYPE_1571CR:
-      case DRIVE_TYPE_1581:
-      case DRIVE_TYPE_2000:
-      case DRIVE_TYPE_4000:
-        return 1;
+        case DRIVE_TYPE_1540:
+        case DRIVE_TYPE_1541:
+        case DRIVE_TYPE_1541II:
+        case DRIVE_TYPE_1570:
+        case DRIVE_TYPE_1571:
+        case DRIVE_TYPE_1571CR:
+        case DRIVE_TYPE_1581:
+        case DRIVE_TYPE_2000:
+        case DRIVE_TYPE_4000:
+        case DRIVE_TYPE_CMDHD:
+            return 1;
     }
 
     return 0;
@@ -69,27 +74,68 @@ static unsigned int drive_check_iec(unsigned int type)
 unsigned int drive_check_old(unsigned int type)
 {
     switch (type) {
-      case DRIVE_TYPE_2040:
-      case DRIVE_TYPE_3040:
-      case DRIVE_TYPE_4040:
-      case DRIVE_TYPE_1001:
-      case DRIVE_TYPE_8050:
-      case DRIVE_TYPE_8250:
-        return 1;
+        case DRIVE_TYPE_2040:
+        case DRIVE_TYPE_3040:
+        case DRIVE_TYPE_4040:
+        case DRIVE_TYPE_1001:
+        case DRIVE_TYPE_8050:
+        case DRIVE_TYPE_8250:
+        case DRIVE_TYPE_9000:
+            return 1;
     }
 
     return 0;
 }
 
+/* return number of heads for given drive */
+unsigned int drive_get_num_heads(unsigned int type)
+{
+    switch (type) {
+        case DRIVE_TYPE_1571:
+        case DRIVE_TYPE_1571CR:
+        case DRIVE_TYPE_1581:
+        case DRIVE_TYPE_2000:
+        case DRIVE_TYPE_4000:
+        case DRIVE_TYPE_1001:
+        case DRIVE_TYPE_8250:
+        return 2;   /* double sided */
+    }
+    return 1; /* single sided */
+}
+
+/* return number of physical half tracks for given drive */
+unsigned int drive_get_half_tracks(unsigned int type)
+{
+    switch (type) {
+        /* 'old' drives with DD mech */
+        case DRIVE_TYPE_2040:
+        case DRIVE_TYPE_3040:
+        case DRIVE_TYPE_4040:
+        return 70;
+        /* drives with QD mechs */
+        case DRIVE_TYPE_1001:
+        case DRIVE_TYPE_8050:
+        case DRIVE_TYPE_8250:
+        return 77 * 2;
+        /* we dont actually have halftracks on 3.5" */
+        case DRIVE_TYPE_1581:
+        case DRIVE_TYPE_2000:
+        case DRIVE_TYPE_4000:
+        return 83 * 2;
+    }
+    /* 'new' drives with DD mech */
+    return 84;
+}
+
 unsigned int drive_check_dual(unsigned int type)
 {
     switch (type) {
-      case DRIVE_TYPE_2040:
-      case DRIVE_TYPE_3040:
-      case DRIVE_TYPE_4040:
-      case DRIVE_TYPE_8050:
-      case DRIVE_TYPE_8250:
-        return 1;
+        case DRIVE_TYPE_2040:
+        case DRIVE_TYPE_3040:
+        case DRIVE_TYPE_4040:
+        case DRIVE_TYPE_8050:
+        case DRIVE_TYPE_8250:
+            return 1;
     }
 
     return 0;
@@ -98,8 +144,8 @@ unsigned int drive_check_dual(unsigned int type)
 static unsigned int drive_check_tcbm(unsigned int type)
 {
     switch (type) {
-      case DRIVE_TYPE_1551:
-        return 1;
+        case DRIVE_TYPE_1551:
+            return 1;
     }
 
     return 0;
@@ -108,162 +154,260 @@ static unsigned int drive_check_tcbm(unsigned int type)
 unsigned int drive_check_bus(unsigned int drive_type,
                              unsigned int bus_map)
 {
-    if (drive_type == DRIVE_TYPE_NONE)
+    if (drive_type == DRIVE_TYPE_NONE) {
         return 1;
+    }
 
-    if (drive_check_ieee(drive_type) && (bus_map & IEC_BUS_IEEE))
+    if (drive_check_ieee(drive_type) && (bus_map & IEC_BUS_IEEE)) {
         return 1;
+    }
 
-    if (drive_check_iec(drive_type) && (bus_map & IEC_BUS_IEC))
+    if (drive_check_iec(drive_type) && (bus_map & IEC_BUS_IEC)) {
         return 1;
+    }
 
-    if (drive_check_tcbm(drive_type) && (bus_map & IEC_BUS_TCBM))
+    if (drive_check_tcbm(drive_type) && (bus_map & IEC_BUS_TCBM)) {
         return 1;
+    }
 
     return 0;
 }
 
 int drive_check_type(unsigned int drive_type, unsigned int dnr)
 {
-    if (!drive_check_bus(drive_type, iec_available_busses()))
+    if (!drive_check_bus(drive_type, iec_available_busses())) {
         return 0;
-
-    if (drive_check_dual(drive_type)) {
-        if (is_drive1(dnr)) {
-            /* Dual drives only supported on even device numbers.  */
-            return 0;
-        } else {
-            if (drive_context[mk_drive1(dnr)]->drive->type != DRIVE_TYPE_NONE)
-                /* Disable dual drive if second device is enabled.  */
-                return 0;
-        }
-    } else {
-        if (is_drive1(dnr)) {
-            if (drive_check_dual(drive_context[mk_drive0(dnr)]->drive->type))
-                /* Disable second device if dual drive is enabled.  */
-                return drive_type == DRIVE_TYPE_NONE;
-        }
     }
 
-    if (machine_drive_rom_check_loaded(drive_type) < 0)
+    if (machine_drive_rom_check_loaded(drive_type) < 0) {
         return 0;
+    }
 
     return 1;
 }
 
 int drive_check_expansion(int drive_type)
 {
-    if (drive_type == DRIVE_TYPE_1541
-        || drive_type == DRIVE_TYPE_1541II
-        || drive_type == DRIVE_TYPE_1570
-        || drive_type == DRIVE_TYPE_1571
-        || drive_type == DRIVE_TYPE_1571CR)
+    switch (drive_type) {
+    case DRIVE_TYPE_1540:
+    case DRIVE_TYPE_1541:
+    case DRIVE_TYPE_1541II:
+    case DRIVE_TYPE_1570:
+    case DRIVE_TYPE_1571:
+    case DRIVE_TYPE_1571CR:
         return 1;
+    }
     return 0;
 }
 
 int drive_check_expansion2000(int drive_type)
 {
-    if (drive_type == DRIVE_TYPE_1541
-        || drive_type == DRIVE_TYPE_1541II)
+    switch (drive_type) {
+    case DRIVE_TYPE_1540:
+    case DRIVE_TYPE_1541:
+    case DRIVE_TYPE_1541II:
         return 1;
+    }
     return 0;
 }
 
 int drive_check_expansion4000(int drive_type)
 {
-    if (drive_type == DRIVE_TYPE_1541
-        || drive_type == DRIVE_TYPE_1541II
-        || drive_type == DRIVE_TYPE_1570
-        || drive_type == DRIVE_TYPE_1571
-        || drive_type == DRIVE_TYPE_1571CR)
+    switch (drive_type) {
+    case DRIVE_TYPE_1540:
+    case DRIVE_TYPE_1541:
+    case DRIVE_TYPE_1541II:
+    case DRIVE_TYPE_1570:
+    case DRIVE_TYPE_1571:
+    case DRIVE_TYPE_1571CR:
         return 1;
+    }
     return 0;
 }
 
 int drive_check_expansion6000(int drive_type)
 {
-    if (drive_type == DRIVE_TYPE_1541
-        || drive_type == DRIVE_TYPE_1541II
-        || drive_type == DRIVE_TYPE_1570
-        || drive_type == DRIVE_TYPE_1571
-        || drive_type == DRIVE_TYPE_1571CR)
+    switch (drive_type) {
+    case DRIVE_TYPE_1540:
+    case DRIVE_TYPE_1541:
+    case DRIVE_TYPE_1541II:
+    case DRIVE_TYPE_1570:
+    case DRIVE_TYPE_1571:
+    case DRIVE_TYPE_1571CR:
         return 1;
+    }
     return 0;
 }
 
 int drive_check_expansion8000(int drive_type)
 {
-    if (drive_type == DRIVE_TYPE_1541
-        || drive_type == DRIVE_TYPE_1541II)
+    switch (drive_type) {
+    case DRIVE_TYPE_1540:
+    case DRIVE_TYPE_1541:
+    case DRIVE_TYPE_1541II:
         return 1;
+    }
     return 0;
 }
 
 int drive_check_expansionA000(int drive_type)
 {
-    if (drive_type == DRIVE_TYPE_1541
-        || drive_type == DRIVE_TYPE_1541II)
+    switch (drive_type) {
+    case DRIVE_TYPE_1540:
+    case DRIVE_TYPE_1541:
+    case DRIVE_TYPE_1541II:
         return 1;
+    }
     return 0;
 }
 
 int drive_check_parallel_cable(int drive_type)
 {
-    if (drive_type == DRIVE_TYPE_1541
-        || drive_type == DRIVE_TYPE_1541II
-        || drive_type == DRIVE_TYPE_1570
-        || drive_type == DRIVE_TYPE_1571
-        || drive_type == DRIVE_TYPE_1571CR)
+    switch (drive_type) {
+    case DRIVE_TYPE_1540:
+    case DRIVE_TYPE_1541:
+    case DRIVE_TYPE_1541II:
+    case DRIVE_TYPE_1570:
+    case DRIVE_TYPE_1571:
+    case DRIVE_TYPE_1571CR:
         return 1;
+    }
     return 0;
 }
 
 int drive_check_extend_policy(int drive_type)
 {
-    if (drive_type == DRIVE_TYPE_1541
-        || drive_type == DRIVE_TYPE_1541II
-        || drive_type == DRIVE_TYPE_1551
-        || drive_type == DRIVE_TYPE_1570
-        || drive_type == DRIVE_TYPE_1571
-        || drive_type == DRIVE_TYPE_1571CR
-        || drive_type == DRIVE_TYPE_2031)
+    switch (drive_type) {
+    case DRIVE_TYPE_1540:
+    case DRIVE_TYPE_1541:
+    case DRIVE_TYPE_1541II:
+    case DRIVE_TYPE_1551:
+    case DRIVE_TYPE_1570:
+    case DRIVE_TYPE_1571:
+    case DRIVE_TYPE_1571CR:
+    case DRIVE_TYPE_2031:
+    /* case DISK_IMAGE_TYPE_D1M: */ /* FIXME: will be always extended */
+    /* case DISK_IMAGE_TYPE_D2M: */ /* FIXME: will be always extended */
+    /* case DISK_IMAGE_TYPE_D4M: */ /* FIXME: will be always extended */
+    /* case DRIVE_TYPE_1581: */ /* FIXME: will be always extended */
         return 1;
+    }
     return 0;
 }
 
 int drive_check_idle_method(int drive_type)
 {
-    if (drive_type == DRIVE_TYPE_1541
-        || drive_type == DRIVE_TYPE_1541II
-        || drive_type == DRIVE_TYPE_1570
-        || drive_type == DRIVE_TYPE_1571
-        || drive_type == DRIVE_TYPE_1571CR
-        || drive_type == DRIVE_TYPE_1551
-        || drive_type == DRIVE_TYPE_1581
-        || drive_type == DRIVE_TYPE_2000
-        || drive_type == DRIVE_TYPE_4000
-        || drive_type == DRIVE_TYPE_2031)
+    switch (drive_type) {
+    case DRIVE_TYPE_1540:
+    case DRIVE_TYPE_1541:
+    case DRIVE_TYPE_1541II:
+    case DRIVE_TYPE_1570:
+    case DRIVE_TYPE_1571:
+    case DRIVE_TYPE_1571CR:
+    case DRIVE_TYPE_1551:
+    case DRIVE_TYPE_1581:
+    case DRIVE_TYPE_2000:
+    case DRIVE_TYPE_4000:
+    case DRIVE_TYPE_2031:
+    case DRIVE_TYPE_2040:
+    case DRIVE_TYPE_3040:
+    case DRIVE_TYPE_4040:
         return 1;
+    }
     return 0;
 }
 
 int drive_check_profdos(int drive_type)
 {
-    if (drive_type == DRIVE_TYPE_1570
-        || drive_type == DRIVE_TYPE_1571
-        || drive_type == DRIVE_TYPE_1571CR)
+    switch (drive_type) {
+    case DRIVE_TYPE_1570:
+    case DRIVE_TYPE_1571:
+    case DRIVE_TYPE_1571CR:
         return 1;
+    }
     return 0;
 }
 
 int drive_check_supercard(int drive_type)
 {
-    if (drive_type == DRIVE_TYPE_1541
-        || drive_type == DRIVE_TYPE_1541II
-        || drive_type == DRIVE_TYPE_1570
-        || drive_type == DRIVE_TYPE_1571
-        || drive_type == DRIVE_TYPE_1571CR)
+    switch (drive_type) {
+    case DRIVE_TYPE_1540:
+    case DRIVE_TYPE_1541:
+    case DRIVE_TYPE_1541II:
+    case DRIVE_TYPE_1570:
+    case DRIVE_TYPE_1571:
+    case DRIVE_TYPE_1571CR:
         return 1;
+    }
     return 0;
+}
+
+int drive_check_stardos(int drive_type)
+{
+    switch (drive_type) {
+    case DRIVE_TYPE_1540:
+    case DRIVE_TYPE_1541:
+    case DRIVE_TYPE_1541II:
+ /* FIXME: stardos apparently exists for 157x, needs more research */
+ /* case DRIVE_TYPE_1570:
+    case DRIVE_TYPE_1571:
+    case DRIVE_TYPE_1571CR: */
+        return 1;
+    }
+    return 0;
+}
+
+int drive_check_dolphindos3(int drive_type)
+{
+    /* FIXME: is this correct? */
+    switch (drive_type) {
+    case DRIVE_TYPE_1540:
+    case DRIVE_TYPE_1541:
+    case DRIVE_TYPE_1541II:
+        return 1;
+    }
+    return 0;
+}
+
+
+/** \brief  Check if \a drive_type supports a real-time clock
+ *
+ * \param[in]   drive_type  drive type
+ *
+ * \return  bool
+ */
+int drive_check_rtc(int drive_type)
+{
+    switch (drive_type) {
+        case DRIVE_TYPE_2000: /* fall through */
+        case DRIVE_TYPE_4000:
+        case DRIVE_TYPE_CMDHD:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+int drive_get_type_by_devnr(int devnr)
+{
+    int iecdevice = 0;
+    int fsdevice;
+    int drivetype;
+
+    if (/* FIXME: xvic has its own IEC code and doesn't use "BusDevice[8-11]" */
+        (machine_class != VICE_MACHINE_VIC20)) {
+        resources_get_int_sprintf("BusDevice%i", &iecdevice, devnr);
+        resources_get_int_sprintf("FileSystemDevice%i", &fsdevice, devnr);
+    }
+    resources_get_int_sprintf("Drive%iType", &drivetype, devnr);
+    if (iecdevice) {
+        return fsdevice;
+    } else {
+        return drivetype;
+    }
+}
+
+int drive_is_dualdrive_by_devnr(int devnr)
+{
+    return drive_check_dual(drive_get_type_by_devnr(devnr));
 }

@@ -31,35 +31,37 @@
 #include <string.h>
 
 #include "archdep.h"
+#include "alarm.h"
 #include "c64cart.h"
 #define CARTRIDGE_INCLUDE_SLOTMAIN_API
 #include "c64cartsystem.h"
 #undef CARTRIDGE_INCLUDE_SLOTMAIN_API
-#include "c64export.h"
 #include "c64mem.h"
 #include "cartio.h"
 #include "cartridge.h"
+#include "clockport.h"
 #include "cmdline.h"
 #include "crt.h"
+#include "export.h"
 #include "flash040.h"
 #include "lib.h"
+#include "log.h"
 #include "maincpu.h"
+#include "monitor.h"
+#include "ram.h"
 #include "resources.h"
-#include "translate.h"
 #include "snapshot.h"
 #include "types.h"
 #include "util.h"
+#include "vicii-phi1.h"
 
 #define CARTRIDGE_INCLUDE_PRIVATE_API
 #include "retroreplay.h"
 #include "reu.h"
-#ifdef HAVE_TFE
-#include "tfe.h"
-#endif
 #undef CARTRIDGE_INCLUDE_PRIVATE_API
 
 /*
-    Retro Replay (Individual Computers)
+    Retro Replay, Nordic Replay (Individual Computers)
 
     64K rom, 8*8k pages (actually 128K Flash ROM, one of two 64K banks selected by bank jumper)
     32K ram, 4*8k pages
@@ -78,17 +80,27 @@
 
 */
 
-/* #define DEBUGRR */
+/* #define DEBUG_RR */
 
-#ifdef DEBUGRR
-#define DBG(x)  printf x
+#ifdef DEBUG_RR
+#define DBG(x)  log_printf x
 #else
 #define DBG(x)
 #endif
 
+#define CART_RAM_SIZE (32 * 1024)
+
 /* Cart is activated.  */
-static int rr_active;
-int rr_clockport_enabled;
+static int rr_active = 0;
+static int rr_clockport_enabled = 0;
+
+static int rr_enabled = 0;
+
+/* freeze logic state */
+static int rr_frozen = 0;
+
+/* current GAME/EXROM mode */
+static int rr_cmode = CMODE_8KGAME;
 
 /* current bank */
 static int rr_bank;
@@ -108,7 +120,7 @@ static int reu_mapping;
 static int rr_hw_flashjumper = 0;
 static int rr_hw_bankjumper = 0;
 static int rr_bios_write = 0;
-static int rr_revision = 0;
+static int rr_revision = RR_REV_RETRO_REPLAY;
 static int export_ram_at_a000 = 0;
 
 static unsigned int rom_offset = 0x10000;
@@ -121,58 +133,153 @@ static int retroreplay_filetype = 0;
 
 static const char STRING_RETRO_REPLAY[] = CARTRIDGE_NAME_RETRO_REPLAY;
 
+/* Current clockport device */
+static int clockport_device_id = CLOCKPORT_DEVICE_NONE;
+static clockport_device_t *clockport_device = NULL;
+
+static char *clockport_device_names = NULL;
+
+static struct alarm_s *nofreeze_alarm;
+static int freeze_button_pressed = 0;
+
 /* ---------------------------------------------------------------------*/
 
 /* some prototypes are needed */
-static BYTE retroreplay_io1_read(WORD addr);
-static void retroreplay_io1_store(WORD addr, BYTE value);
-static BYTE retroreplay_io2_read(WORD addr);
-static void retroreplay_io2_store(WORD addr, BYTE value);
+static uint8_t retroreplay_io1_read(uint16_t addr);
+static void retroreplay_io1_store(uint16_t addr, uint8_t value);
+static uint8_t retroreplay_io2_read(uint16_t addr);
+static void retroreplay_io2_store(uint16_t addr, uint8_t value);
+static int retroreplay_dump(void);
+
+static uint8_t retroreplay_clockport_read(uint16_t io_address);
+static uint8_t retroreplay_clockport_peek(uint16_t io_address);
+static void retroreplay_clockport_store(uint16_t io_address, uint8_t byte);
+static int retroreplay_clockport_dump(void);
+
 
 static io_source_t retroreplay_io1_device = {
-    CARTRIDGE_NAME_RETRO_REPLAY,
-    IO_DETACH_CART,
-    NULL,
-    0xde00, 0xdeff, 0xff,
-    0,
-    retroreplay_io1_store,
-    retroreplay_io1_read,
-    NULL, /* TODO: peek */
-    NULL, /* TODO: dump */
-    CARTRIDGE_RETRO_REPLAY,
-    0,
-    0
+    CARTRIDGE_NAME_RETRO_REPLAY, /* name of the device */
+    IO_DETACH_CART,              /* use cartridge ID to detach the device when involved in a read-collision */
+    IO_DETACH_NO_RESOURCE,       /* does not use a resource for detach */
+    0xde00, 0xdeff, 0xff,        /* range of the device, regs:$de00-$deff */
+    0,                           /* read validity is determined by the device upon a read */
+    retroreplay_io1_store,       /* store function */
+    NULL,                        /* NO poke function */
+    retroreplay_io1_read,        /* read function */
+    NULL,                        /* TODO: peek function */
+    retroreplay_dump,            /* device state information dump function */
+    CARTRIDGE_RETRO_REPLAY,      /* cartridge ID */
+    IO_PRIO_NORMAL,              /* normal priority, device read needs to be checked for collisions */
+    0,                           /* insertion order, gets filled in by the registration function */
+    IO_MIRROR_NONE               /* NO mirroring */
 };
 
 static io_source_t retroreplay_io2_device = {
-    CARTRIDGE_NAME_RETRO_REPLAY,
-    IO_DETACH_CART,
-    NULL,
-    0xdf00, 0xdfff, 0xff,
-    0,
-    retroreplay_io2_store,
-    retroreplay_io2_read,
-    NULL, /* TODO: peek */
-    NULL, /* TODO: dump */
-    CARTRIDGE_RETRO_REPLAY,
-    0,
-    0
+    CARTRIDGE_NAME_RETRO_REPLAY, /* name of the device */
+    IO_DETACH_CART,              /* use cartridge ID to detach the device when involved in a read-collision */
+    IO_DETACH_NO_RESOURCE,       /* does not use a resource for detach */
+    0xdf00, 0xdfff, 0xff,        /* range for the device, regs:$df00-$dfff */
+    0,                           /* read validity is determined by the device upon a read */
+    retroreplay_io2_store,       /* store function */
+    NULL,                        /* NO poke function */
+    retroreplay_io2_read,        /* read function */
+    NULL,                        /* TODO: peek function */
+    retroreplay_dump,            /* device state information dump function */
+    CARTRIDGE_RETRO_REPLAY,      /* cartridge ID */
+    IO_PRIO_NORMAL,              /* normal priority, device read needs to be checked for collisions */
+    0,                           /* insertion order, gets filled in by the registration function */
+    IO_MIRROR_NONE               /* NO mirroring */
+};
+
+static io_source_t retroreplay_clockport_io1_device = {
+    CARTRIDGE_NAME_RETRO_REPLAY " Clockport", /* name of the device */
+    IO_DETACH_RESOURCE,                       /* use resource to detach the device when involved in a read-collision */
+    "RRClockPort",                            /* resource to set to '0' */
+    0xde02, 0xde0f, 0x0f,                     /* range for the device, regs:$de02-$de0f */
+    0,                                        /* read validity is determined by the device upon a read */
+    retroreplay_clockport_store,              /* store function */
+    NULL,                                     /* NO poke function */
+    retroreplay_clockport_read,               /* read function */
+    retroreplay_clockport_peek,               /* peek function */
+    retroreplay_clockport_dump,               /* device state information dump function */
+    CARTRIDGE_RETRO_REPLAY,                   /* cartridge ID */
+    IO_PRIO_NORMAL,                           /* normal priority, device read needs to be checked for collisions */
+    0,                                        /* insertion order, gets filled in by the registration function */
+    IO_MIRROR_NONE                            /* NO mirroring */
 };
 
 static io_source_list_t *retroreplay_io1_list_item = NULL;
 static io_source_list_t *retroreplay_io2_list_item = NULL;
+static io_source_list_t *retroreplay_clockport_io1_list_item = NULL;
 
-static const c64export_resource_t export_res = {
+static const export_resource_t export_res = {
     CARTRIDGE_NAME_RETRO_REPLAY, 1, 1, &retroreplay_io1_device, &retroreplay_io2_device, CARTRIDGE_RETRO_REPLAY
 };
 
 /* ---------------------------------------------------------------------*/
 
-BYTE retroreplay_io1_read(WORD addr)
+static uint8_t retroreplay_clockport_read(uint16_t address)
+{
+    retroreplay_clockport_io1_device.io_source_valid = 0;
+    if (rr_clockport_enabled) {
+        if (address < 0x02) {
+            return 0;
+        }
+        retroreplay_clockport_io1_device.io_source_valid = 1;
+        /* read from clockport device */
+        if (clockport_device) {
+            return clockport_device->read(address,
+                    &retroreplay_clockport_io1_device.io_source_valid,
+                    clockport_device->device_context);
+        }
+        /* read open clock port */
+        return 0;
+    }
+    return 0;
+}
+
+static uint8_t retroreplay_clockport_peek(uint16_t address)
+{
+    if (rr_clockport_enabled) {
+        if (address < 0x02) {
+            return 0;
+        }
+        /* read from clockport device */
+        if (clockport_device) {
+            return clockport_device->peek(address, clockport_device->device_context);
+        }
+    }
+    return 0;
+}
+
+static void retroreplay_clockport_store(uint16_t address, uint8_t byte)
+{
+    if (rr_clockport_enabled) {
+        if (address < 0x02) {
+            return;
+        }
+        /* write to clockport device */
+        if (clockport_device) {
+            clockport_device->store(address, byte, clockport_device->device_context);
+        }
+    }
+}
+
+static int retroreplay_clockport_dump(void)
+{
+    if (clockport_device) {
+        clockport_device->dump(clockport_device->device_context);
+    }
+    return 0;
+}
+
+/* ---------------------------------------------------------------------*/
+
+uint8_t retroreplay_io1_read(uint16_t addr)
 {
     retroreplay_io1_device.io_source_valid = 0;
-    
-/* DBG(("io1 r %04x\n",addr)); */
+
+/* DBG(("io1 r %04x",addr)); */
 
     if (rr_active) {
         switch (addr & 0xff) {
@@ -190,44 +297,40 @@ BYTE retroreplay_io1_read(WORD addr)
             case 0:
             case 1:
                 retroreplay_io1_device.io_source_valid = 1;
-                return ((roml_bank & 3) << 3) | ((roml_bank & 4) << 5) | ((roml_bank & 8) << 2) | allow_bank | reu_mapping | rr_hw_flashjumper;
+                return ((roml_bank & 3) << 3) | ((roml_bank & 4) << 5) |
+                ((roml_bank & 8) << 2) | allow_bank | reu_mapping |
+                rr_hw_flashjumper | (freeze_button_pressed << 2);
             default:
-#ifdef HAVE_TFE
-                if (rr_clockport_enabled && tfe_cart_enabled() && tfe_as_rr_net && (addr & 0xff) < 0x10) {
+                if (rr_clockport_enabled && (addr & 0xff) < 0x10) {
                     return 0;
                 }
-#endif
-                if (reu_mapping) {
-                    retroreplay_io1_device.io_source_valid = 1;
-                    if (export_ram) {
+                if ((reu_mapping) && (!rr_frozen)) {
+                    if (export_ram || (/* (rr_revision == RR_REV_NORDIC_REPLAY) && */ export_ram_at_a000)) {
+                        retroreplay_io1_device.io_source_valid = 1;
                         if (allow_bank) {
-                            switch (roml_bank & 3) {
-                                case 0:
-                                    return export_ram0[0x1e00 + (addr & 0xff)];
-                                case 1:
-                                    return export_ram0[0x3e00 + (addr & 0xff)];
-                                case 2:
-                                    return export_ram0[0x5e00 + (addr & 0xff)];
-                                case 3:
-                                    return export_ram0[0x7e00 + (addr & 0xff)];
-                            }
+                            return export_ram0[0x1e00 + (addr & 0xff) + ((roml_bank & 3) << 13)];
                         } else {
                             return export_ram0[0x1e00 + (addr & 0xff)];
                         }
                     }
-
-                    return flash040core_read(flashrom_state, rom_offset + ((addr | 0xde00) & 0x1fff) + (roml_bank << 13));
+                    /* in ultimax mode only RAM will appear in IO1 */
+                    /* if 16K-game mode is active and RAM is not selected , then nothing will
+                       be mapped to IO1 */
+                    if ((rr_cmode != CMODE_ULTIMAX) && (rr_cmode != CMODE_16KGAME)) {
+                        retroreplay_io1_device.io_source_valid = 1;
+                        return flash040core_read(flashrom_state, rom_offset + ((addr | 0xde00) & 0x1fff) + (roml_bank << 13));
+                    }
                 }
         }
     }
     return 0;
 }
 
-void retroreplay_io1_store(WORD addr, BYTE value)
+void retroreplay_io1_store(uint16_t addr, uint8_t value)
 {
-    int mode = CMODE_WRITE, cmode;
+    int mode = CMODE_WRITE;
 
-    DBG(("io1 w %04x %02x\n",addr,value));
+    /* DBG(("RR io1 w %04x %02x", addr, value)); */
 
     if (rr_active) {
         switch (addr & 0xff) {
@@ -253,34 +356,54 @@ void retroreplay_io1_store(WORD addr, BYTE value)
                 Bit 7 controls bank-address 15 for ROM banking
              */
             case 0:
-                rr_bank = ((value >> 3) & 3) | ((value >> 5) & 4);
-                cmode = (value & 3);
-                if ((rr_revision > 0) && ((value & 0xe7) == 0x22)) {
+
+                if (rr_hw_flashjumper) {
+                    /* HACK: what really happens in flash mode is that the bits
+                             in de00 _only_ affect the mapping in 8000-9fff range,
+                             all other areas remain untouched as if no cartridge
+                             is active. that means for flashing it will actually
+                             use ultimax mode (both bits set in de00) to get the
+                             write accesses for the ROML area.
+                             another quirk is that in nordic power mode, writes
+                             to a000-bfff area will also go to cartridge ram, reads
+                             will return c64 ram though.
+                     */
+                    if ((value & 3) != 2) {
+                        /* in flash mode always use 8k game, unless cart is disabled */
+                        value &= ~3;
+                    }
+                }
+
+                rr_bank = ((value >> 3) & 3) | ((value >> 5) & 4); /* bit 3-4, 7 */
+                rr_cmode = (value & 3);  /* bit 0-1 */
+                if ((rr_revision == RR_REV_NORDIC_REPLAY) && ((value & 0x67) == 0x22)) {
                     /* Nordic Replay supports additional Nordic Power compatible values */
-                    cmode = 1; /* 16k Game */
+                    rr_cmode = CMODE_16KGAME;
                     export_ram_at_a000 = 1; /* RAM at a000 enabled */
                 } else {
                     /* Action Replay 5 compatible values */
                     export_ram_at_a000 = 0;
-                    if (value & 0x40) {
+                    if (value & 0x40) { /* bit 6 */
                         mode |= CMODE_RELEASE_FREEZE;
+                        rr_frozen = 0;
                     }
-                    if (value & 0x20) {
+                    if (value & 0x20) { /* bit 5 */
                         mode |= CMODE_EXPORT_RAM;
                     }
-                }
-
-                if (rr_hw_flashjumper) {
-                    /* FIXME: what exactly is really happening ? */
-                    if ((value & 3) == 3) {
-                        value = 0;
-                    } else if ((value & 3) == 1) {
-                        value = 0;
+                    /* mode 0x22 is kinda broken in Retro Replay, mimic this here */
+                    if ((rr_revision == RR_REV_RETRO_REPLAY) && ((value & 0x67) == 0x22)) {
+                        export_ram_at_a000 = 1;
+                        rr_cmode = CMODE_RAM;
                     }
                 }
-                cart_config_changed_slotmain(0, (BYTE)(cmode | (rr_bank << CMODE_BANK_SHIFT)), mode);
+                /* after freezing writing to bit 0 and 1 has no effect until freeze
+                   was acknowledged by setting bit 6 */
+                if (rr_frozen) {
+                    rr_cmode = CMODE_ULTIMAX;
+                }
+                cart_config_changed_slotmain(CMODE_8KGAME, (uint8_t)(rr_cmode | (rr_bank << CMODE_BANK_SHIFT)), mode);
 
-                if (value & 4) {
+                if (value & 4) { /* bit 2 */
                     rr_active = 0;
                 }
                 break;
@@ -315,47 +438,30 @@ void retroreplay_io1_store(WORD addr, BYTE value)
                     allow_bank = value & 2;
                     no_freeze = value & 4;
                     reu_mapping = 0; /* can not be set in flash mode */
+                    cart_port_config_changed_slotmain();
                 } else {
                     if (write_once == 0) {
-                        rr_bank = ((value >> 3) & 3) | ((value >> 5) & 4);
-                        cart_romhbank_set_slotmain(rr_bank);
-                        cart_romlbank_set_slotmain(rr_bank);
                         allow_bank = value & 2;
                         no_freeze = value & 4;
                         reu_mapping = value & 0x40;
-                        if (rr_clockport_enabled != (value & 1)) {
-                            rr_clockport_enabled = value & 1;
-#ifdef HAVE_TFE
-                            tfe_clockport_changed();
-#endif
-                        }
                         write_once = 1;
                     }
+                    /* bits 0 and 3,4,5,7 (bank) are not write once */
+                    rr_bank = ((value >> 3) & 3) | ((value >> 5) & 4);
+                    cart_romhbank_set_slotmain(rr_bank);
+                    cart_romlbank_set_slotmain(rr_bank);
+                    cart_port_config_changed_slotmain();
+                    rr_clockport_enabled = value & 1;
                 }
                 break;
             default:
-#ifdef HAVE_TFE
-                if (rr_clockport_enabled && tfe_cart_enabled() && tfe_as_rr_net && (addr & 0xff) < 0x10) {
+                if (rr_clockport_enabled && (addr & 0xff) < 0x10) {
                     return;
                 }
-#endif
-                if (reu_mapping) {
-                    if (export_ram) {
+                if ((reu_mapping) && (!rr_frozen)) {
+                    if (export_ram || ((rr_revision == RR_REV_NORDIC_REPLAY) && export_ram_at_a000)) {
                         if (allow_bank) {
-                            switch (roml_bank & 3) {
-                                case 0:
-                                    export_ram0[0x1e00 + (addr & 0xff)] = value;
-                                    break;
-                                case 1:
-                                    export_ram0[0x3e00 + (addr & 0xff)] = value;
-                                    break;
-                                case 2:
-                                    export_ram0[0x5e00 + (addr & 0xff)] = value;
-                                    break;
-                                case 3:
-                                    export_ram0[0x7e00 + (addr & 0xff)] = value;
-                                    break;
-                            }
+                            export_ram0[0x1e00 + (addr & 0xff) + ((roml_bank & 3) << 13)] = value;
                         } else {
                             export_ram0[0x1e00 + (addr & 0xff)] = value;
                         }
@@ -365,60 +471,43 @@ void retroreplay_io1_store(WORD addr, BYTE value)
     }
 }
 
-BYTE retroreplay_io2_read(WORD addr)
+uint8_t retroreplay_io2_read(uint16_t addr)
 {
     retroreplay_io2_device.io_source_valid = 0;
 
-    DBG(("io2 r %04x\n",addr));
+    DBG(("io2 r %04x", addr));
 
     if (rr_active) {
-        if (!reu_mapping) {
-            retroreplay_io2_device.io_source_valid = 1;
-            if (export_ram || ((rr_revision > 0) && export_ram_at_a000)) {
+        if ((!reu_mapping) && (!rr_frozen)) {
+            if (export_ram || (/* (rr_revision == RR_REV_NORDIC_REPLAY) && */ export_ram_at_a000)) {
+                retroreplay_io2_device.io_source_valid = 1;
                 if (allow_bank) {
-                    switch (roml_bank & 3) {
-                        case 0:
-                            return export_ram0[0x1f00 + (addr & 0xff)];
-                        case 1:
-                            return export_ram0[0x3f00 + (addr & 0xff)];
-                        case 2:
-                            return export_ram0[0x5f00 + (addr & 0xff)];
-                        case 3:
-                            return export_ram0[0x7f00 + (addr & 0xff)];
-                    }
+                    return export_ram0[0x1f00 + (addr & 0xff) + ((roml_bank & 3) << 13)];
                 } else {
                     return export_ram0[0x1f00 + (addr & 0xff)];
                 }
             }
-
-            return flash040core_read(flashrom_state, rom_offset + ((addr | 0xdf00) & 0x1fff) + (roml_bank << 13));
+            /* in ultimax mode only RAM will appear in IO2 */
+            /* if 16K-game mode is active and RAM is not selected , then nothing will
+               be mapped to IO2 */
+            if ((rr_cmode != CMODE_ULTIMAX) && (rr_cmode != CMODE_16KGAME)) {
+                retroreplay_io2_device.io_source_valid = 1;
+                return flash040core_read(flashrom_state, rom_offset + ((addr | 0xdf00) & 0x1fff) + (roml_bank << 13));
+            }
         }
     }
     return 0;
 }
 
-void retroreplay_io2_store(WORD addr, BYTE value)
+void retroreplay_io2_store(uint16_t addr, uint8_t value)
 {
-    DBG(("io2 w %04x %02x\n",addr,value));
+    DBG(("io2 w %04x %02x", addr, value));
 
     if (rr_active) {
-        if (!reu_mapping) {
-            if (export_ram) {
+        if ((!reu_mapping) && (!rr_frozen)) {
+            if (export_ram || ((rr_revision == RR_REV_NORDIC_REPLAY) && export_ram_at_a000)) {
                 if (allow_bank) {
-                    switch (roml_bank & 3) {
-                        case 0:
-                            export_ram0[0x1f00 + (addr & 0xff)] = value;
-                            break;
-                        case 1:
-                            export_ram0[0x3f00 + (addr & 0xff)] = value;
-                            break;
-                        case 2:
-                            export_ram0[0x5f00 + (addr & 0xff)] = value;
-                            break;
-                        case 3:
-                            export_ram0[0x7f00 + (addr & 0xff)] = value;
-                            break;
-                    }
+                    export_ram0[0x1f00 + (addr & 0xff) + ((roml_bank & 3) << 13)] = value;
                 } else {
                     export_ram0[0x1f00 + (addr & 0xff)] = value;
                 }
@@ -429,100 +518,149 @@ void retroreplay_io2_store(WORD addr, BYTE value)
 
 /* ---------------------------------------------------------------------*/
 
-BYTE retroreplay_roml_read(WORD addr)
+uint8_t retroreplay_roml_read(uint16_t addr)
 {
-    if (export_ram) {
-        switch (roml_bank & 3) {
-            case 0:
-                return export_ram0[addr & 0x1fff];
-            case 1:
-                return export_ram0[(addr & 0x1fff) + 0x2000];
-            case 2:
-                return export_ram0[(addr & 0x1fff) + 0x4000];
-            case 3:
-                return export_ram0[(addr & 0x1fff) + 0x6000];
-        }
+    /* in frozen state nothing is mapped to ROML */
+    if (rr_frozen) {
+        /* FIXME: what should be returned? C64 RAM or open bus? */
+        return vicii_read_phi1();
     }
-
+    if (export_ram) {
+        return export_ram0[(addr & 0x1fff) + ((roml_bank & 3) << 13)];
+    }
+    /* on Nordic Replay when RAM is selected for ROMH in "nordic power mode"
+       the ROM is mapped to ROML */
+    if ((rr_revision == RR_REV_NORDIC_REPLAY) && export_ram_at_a000) {
+        return flash040core_read(flashrom_state, rom_offset + (addr & 0x1fff) + (roml_bank << 13));
+    }
+    /* if 16K-game mode is active and RAM is not selected , then nothing will
+       be mapped to ROML */
+    if (rr_cmode == CMODE_16KGAME) {
+        /* FIXME: what should be returned? C64 RAM or open bus? */
+        return vicii_read_phi1();
+    }
     return flash040core_read(flashrom_state, rom_offset + (addr & 0x1fff) + (roml_bank << 13));
 }
 
-void retroreplay_roml_store(WORD addr, BYTE value)
+void retroreplay_roml_store(uint16_t addr, uint8_t value)
 {
-/*    DBG(("roml w %04x %02x ram:%d flash:%d\n", addr, value, export_ram, rr_hw_flashjumper)); */
+/*    DBG(("roml w %04x %02x ram:%d flash:%d", addr, value, export_ram, rr_hw_flashjumper)); */
     if (export_ram) {
-        switch (roml_bank & 3) {
-            case 0:
-                export_ram0[addr & 0x1fff] = value;
-                break;
-            case 1:
-                export_ram0[(addr & 0x1fff) + 0x2000] = value;
-                break;
-            case 2:
-                export_ram0[(addr & 0x1fff) + 0x4000] = value;
-                break;
-            case 3:
-                export_ram0[(addr & 0x1fff) + 0x6000] = value;
-                break;
-        }
+        export_ram0[(addr & 0x1fff) + ((roml_bank & 3) << 13)] = value;
     } else {
         /* writes to flash are completely disabled if the flash jumper is not set */
         if (rr_hw_flashjumper) {
             flash040core_store(flashrom_state, rom_offset + (addr & 0x1fff) + (roml_bank << 13), value);
+            if (flashrom_state->flash_state != FLASH040_STATE_READ) {
+                maincpu_resync_limits();
+            }
         }
     }
 }
 
-int retroreplay_roml_no_ultimax_store(WORD addr, BYTE value)
+int retroreplay_roml_no_ultimax_store(uint16_t addr, uint8_t value)
 {
-/*    DBG(("roml w %04x %02x ram:%d flash:%d\n", addr, value, export_ram, rr_hw_flashjumper)); */
+/*    DBG(("roml w %04x %02x ram:%d flash:%d", addr, value, export_ram, rr_hw_flashjumper)); */
     if (rr_hw_flashjumper) {
         if (export_ram) {
-            switch (roml_bank & 3) {
-                case 0:
-                    export_ram0[addr & 0x1fff] = value;
-                    break;
-                case 1:
-                    export_ram0[(addr & 0x1fff) + 0x2000] = value;
-                    break;
-                case 2:
-                    export_ram0[(addr & 0x1fff) + 0x4000] = value;
-                    break;
-                case 3:
-                    export_ram0[(addr & 0x1fff) + 0x6000] = value;
-                    break;
-            }
+            export_ram0[(addr & 0x1fff) + ((roml_bank & 3) << 13)] = value;
             return 1;
         } else {
             /* writes to flash are completely disabled if the flash jumper is not set */
             flash040core_store(flashrom_state, rom_offset + (addr & 0x1fff) + (roml_bank << 13), value);
+            if (flashrom_state->flash_state != FLASH040_STATE_READ) {
+                maincpu_resync_limits();
+            }
+        }
+    } else {
+        /* Nordic Replay has RAM always writeable */
+        if ((rr_revision == RR_REV_NORDIC_REPLAY) && export_ram) {
+            export_ram0[(addr & 0x1fff) + ((roml_bank & 3) << 13)] = value;
         }
     }
     return 0;
 }
 
-BYTE retroreplay_romh_read(WORD addr)
+/* ---------------------------------------------------------------------*/
+
+uint8_t retroreplay_a000_bfff_read(uint16_t addr)
 {
-    if ((rr_revision > 0) && export_ram_at_a000) {
-        return export_ram0[addr & 0x1fff]; /* FIXME: bank ? */
+    if ((rr_revision == RR_REV_NORDIC_REPLAY) && export_ram_at_a000) {
+        if (rr_frozen) {
+            if (allow_bank) {
+                return export_ram0[(addr & 0x1fff) + ((roml_bank & 3) << 13)];
+            } else {
+                return export_ram0[addr & 0x1fff];
+            }
+        }
     }
-    return flash040core_read(flashrom_state, rom_offset + (addr & 0x1fff) + (roml_bank << 13));
+    /* FIXME: is this correct? */
+    return vicii_read_phi1();
 }
 
-void retroreplay_romh_store(WORD addr, BYTE value)
+void retroreplay_a000_bfff_store(uint16_t addr, uint8_t value)
 {
-    if ((rr_revision > 0) && export_ram_at_a000) {
-        export_ram0[addr & 0x1fff] = value; /* FIXME: bank ? */
+    if ((rr_revision == RR_REV_NORDIC_REPLAY) && export_ram_at_a000) {
+        if (rr_frozen) {
+            if (allow_bank) {
+                export_ram0[(addr & 0x1fff) + ((roml_bank & 3) << 13)] = value;
+            } else {
+                export_ram0[addr & 0x1fff] = value;
+            }
+        }
     }
 }
 
-int retroreplay_peek_mem(struct export_s *export, WORD addr, BYTE *value)
+/* ---------------------------------------------------------------------*/
+
+uint8_t retroreplay_romh_read(uint16_t addr)
+{
+    if ((rr_revision == RR_REV_NORDIC_REPLAY) && export_ram_at_a000) {
+        if (rr_frozen) {
+            if (allow_bank) {
+                return flash040core_read(flashrom_state, rom_offset + (addr & 0x1fff) + (roml_bank << 13));
+            } else {
+                /* if the "allow bank" bit is not set, and RAM is selected, then
+                bit 0 and bit 1 of the bank nr are inactive for selecting the ROMH bank */
+                return flash040core_read(flashrom_state, rom_offset + (addr & 0x1fff) + ((roml_bank & ~3) << 13));
+            }
+        }
+        if (allow_bank) {
+            return export_ram0[(addr & 0x1fff) + ((roml_bank & 3) << 13)];
+        } else {
+            return export_ram0[addr & 0x1fff];
+        }
+    }
+    if ((allow_bank) || (!export_ram)) {
+        return flash040core_read(flashrom_state, rom_offset + (addr & 0x1fff) + (roml_bank << 13));
+    }
+    /* if the "allow bank" bit is not set, and RAM is selected, then
+       bit 0 and bit 1 of the bank nr are inactive for selecting the ROMH bank */
+    return flash040core_read(flashrom_state, rom_offset + (addr & 0x1fff) + ((roml_bank & ~3) << 13));
+}
+
+void retroreplay_romh_store(uint16_t addr, uint8_t value)
+{
+    if ((rr_revision == RR_REV_NORDIC_REPLAY) && export_ram_at_a000) {
+        if (!rr_frozen) {
+            if (allow_bank) {
+                export_ram0[(addr & 0x1fff) + ((roml_bank & 3) << 13)] = value;
+            } else {
+                export_ram0[addr & 0x1fff] = value;
+            }
+            return;
+        }
+    }
+    mem_store_without_romlh(addr, value);
+}
+
+int retroreplay_peek_mem(export_t *ex, uint16_t addr, uint8_t *value)
 {
     if (addr >= 0x8000 && addr <= 0x9fff) {
         *value = retroreplay_roml_read(addr);
         return CART_READ_VALID;
     }
-    if (!(((export_t*)export)->exrom) && (((export_t*)export)->game)) {
+    if (!(ex->exrom) && (ex->game)) {
         if (addr >= 0xe000) {
             *value = retroreplay_romh_read(addr);
             return CART_READ_VALID;
@@ -535,20 +673,134 @@ int retroreplay_peek_mem(struct export_s *export, WORD addr, BYTE *value)
     }
     return CART_READ_THROUGH;
 }
+
+void retroreplay_mmu_translate(unsigned int addr, uint8_t **base, int *start, int *limit)
+{
+#if 0
+    if (flashrom_state && flashrom_state->flash_data) {
+        switch (addr & 0xe000) {
+            case 0xe000:
+                if ((rr_revision == RR_REV_NORDIC_REPLAY) && export_ram_at_a000) {
+                    *base = export_ram0 - 0xe000; /* FIXME: bank ? */
+                    *start = 0xe000;
+                    *limit = 0xfffd;
+                    return;
+                }
+                if (flashrom_state->flash_state == FLASH040_STATE_READ) {
+                    *base = flashrom_state->flash_data + rom_offset + (roml_bank << 13) - 0xe000;
+                    *start = 0xe000;
+                    *limit = 0xfffd;
+                    return;
+                }
+                break;
+            case 0xa000:
+                if ((rr_revision == RR_REV_NORDIC_REPLAY) && export_ram_at_a000) {
+                    *base = export_ram0 - 0xa000; /* FIXME: bank ? */
+                    *start = 0xa000;
+                    *limit = 0xbffd;
+                    return;
+                }
+                if (flashrom_state->flash_state == FLASH040_STATE_READ) {
+                    *base = flashrom_state->flash_data + rom_offset + (roml_bank << 13) - 0xa000;
+                    *start = 0xa000;
+                    *limit = 0xbffd;
+                    return;
+                }
+                break;
+            case 0x8000:
+                if (export_ram) {
+                    *base = export_ram0 + ((roml_bank & 3) << 13) - 0x8000;
+                    *start = 0x8000;
+                    *limit = 0x9ffd;
+                    return;
+                }
+                if (flashrom_state->flash_state == FLASH040_STATE_READ) {
+                    *base = flashrom_state->flash_data + rom_offset + (roml_bank << 13) - 0x8000;
+                    *start = 0x8000;
+                    *limit = 0x9ffd;
+                    return;
+                }
+                break;
+            default:
+                break;
+        }
+    }
+#endif
+    *base = NULL;
+    *start = 0;
+    *limit = 0;
+}
+
+static int retroreplay_dump(void)
+{
+    /* FIXME: incomplete */
+    mon_out("Hardware Revision: %d (%s Replay).\n", rr_revision, rr_revision ? "Nordic" : "Retro");
+    mon_out("Retro Replay registers are %s.\n", rr_active ? "enabled" : "disabled");
+    mon_out("Clockport is %s.\n", rr_clockport_enabled ? "enabled" : "disabled");
+    mon_out("Clockport device: %s.\n", clockport_device_id_to_name(clockport_device_id));
+    mon_out("Freeze status: %s.\n", rr_frozen ? "frozen" : "released");
+
+    mon_out("EXROM line: %s, GAME line: %s, Mode: %s\n",
+            (rr_cmode & 2) ? "high" : "low",
+            (rr_cmode & 1) ? "low" : "high",
+            cart_config_string((uint8_t)(rr_cmode & 3)));
+    mon_out("ROM bank: %d\n", (rr_bank));
+    /* FIXME: take system RAM and cart mode(s) into account here */
+    /* FIXME: this is very inaccurate */
+    mon_out("$8000-$9FFF: %s\n", (export_ram) ? "RAM" : "ROM");
+    mon_out("$A000-$BFFF: %s\n", (export_ram_at_a000) ? "RAM" : "ROM");
+    mon_out("$DF00-$DFFF: %s\n", (export_ram || export_ram_at_a000) ? "RAM" : "ROM");
+
+    return 0;
+}
+
 /* ---------------------------------------------------------------------*/
+
+/* FIXME: this still needs to be tweaked to match the hardware */
+static RAMINITPARAM ramparam = {
+    .start_value = 255,
+    .value_invert = 2,
+    .value_offset = 1,
+
+    .pattern_invert = 0x100,
+    .pattern_invert_value = 255,
+
+    .random_start = 0,
+    .random_repeat = 0,
+    .random_chance = 0,
+};
+
+void retroreplay_powerup(void)
+{
+    ram_init_with_pattern(export_ram0, CART_RAM_SIZE, &ramparam);
+}
 
 void retroreplay_freeze(void)
 {
     /* freeze button is disabled in flash mode */
     if (!rr_hw_flashjumper) {
         rr_active = 1;
-        cart_config_changed_slotmain(3, 3, CMODE_READ | CMODE_EXPORT_RAM);
+        rr_frozen = 1;
+        rr_cmode = CMODE_ULTIMAX;
+        cart_config_changed_slotmain((uint8_t)rr_cmode, (uint8_t)rr_cmode, CMODE_READ);
         /* flash040core_reset(flashrom_state); */
     }
 }
 
+static void nofreeze_alarm_handler(CLOCK offset, void *data)
+{
+    freeze_button_pressed = 0;
+    alarm_unset(nofreeze_alarm);
+}
+
 int retroreplay_freeze_allowed(void)
 {
+    freeze_button_pressed = 1;
+    alarm_unset(nofreeze_alarm);
+    /* HACK: we keep the button pressed for 30 frames, because we do not get the
+             "release" event for the hotkey. this enables us to keep it pressed
+             continously when the hotkey is being held down */
+    alarm_set(nofreeze_alarm, maincpu_clk + (312 * 65 * 30));
     if (no_freeze) {
         return 0;
     }
@@ -557,9 +809,10 @@ int retroreplay_freeze_allowed(void)
 
 void retroreplay_config_init(void)
 {
-    DBG(("retroreplay_config_init flash:%d bank jumper: %d offset: %08x\n",rr_hw_flashjumper , rr_hw_bankjumper, rom_offset));
+    DBG(("retroreplay_config_init flash:%d bank jumper: %d offset: %08x", rr_hw_flashjumper, rr_hw_bankjumper, rom_offset));
 
     rr_active = 1;
+    rr_frozen = 0;
     rr_clockport_enabled = 0;
     write_once = 0;
     no_freeze = 0;
@@ -568,40 +821,47 @@ void retroreplay_config_init(void)
     export_ram_at_a000 = 0;
 
     if (rr_hw_flashjumper) {
-        cart_config_changed_slotmain(2, 2, CMODE_READ);
+        rr_cmode = CMODE_RAM;
     } else {
-        cart_config_changed_slotmain(0, 0, CMODE_READ);
+        rr_cmode = CMODE_8KGAME;
     }
+    cart_config_changed_slotmain((uint8_t)rr_cmode, (uint8_t)rr_cmode, CMODE_READ);
 
     flash040core_reset(flashrom_state);
 }
 
 void retroreplay_reset(void)
 {
-    DBG(("retroreplay_reset flash:%d bank jumper: %d offset: %08x\n",rr_hw_flashjumper , rr_hw_bankjumper, rom_offset));
+    DBG(("retroreplay_reset flash:%d bank jumper: %d offset: %08x", rr_hw_flashjumper, rr_hw_bankjumper, rom_offset));
     rr_active = 1;
+    rr_frozen = 0;
 
     if (rr_hw_flashjumper) {
-        cart_config_changed_slotmain(2, 2, CMODE_READ);
+        rr_cmode = CMODE_RAM;
     } else {
-        cart_config_changed_slotmain(0, 0, CMODE_READ);
+        rr_cmode = CMODE_8KGAME;
     }
+    cart_config_changed_slotmain((uint8_t)rr_cmode, (uint8_t)rr_cmode, CMODE_READ);
 
     /* on the real hardware pressing reset would NOT reset the flash statemachine,
        only a powercycle would help. we do it here anyway :)
     */
     flash040core_reset(flashrom_state);
+    if (rr_enabled && clockport_device) {
+        clockport_device->reset(clockport_device->device_context);
+    }
 }
 
-void retroreplay_config_setup(BYTE *rawcart)
+void retroreplay_config_setup(uint8_t *rawcart)
 {
-    DBG(("retroreplay_config_setup bank jumper: %d offset: %08x\n", rr_hw_bankjumper, rom_offset));
+    DBG(("retroreplay_config_setup bank jumper: %d offset: %08x", rr_hw_bankjumper, rom_offset));
 
     if (rr_hw_flashjumper) {
-        cart_config_changed_slotmain(2, 2, CMODE_READ);
+        rr_cmode = CMODE_RAM;
     } else {
-        cart_config_changed_slotmain(0, 0, CMODE_READ);
+        rr_cmode = CMODE_8KGAME;
     }
+    cart_config_changed_slotmain((uint8_t)rr_cmode, (uint8_t)rr_cmode, CMODE_READ);
 
     flashrom_state = lib_malloc(sizeof(flash040_context_t));
     flash040core_init(flashrom_state, maincpu_alarm_context, FLASH040_TYPE_010, roml_banks);
@@ -619,14 +879,19 @@ int retroreplay_cart_enabled(void)
 
 static int set_rr_revision(int val, void *param)
 {
-    rr_revision = val;
+    rr_revision = val ? 1 : 0;
+    DBG(("set_rr_revision: %d", rr_revision));
+
+    if (rr_active) {
+        maincpu_resync_limits();
+    }
     return 0;
 }
 
 static int set_rr_flashjumper(int val, void *param)
 {
-    rr_hw_flashjumper = val;
-    DBG(("set_rr_flashjumper: %d\n", rr_hw_flashjumper));
+    rr_hw_flashjumper = val ? 1 : 0;
+    DBG(("set_rr_flashjumper: %d", rr_hw_flashjumper));
     return 0;
 }
 
@@ -637,19 +902,88 @@ static int set_rr_flashjumper(int val, void *param)
 static int set_rr_bankjumper(int val, void *param)
 {
     /* if the jumper is set, physical bank 0 is selected */
-    rr_hw_bankjumper = val;
+    rr_hw_bankjumper = val ? 1 : 0;
+
     if (rr_hw_bankjumper) {
         rom_offset = 0x0;
     } else {
         rom_offset = 0x10000;
     }
-    DBG(("bank jumper: %d offset: %08x\n", rr_hw_bankjumper, rom_offset));
+    if (rr_active) {
+        maincpu_resync_limits();
+    }
+    DBG(("set_rr_bankjumper bank jumper: %d offset: %08x", rr_hw_bankjumper, rom_offset));
     return 0;
 }
 
 static int set_rr_bios_write(int val, void *param)
 {
-    rr_bios_write = val;
+    rr_bios_write = val ? 1 : 0;
+    DBG(("set_rr_bios_write: %d", rr_bios_write));
+
+    return 0;
+}
+
+static int set_rr_clockport_device(int val, void *param)
+{
+    DBG(("set_rr_clockport_device: %d", val));
+    if (val == clockport_device_id) {
+        return 0;
+    }
+
+    if (!rr_enabled) {
+        clockport_device_id = val;
+        return 0;
+    }
+
+    if (clockport_device_id != CLOCKPORT_DEVICE_NONE) {
+        clockport_device->close(clockport_device);
+        clockport_device_id = CLOCKPORT_DEVICE_NONE;
+        clockport_device = NULL;
+    }
+
+    if (val != CLOCKPORT_DEVICE_NONE) {
+        clockport_device = clockport_open_device(val, STRING_RETRO_REPLAY);
+        if (!clockport_device) {
+            return -1;
+        }
+        clockport_device_id = val;
+    }
+    return 0;
+}
+
+static int clockport_activate(void)
+{
+    DBG(("clockport_activate"));
+    if (rr_enabled) {
+        return 0;
+    }
+
+    if (clockport_device_id == CLOCKPORT_DEVICE_NONE) {
+        return 0;
+    }
+
+    clockport_device = clockport_open_device(clockport_device_id, STRING_RETRO_REPLAY);
+    if (!clockport_device) {
+        return -1;
+    }
+    return 0;
+}
+
+static int clockport_deactivate(void)
+{
+    DBG(("clockport_deactivate"));
+    if (!rr_enabled) {
+        return 0;
+    }
+
+    if (clockport_device_id == CLOCKPORT_DEVICE_NONE) {
+        return 0;
+    }
+
+    clockport_device->close(clockport_device);
+    clockport_device = NULL;
+
     return 0;
 }
 
@@ -660,9 +994,11 @@ static const resource_int_t resources_int[] = {
       &rr_hw_bankjumper, set_rr_bankjumper, NULL },
     { "RRBiosWrite", 0, RES_EVENT_NO, NULL,
       &rr_bios_write, set_rr_bios_write, NULL },
-    { "RRrevision", 0, RES_EVENT_NO, NULL,
-        &rr_revision, set_rr_revision, NULL },
-    { NULL }
+    { "RRrevision", RR_REV_RETRO_REPLAY, RES_EVENT_NO, NULL,
+      &rr_revision, set_rr_revision, NULL },
+    { "RRClockPort", 0, RES_EVENT_NO, NULL,
+      &clockport_device_id, set_rr_clockport_device, NULL },
+    RESOURCE_INT_LIST_END
 };
 
 int retroreplay_resources_init(void)
@@ -672,75 +1008,114 @@ int retroreplay_resources_init(void)
 
 void retroreplay_resources_shutdown(void)
 {
+    lib_free(clockport_device_names);
+    clockport_device_names = NULL;
 }
 
 /* ------------------------------------------------------------------------- */
 
 static const cmdline_option_t cmdline_options[] =
 {
-    { "-rrbioswrite", SET_RESOURCE, 0,
+    { "-rrbioswrite", SET_RESOURCE, CMDLINE_ATTRIB_NONE,
       NULL, NULL, "RRBiosWrite", (resource_value_t)1,
-      USE_PARAM_STRING, USE_DESCRIPTION_ID,
-      IDCLS_UNUSED, IDCLS_ENABLE_SAVE_RR_ROM_AT_EXIT,
-      NULL, NULL },
-    { "+rrbioswrite", SET_RESOURCE, 0,
+      NULL, "Enable saving of the RR ROM at exit" },
+    { "+rrbioswrite", SET_RESOURCE, CMDLINE_ATTRIB_NONE,
       NULL, NULL, "RRBiosWrite", (resource_value_t)0,
-      USE_PARAM_STRING, USE_DESCRIPTION_ID,
-      IDCLS_UNUSED, IDCLS_DISABLE_SAVE_RR_ROM_AT_EXIT,
-      NULL, NULL },
-    { "-rrbankjumper", SET_RESOURCE, 0,
+      NULL, "Disable saving of the RR ROM at exit" },
+    { "-rrbankjumper", SET_RESOURCE, CMDLINE_ATTRIB_NONE,
       NULL, NULL, "RRBankJumper", (resource_value_t)1,
-      USE_PARAM_STRING, USE_DESCRIPTION_ID,
-      IDCLS_UNUSED, IDCLS_SET_RR_BANK_JUMPER,
-      NULL, NULL },
-    { "+rrbankjumper", SET_RESOURCE, 0,
+      NULL, "Set RR Bank Jumper" },
+    { "+rrbankjumper", SET_RESOURCE, CMDLINE_ATTRIB_NONE,
       NULL, NULL, "RRBankJumper", (resource_value_t)0,
-      USE_PARAM_STRING, USE_DESCRIPTION_ID,
-      IDCLS_UNUSED, IDCLS_UNSET_RR_BANK_JUMPER,
-      NULL, NULL },
-    { "-rrflashjumper", SET_RESOURCE, 0,
+      NULL, "Unset RR Bank Jumper" },
+    { "-rrflashjumper", SET_RESOURCE, CMDLINE_ATTRIB_NONE,
       NULL, NULL, "RRFlashJumper", (resource_value_t)1,
-      USE_PARAM_STRING, USE_DESCRIPTION_ID,
-      IDCLS_UNUSED, IDCLS_SET_RR_FLASH_JUMPER,
-      NULL, NULL },
-    { "+rrflashjumper", SET_RESOURCE, 0,
+      NULL, "Set RR Flash Jumper" },
+    { "+rrflashjumper", SET_RESOURCE, CMDLINE_ATTRIB_NONE,
       NULL, NULL, "RRFlashJumper", (resource_value_t)0,
-      USE_PARAM_STRING, USE_DESCRIPTION_ID,
-      IDCLS_UNUSED, IDCLS_UNSET_RR_FLASH_JUMPER,
-      NULL, NULL },
-    { NULL }
+      NULL, "Unset RR Bank Jumper" },
+    { "-rrrev", SET_RESOURCE, CMDLINE_ATTRIB_NEED_ARGS,
+      NULL, NULL, "RRrevision", NULL,
+      "<Revision>", "Set RR Revision (0: Retro Replay, 1: Nordic Replay)" },
+    CMDLINE_LIST_END
+};
+
+static cmdline_option_t clockport_cmdline_options[] =
+{
+    { "-rrclockportdevice", SET_RESOURCE, CMDLINE_ATTRIB_NEED_ARGS,
+      NULL, NULL, "RRClockPort", NULL,
+      "<device>", NULL },
+    CMDLINE_LIST_END
 };
 
 int retroreplay_cmdline_options_init(void)
 {
-    return cmdline_register_options(cmdline_options);
+    int i;
+    char *tmp;
+    char number[10];
+
+    if (cmdline_register_options(cmdline_options) < 0) {
+        return -1;
+    }
+
+    sprintf(number, "%d", clockport_supported_devices[0].id);
+
+    clockport_device_names = util_concat("Clockport device. (", number, ": ", clockport_supported_devices[0].name, NULL);
+
+    for (i = 1; clockport_supported_devices[i].name; ++i) {
+        tmp = clockport_device_names;
+        sprintf(number, "%d", clockport_supported_devices[i].id);
+        clockport_device_names = util_concat(tmp, ", ", number, ": ", clockport_supported_devices[i].name, NULL);
+        lib_free(tmp);
+    }
+    tmp = clockport_device_names;
+    clockport_device_names = util_concat(tmp, ")", NULL);
+    lib_free(tmp);
+    clockport_cmdline_options[0].description = clockport_device_names;
+
+    return cmdline_register_options(clockport_cmdline_options);
 }
 
 static int retroreplay_common_attach(void)
 {
-    if (c64export_add(&export_res) < 0) {
+    if (export_add(&export_res) < 0) {
         return -1;
     }
 
     retroreplay_io1_list_item = io_source_register(&retroreplay_io1_device);
     retroreplay_io2_list_item = io_source_register(&retroreplay_io2_device);
+    retroreplay_clockport_io1_list_item = io_source_register(&retroreplay_clockport_io1_device);
+
+    if (clockport_activate() < 0) {
+        return -1;
+    }
+
+    rr_enabled = 1;
+
+    nofreeze_alarm = alarm_new(maincpu_alarm_context, "NoFreezeAlarm", nofreeze_alarm_handler, NULL);
 
     return 0;
 }
 
-int retroreplay_bin_attach(const char *filename, BYTE *rawcart)
+int retroreplay_bin_attach(const char *filename, uint8_t *rawcart)
 {
-    int len = 0;
+    off_t len;
     FILE *fd;
 
     retroreplay_filetype = 0;
     retroreplay_filename = NULL;
 
+    DBG(("retroreplay_bin_attach:%s", filename));
+
     fd = fopen(filename, MODE_READ);
-    if(fd == NULL) {
+    if (fd == NULL) {
         return -1;
     }
-    len = util_file_length(fd);
+    len = archdep_file_size(fd);
+    if (len < 0) {
+        fclose(fd);
+        return -1;
+    }
     fclose(fd);
 
     memset(rawcart, 0xff, 0x20000);
@@ -766,15 +1141,15 @@ int retroreplay_bin_attach(const char *filename, BYTE *rawcart)
             return -1;
     }
     retroreplay_filetype = CARTRIDGE_FILETYPE_BIN;
-    retroreplay_filename = lib_stralloc(filename);
+    retroreplay_filename = lib_strdup(filename);
     return retroreplay_common_attach();
 }
 
 /*
-    a CRT may contain up to 16 8k chunks. 64K and 128K total are accepted.
-    - 64K files will always get loaded into logical bank 0
+    a CRT may contain up to 16 8k chunks. 32K, 64K and 128K total are accepted.
+    - 32K and 64K files will always get loaded into logical bank 0
 */
-int retroreplay_crt_attach(FILE *fd, BYTE *rawcart, const char *filename)
+int retroreplay_crt_attach(FILE *fd, uint8_t *rawcart, const char *filename, uint8_t revision)
 {
     crt_chip_header_t chip;
     int i;
@@ -783,6 +1158,8 @@ int retroreplay_crt_attach(FILE *fd, BYTE *rawcart, const char *filename)
 
     retroreplay_filetype = 0;
     retroreplay_filename = NULL;
+
+    DBG(("retroreplay_crt_attach:%s", filename));
 
     for (i = 0; i <= 15; i++) {
         if (crt_read_chip_header(&chip, fd)) {
@@ -798,12 +1175,14 @@ int retroreplay_crt_attach(FILE *fd, BYTE *rawcart, const char *filename)
         }
     }
 
-    if ((i != 8) && (i != 16)) {
+    if ((i != 4) && (i != 8) && (i != 16)) {
         return -1;
     }
 
     retroreplay_filetype = CARTRIDGE_FILETYPE_CRT;
-    retroreplay_filename = lib_stralloc(filename);
+    retroreplay_filename = lib_strdup(filename);
+
+    rr_revision = (revision > 0) ? RR_REV_NORDIC_REPLAY : RR_REV_RETRO_REPLAY;
 
     return retroreplay_common_attach();
 }
@@ -817,7 +1196,7 @@ static int checkempty(int bank)
 {
     int i;
     bank *= 0x10000;
-    for (i = 0;i < 0x10000;i++) {
+    for (i = 0; i < 0x10000; i++) {
         if (roml_banks[i + bank] != 0xff) {
             return 0;
         }
@@ -832,6 +1211,8 @@ int retroreplay_bin_save(const char *filename)
     if (filename == NULL) {
         return -1;
     }
+
+    DBG(("retroreplay_bin_save:%s", filename));
 
     fd = fopen(filename, MODE_WRITE);
 
@@ -853,6 +1234,8 @@ int retroreplay_bin_save(const char *filename)
         }
     }
 
+    fclose(fd);
+
     return 0;
 }
 
@@ -860,10 +1243,12 @@ int retroreplay_crt_save(const char *filename)
 {
     FILE *fd;
     crt_chip_header_t chip;
-    BYTE *data;
+    uint8_t *data;
     int i;
 
-    fd = crt_create(filename, CARTRIDGE_RETRO_REPLAY, 1, 0, STRING_RETRO_REPLAY);
+    DBG(("retroreplay_crt_save:%s", filename));
+
+    fd = crt_create_v11(filename, CARTRIDGE_RETRO_REPLAY, rr_revision, 1, 0, STRING_RETRO_REPLAY);
 
     if (fd == NULL) {
         return -1;
@@ -906,6 +1291,8 @@ int retroreplay_crt_save(const char *filename)
 
 int retroreplay_flush_image(void)
 {
+    DBG(("retroreplay_flush_image:%d", retroreplay_filetype));
+
     if (retroreplay_filetype == CARTRIDGE_FILETYPE_BIN) {
         return retroreplay_bin_save(retroreplay_filename);
     } else if (retroreplay_filetype == CARTRIDGE_FILETYPE_CRT) {
@@ -916,6 +1303,7 @@ int retroreplay_flush_image(void)
 
 void retroreplay_detach(void)
 {
+    DBG(("retroreplay_detach"));
     if (rr_bios_write && flashrom_state->flash_dirty) {
         retroreplay_flush_image();
     }
@@ -925,92 +1313,157 @@ void retroreplay_detach(void)
     flashrom_state = NULL;
     lib_free(retroreplay_filename);
     retroreplay_filename = NULL;
-    c64export_remove(&export_res);
+    export_remove(&export_res);
+    clockport_deactivate();
     io_source_unregister(retroreplay_io1_list_item);
     io_source_unregister(retroreplay_io2_list_item);
+    io_source_unregister(retroreplay_clockport_io1_list_item);
     retroreplay_io1_list_item = NULL;
     retroreplay_io2_list_item = NULL;
+    retroreplay_clockport_io1_list_item = NULL;
+    rr_enabled = 0;
 }
 
 /* ---------------------------------------------------------------------*/
 
-#define CART_DUMP_VER_MAJOR   0
-#define CART_DUMP_VER_MINOR   1
-#define SNAP_MODULE_NAME  "CARTRR"
-#define FLASH_SNAP_MODULE_NAME  "FLASH040RR"
+/* CARTRR snapshot module format:
+
+   type  | name              | version | description
+   -------------------------------------------------
+   BYTE  | revision          |   0.1+  | RR revision
+   BYTE  | active            |   0.0+  | cartridge active flag
+   BYTE  | frozen            |   0.2+  | frozen flag
+   BYTE  | cmode             |   0.3   | cmode
+   BYTE  | clockport enabled |   0.0+  | clockport enabled flag
+   BYTE  | bank              |   0.0+  | current bank
+   BYTE  | write once        |   0.0+  | write once flag
+   BYTE  | allow bank        |   0.0+  | allow bank flag
+   BYTE  | no freeze         |   0.0+  | no freeze flag
+   BYTE  | REU mapping       |   0.0+  | REU mapping flag
+   BYTE  | RAM at a000       |   0.1+  | RAM at $A000 flag
+   BYTE  | flash jumper      |   0.0+  | flash jumper state
+   BYTE  | bank jumper       |   0.0+  | bank jumper state
+   BYTE  | ROM offset        |   0.0+  | ROM offset
+   ARRAY | ROML              |   0.0+  | 131072 BYTES of ROML data
+   ARRAY | RAM               |   0.0+  | 32768 BYTES of RAM data
+ */
+
+static const char snap_module_name[] = "CARTRR";
+static const char flash_snap_module_name[] = "FLASH040RR";
+#define SNAP_MAJOR   0
+#define SNAP_MINOR   3
 
 int retroreplay_snapshot_write_module(snapshot_t *s)
 {
     snapshot_module_t *m;
 
-    m = snapshot_module_create(s, SNAP_MODULE_NAME,
-                          CART_DUMP_VER_MAJOR, CART_DUMP_VER_MINOR);
+    m = snapshot_module_create(s, snap_module_name, SNAP_MAJOR, SNAP_MINOR);
+
     if (m == NULL) {
         return -1;
     }
 
     if (0
-        || (SMW_B(m, (BYTE)rr_revision) < 0)
-        || (SMW_B(m, (BYTE)rr_active) < 0)
-        || (SMW_B(m, (BYTE)rr_clockport_enabled) < 0)
-        || (SMW_B(m, (BYTE)rr_bank) < 0)
-        || (SMW_B(m, (BYTE)write_once) < 0)
-        || (SMW_B(m, (BYTE)allow_bank) < 0)
-        || (SMW_B(m, (BYTE)no_freeze) < 0)
-        || (SMW_B(m, (BYTE)reu_mapping) < 0)
-        || (SMW_B(m, (BYTE)export_ram_at_a000) < 0)
-        || (SMW_B(m, (BYTE)rr_hw_flashjumper) < 0)
-        || (SMW_B(m, (BYTE)rr_hw_bankjumper) < 0)
-        || (SMW_DW(m, (DWORD)rom_offset) < 0)
-        || (SMW_BA(m, roml_banks, 0x20000) < 0)
-        || (SMW_BA(m, export_ram0, 0x8000) < 0)) {
+        || SMW_B(m, (uint8_t)rr_revision) < 0
+        || SMW_B(m, (uint8_t)rr_active) < 0
+        || SMW_B(m, (uint8_t)rr_frozen) < 0
+        || SMW_B(m, (uint8_t)rr_cmode) < 0
+        || SMW_B(m, (uint8_t)rr_clockport_enabled) < 0
+        || SMW_B(m, (uint8_t)rr_bank) < 0
+        || SMW_B(m, (uint8_t)write_once) < 0
+        || SMW_B(m, (uint8_t)allow_bank) < 0
+        || SMW_B(m, (uint8_t)no_freeze) < 0
+        || SMW_B(m, (uint8_t)reu_mapping) < 0
+        || SMW_B(m, (uint8_t)export_ram_at_a000) < 0
+        || SMW_B(m, (uint8_t)rr_hw_flashjumper) < 0
+        || SMW_B(m, (uint8_t)rr_hw_bankjumper) < 0
+        || SMW_DW(m, (uint32_t)rom_offset) < 0
+        || SMW_BA(m, roml_banks, 0x20000) < 0
+        || SMW_BA(m, export_ram0, 0x8000) < 0) {
         snapshot_module_close(m);
         return -1;
     }
 
     snapshot_module_close(m);
 
-    if (0
-        || (flash040core_snapshot_write_module(s, flashrom_state, FLASH_SNAP_MODULE_NAME) < 0)) {
-        return -1;
-    }
-
-    return 0;
+    return flash040core_snapshot_write_module(s, flashrom_state, flash_snap_module_name);
 }
 
 int retroreplay_snapshot_read_module(snapshot_t *s)
 {
-    BYTE vmajor, vminor;
+    uint8_t vmajor, vminor;
     snapshot_module_t *m;
-    DWORD temp_rom_offset;
+    uint32_t temp_rom_offset;
 
-    m = snapshot_module_open(s, SNAP_MODULE_NAME, &vmajor, &vminor);
+    m = snapshot_module_open(s, snap_module_name, &vmajor, &vminor);
+
     if (m == NULL) {
         return -1;
     }
 
-    if ((vmajor != CART_DUMP_VER_MAJOR) || (vminor != CART_DUMP_VER_MINOR)) {
-        snapshot_module_close(m);
-        return -1;
+    /* Do not accept versions higher than current */
+    if (snapshot_version_is_bigger(vmajor, vminor, SNAP_MAJOR, SNAP_MINOR)) {
+        snapshot_set_error(SNAPSHOT_MODULE_HIGHER_VERSION);
+        goto fail;
+    }
+
+    /* new in 0.1 */
+    if (!snapshot_version_is_smaller(vmajor, vminor, 0, 1)) {
+        if (SMR_B_INT(m, &rr_revision) < 0) {
+            goto fail;
+        }
+    } else {
+        rr_revision = 0;
+    }
+
+    if (SMR_B_INT(m, &rr_active) < 0) {
+        goto fail;
+    }
+
+    /* new in 0.2 */
+    if (!snapshot_version_is_smaller(vmajor, vminor, 0, 2)) {
+        if (SMR_B_INT(m, &rr_frozen) < 0) {
+            goto fail;
+        }
+    } else {
+        rr_frozen = 0;
+    }
+
+    /* new in 0.3 */
+    if (!snapshot_version_is_smaller(vmajor, vminor, 0, 3)) {
+        if (SMR_B_INT(m, &rr_cmode) < 0) {
+            goto fail;
+        }
+    } else {
+        rr_cmode = CMODE_8KGAME;
     }
 
     if (0
-        || (SMR_B_INT(m, &rr_revision) < 0)
-        || (SMR_B_INT(m, &rr_active) < 0)
-        || (SMR_B_INT(m, &rr_clockport_enabled) < 0)
-        || (SMR_B_INT(m, &rr_bank) < 0)
-        || (SMR_B_INT(m, &write_once) < 0)
-        || (SMR_B_INT(m, &allow_bank) < 0)
-        || (SMR_B_INT(m, &no_freeze) < 0)
-        || (SMR_B_INT(m, &reu_mapping) < 0)
-        || (SMR_B_INT(m, &export_ram_at_a000) < 0)
-        || (SMR_B_INT(m, &rr_hw_flashjumper) < 0)
-        || (SMR_B_INT(m, &rr_hw_bankjumper) < 0)
-        || (SMR_DW(m, &temp_rom_offset) < 0)
-        || (SMR_BA(m, roml_banks, 0x20000) < 0)
-        || (SMR_BA(m, export_ram0, 0x8000) < 0)) {
-        snapshot_module_close(m);
-        return -1;
+        || SMR_B_INT(m, &rr_clockport_enabled) < 0
+        || SMR_B_INT(m, &rr_bank) < 0
+        || SMR_B_INT(m, &write_once) < 0
+        || SMR_B_INT(m, &allow_bank) < 0
+        || SMR_B_INT(m, &no_freeze) < 0
+        || SMR_B_INT(m, &reu_mapping) < 0) {
+        goto fail;
+    }
+
+    /* new in 0.1 */
+    if (!snapshot_version_is_smaller(vmajor, vminor, 0, 1)) {
+        if (SMR_B_INT(m, &export_ram_at_a000) < 0) {
+            goto fail;
+        }
+    } else {
+        export_ram_at_a000 = 0;
+    }
+
+    if (0
+        || SMR_B_INT(m, &rr_hw_flashjumper) < 0
+        || SMR_B_INT(m, &rr_hw_bankjumper) < 0
+        || SMR_DW(m, &temp_rom_offset) < 0
+        || SMR_BA(m, roml_banks, 0x20000) < 0
+        || SMR_BA(m, export_ram0, 0x8000) < 0) {
+        goto fail;
     }
 
     snapshot_module_close(m);
@@ -1021,8 +1474,7 @@ int retroreplay_snapshot_read_module(snapshot_t *s)
 
     flash040core_init(flashrom_state, maincpu_alarm_context, FLASH040_TYPE_010, roml_banks);
 
-    if (0
-        || (flash040core_snapshot_read_module(s, flashrom_state, FLASH_SNAP_MODULE_NAME) < 0)) {
+    if (flash040core_snapshot_read_module(s, flashrom_state, flash_snap_module_name) < 0) {
         flash040core_shutdown(flashrom_state);
         lib_free(flashrom_state);
         flashrom_state = NULL;
@@ -1036,4 +1488,8 @@ int retroreplay_snapshot_read_module(snapshot_t *s)
     retroreplay_filetype = 0;
 
     return 0;
+
+fail:
+    snapshot_module_close(m);
+    return -1;
 }

@@ -40,42 +40,92 @@
 #include "vicii.h"
 #include "viciitypes.h"
 #include "video.h"
+#include "vsync.h"
 
-vicii_resources_t vicii_resources = { 0, 0, 0, 0 };
+/* The old code, before r43758, also delays the change of the actual resource
+   value until the next vblank. This breaks eg the SDL menus (and is generally
+   wrong). The new code changes the resource value immediately, and only delays
+   the update of the internal state (which is the correct thing to do). However,
+   this apparently breaks the rendering of the second (VDC) window in x128 for
+   some reason. */
+
+/* NOTE: this should be fixed after r44823 */
+
+/* #define OLDCODE */
+
+#ifdef OLDCODE
+static int next_border_mode;
+#endif
+
+vicii_resources_t vicii_resources = { 0, 0, 0, 0, 0 };
 static video_chip_cap_t video_chip_cap;
 
-
-static int set_border_mode(int val, void *param)
+static void on_vsync_set_border_mode(void *unused)
 {
     int sync;
+    int pf = 0;
 
     if (resources_get_int("MachineVideoStandard", &sync) < 0) {
         sync = MACHINE_SYNC_PAL;
     }
 
-    if (vicii_resources.border_mode != val) {
-        vicii_resources.border_mode = val;
-        machine_change_timing(sync ^ VICII_BORDER_MODE(vicii_resources.border_mode));
+    if (machine_class != VICE_MACHINE_C64DTV) {
+        if (resources_get_int("MachinePowerFrequency", &pf) < 0) {
+            switch (sync) {
+                case MACHINE_SYNC_PAL:
+                case MACHINE_SYNC_PALN:
+                    pf = 50;
+                break;
+                default:
+                    pf = 60;
+                break;
+            }
+        }
     }
-   return 0;
+#ifdef OLDCODE
+    if (vicii_resources.border_mode != next_border_mode) {
+        vicii_resources.border_mode = next_border_mode;
+#endif
+        machine_change_timing(sync, pf, vicii_resources.border_mode);
+#ifdef OLDCODE
+    }
+#endif
+}
+
+static int set_border_mode(int val, void *param)
+{
+    switch (val) {
+        case VICII_NORMAL_BORDERS:
+        case VICII_FULL_BORDERS:
+        case VICII_DEBUG_BORDERS:
+        case VICII_NO_BORDERS:
+            break;
+        default:
+            return -1;
+    }
+
+#ifdef OLDCODE
+    next_border_mode = val;
+#else
+    vicii_resources.border_mode = val;
+#endif
+    vsync_on_vsync_do(on_vsync_set_border_mode, NULL);
+
+    return 0;
 }
 
 static int set_sprite_sprite_collisions_enabled(int val, void *param)
 {
-    vicii_resources.sprite_sprite_collisions_enabled = val;
+    vicii_resources.sprite_sprite_collisions_enabled = val ? 1 : 0;
+
     return 0;
 }
 
 static int set_sprite_background_collisions_enabled(int val, void *param)
 {
-    vicii_resources.sprite_background_collisions_enabled = val;
-    return 0;
-}
+    vicii_resources.sprite_background_collisions_enabled = val ? 1 : 0;
 
-static int set_new_luminances(int val, void *param)
-{
-    vicii_resources.new_luminances = val;
-    return vicii_color_update_palette(vicii.raster.canvas);
+    return 0;
 }
 
 static const resource_int_t resources_int[] =
@@ -89,12 +139,23 @@ static const resource_int_t resources_int[] =
     { "VICIICheckSbColl", 1, RES_EVENT_SAME, NULL,
       &vicii_resources.sprite_background_collisions_enabled,
       set_sprite_background_collisions_enabled, NULL },
+    RESOURCE_INT_LIST_END
+};
+
+static int set_new_luminances(int val, void *param)
+{
+    vicii_resources.new_luminances = val ? 1 : 0;
+
+    return vicii_color_update_palette(vicii.raster.canvas);
+}
+
+static const resource_int_t resources_int_dtv[] =
+{
     { "VICIINewLuminances", 1, RES_EVENT_NO, NULL,
       &vicii_resources.new_luminances,
       set_new_luminances, NULL },
-    { NULL }
+    RESOURCE_INT_LIST_END
 };
-
 
 int vicii_resources_init(void)
 {
@@ -103,27 +164,37 @@ int vicii_resources_init(void)
     video_chip_cap.dsize_limit_width = 0;
     video_chip_cap.dsize_limit_height = 0;
     video_chip_cap.dscan_allowed = ARCHDEP_VICII_DSCAN;
-    video_chip_cap.hwscale_allowed = ARCHDEP_VICII_HWSCALE;
-    video_chip_cap.scale2x_allowed = ARCHDEP_VICII_DSIZE;
-    video_chip_cap.internal_palette_allowed = 1;
-    video_chip_cap.external_palette_name = "default";
-    video_chip_cap.palemulation_allowed = 1;
-    video_chip_cap.double_buffering_allowed = ARCHDEP_VICII_DBUF;
+    if (machine_class == VICE_MACHINE_C64DTV) {
+        video_chip_cap.external_palette_name = "spiff";
+    } else {
+        video_chip_cap.external_palette_name = "pepto-pal";
+    }
+    video_chip_cap.video_has_palntsc = 1;
+
     video_chip_cap.single_mode.sizex = 1;
     video_chip_cap.single_mode.sizey = 1;
-    video_chip_cap.single_mode.rmode = VIDEO_RENDER_PAL_1X1;
+    video_chip_cap.single_mode.rmode = VIDEO_RENDER_PAL_NTSC_1X1;
     video_chip_cap.double_mode.sizex = 2;
     video_chip_cap.double_mode.sizey = 2;
-    video_chip_cap.double_mode.rmode = VIDEO_RENDER_PAL_2X2;
+    video_chip_cap.double_mode.rmode = VIDEO_RENDER_PAL_NTSC_2X2;
 
     fullscreen_capability(&(video_chip_cap.fullscreen));
 
     vicii.video_chip_cap = &video_chip_cap;
 
-    if (raster_resources_chip_init("VICII", &vicii.raster,
-        &video_chip_cap) < 0)
+    if (raster_resources_chip_init("VICII", &vicii.raster, &video_chip_cap) < 0) {
         return -1;
+    }
+    if (machine_class == VICE_MACHINE_C64DTV) {
+        if (resources_register_int(resources_int_dtv) < 0) {
+            return -1;
+        }
+    }
 
     return resources_register_int(resources_int);
 }
 
+void vicii_comply_with_video_standard(int machine_sync)
+{
+    /* dummy function */
+}

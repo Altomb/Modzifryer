@@ -32,45 +32,50 @@
 #include <string.h>
 
 #include "attach.h"
-#include "diskcontents.h"
+#include "charset.h"
+#include "diskcontents-block.h"
 #include "diskimage.h"
 #include "imagecontents.h"
 #include "lib.h"
+#include "machine-bus.h"
 #include "montypes.h"
 #include "mon_drive.h"
 #include "mon_util.h"
+#include "resources.h"
+#include "serial.h"
 #include "types.h"
 #include "uimon.h"
 #include "vdrive.h"
 #include "vdrive-command.h"
 
 
-#define ADDR_LIMIT(x) ((WORD)(addr_mask(x)))
+#define ADDR_LIMIT(x) ((uint16_t)(addr_mask(x)))
 
 
 void mon_drive_block_cmd(int op, int track, int sector, MON_ADDR addr)
 {
-    vdrive_t *floppy;
+    vdrive_t *vdrive;
+    /* TODO: drive 1? */
+    unsigned int drive = 0;
 
     mon_evaluate_default_addr(&addr);
 
-    floppy = file_system_get_vdrive(8);
+    vdrive = file_system_get_vdrive(8);
 
-    if (!floppy || floppy->image == NULL) {
+    if (!vdrive) {
         mon_out("No disk attached\n");
         return;
     }
 
     if (!op) {
-        BYTE readdata[256];
-        int i,j, dst;
+        uint8_t readdata[256];
+        int i, j, dst;
         MEMSPACE dest_mem;
 
         /* We ignore disk error codes here.  */
-        if (disk_image_read_sector(floppy->image, readdata, track, sector)
+        if (vdrive_ext_read_sector(vdrive, drive, readdata, track, sector)
             < 0) {
-            mon_out("Error reading track %d sector %d\n",
-                      track, sector);
+            mon_out("Error reading track %d sector %d\n", track, sector);
             return;
         }
 
@@ -78,41 +83,43 @@ void mon_drive_block_cmd(int op, int track, int sector, MON_ADDR addr)
             dst = addr_location(addr);
             dest_mem = addr_memspace(addr);
 
-            for (i = 0; i < 256; i++)
-                mon_set_mem_val(dest_mem, ADDR_LIMIT(dst +  i), readdata[i]);
+            for (i = 0; i < 256; i++) {
+                mon_set_mem_val(dest_mem, ADDR_LIMIT(dst + i), readdata[i]);
+            }
 
             mon_out("Read track %d sector %d into address $%04x\n",
-                      track, sector, dst);
+                    track, sector, (unsigned int)dst);
         } else {
             for (i = 0; i < 16; i++) {
-                mon_out(">%04x", i * 16);
+                mon_out(">%04x", (unsigned int)(i * 16));
                 for (j = 0; j < 16; j++) {
-                    if ((j & 3) == 0)
+                    if ((j & 3) == 0) {
                         mon_out(" ");
+                    }
                     mon_out(" %02x", readdata[i * 16 + j]);
                 }
                 mon_out("\n");
             }
         }
     } else {
-        BYTE writedata[256];
+        uint8_t writedata[256];
         int i, src;
         MEMSPACE src_mem;
 
         src = addr_location(addr);
         src_mem = addr_memspace(addr);
 
-        for (i = 0; i < 256; i++)
+        for (i = 0; i < 256; i++) {
             writedata[i] = mon_get_mem_val(src_mem, ADDR_LIMIT(src + i));
+        }
 
-        if (disk_image_write_sector(floppy->image, writedata, track, sector)) {
-            mon_out("Error writing track %d sector %d\n",
-                      track, sector);
+        if (vdrive_ext_write_sector(vdrive, drive, writedata, track, sector)) {
+            mon_out("Error writing track %d sector %d\n", track, sector);
             return;
         }
 
         mon_out("Write data from address $%04x to track %d sector %d\n",
-                  src, track, sector);
+                (unsigned int)src, track, sector);
     }
 }
 
@@ -120,52 +127,94 @@ void mon_drive_block_cmd(int op, int track, int sector, MON_ADDR addr)
 void mon_drive_execute_disk_cmd(char *cmd)
 {
     unsigned int len;
-    int rc;
-    vdrive_t *floppy;
-
-    /* FIXME */
-    floppy = file_system_get_vdrive(8);
-
-    len = (unsigned int)strlen(cmd);
-
-    rc = vdrive_command_execute(floppy, (BYTE *)cmd, len);
-}
-
-void mon_drive_list(int drive_number)
-{
-    char *name;
-    image_contents_t *listing;
     vdrive_t *vdrive;
 
-    if ((drive_number < 8) || (drive_number > 11)) {
-        drive_number = 8;
+    /* FIXME: Unit/Drive? */
+    vdrive = file_system_get_vdrive(8);
+
+    len = (unsigned int)strlen(cmd);
+    charset_petconvstring((uint8_t*)cmd, CONVERT_TO_PETSCII);
+    vdrive_command_execute(vdrive, (uint8_t *)cmd, len);
+    if (vdrive->buffers[15].buffer) {
+        mon_out("%s\n", vdrive->buffers[15].buffer);
+    }
+}
+
+/* FIXME: this function should perhaps live elsewhere */
+/* check if a drive is associated with a filesystem/directory */
+int mon_drive_is_fsdevice(int drive_unit)
+{
+    int trapdevice = 0, truedrive = 0, busdevice = 0 /* , fsdevice = 0 */;
+    /* FIXME: unsure if this check really works as advertised */
+    resources_get_int_sprintf("TrapDevice%d", &trapdevice, drive_unit);
+    resources_get_int_sprintf("Drive%dTrueEmulation", &truedrive, drive_unit);
+    resources_get_int_sprintf("BusDevice%i", &busdevice, drive_unit);
+    /* resources_get_int_sprintf("FileSystemDevice%i", &fsdevice, drive_unit); */
+    if ((trapdevice && !truedrive) || (!trapdevice && busdevice)) {
+        if (machine_bus_device_type_get(drive_unit) == SERIAL_DEVICE_FS) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* FIXME: this function should perhaps live elsewhere */
+/* for a given drive unit, return the associated fsdevice directory, or NULL
+   if there is none */
+const char *mon_drive_get_fsdevice_path(int drive_unit)
+{
+    const char *fspath = NULL;
+    if (mon_drive_is_fsdevice(drive_unit)) {
+        resources_get_string_sprintf("FSDevice%iDir", &fspath, drive_unit);
+    }
+    return fspath;
+}
+
+void mon_drive_list(int drive_unit)
+{
+    image_contents_t *listing;
+    vdrive_t *vdrive;
+    /* TODO: drive 1? */
+    const char *fspath = NULL;
+
+    if ((drive_unit < 8) || (drive_unit > 11)) {
+        drive_unit = 8;
     }
 
-    vdrive = file_system_get_vdrive(drive_number);
+    vdrive = file_system_get_vdrive(drive_unit);
 
     if (vdrive == NULL || vdrive->image == NULL) {
-        mon_out("Drive %i not ready.\n", drive_number);
+        if ((fspath = mon_drive_get_fsdevice_path(drive_unit))) {
+            mon_show_dir(fspath);
+            return;
+        }
+        mon_out("Drive %i not ready.\n", drive_unit);
         return;
     }
 
-    name = disk_image_name_get(vdrive->image);
-
-    listing = diskcontents_read(name, drive_number);
+    listing = diskcontents_block_read(vdrive, 0);
 
     if (listing != NULL) {
-        char *string = image_contents_to_string(listing, 1);
+        char *string = image_contents_to_string(listing, IMAGE_CONTENTS_STRING_PETSCII);
         image_contents_file_list_t *element = listing->file_list;
 
-        mon_out("%s\n", string);
+        /* disk header */
+        /* FIXME: the string should ideally be shown in reverse */
+        mon_petscii_upper_out((int)strlen(string), "%s", string);    /* FIXME: do not use strlen */
         lib_free(string);
+        mon_out("\n");
 
         if (element == NULL) {
             mon_out("Empty image\n");
-        } else do {
-            string = image_contents_file_to_string(element, 1);
-            mon_out("%s\n", string);
-            lib_free(string);
-        } while ((element = element->next) != NULL);
+        } else {
+            do {
+                string = image_contents_file_to_string(element, IMAGE_CONTENTS_STRING_PETSCII);
+                mon_petscii_upper_out((int)strlen(string), "%s", string);    /* FIXME: do not use strlen */
+                lib_free(string);
+                mon_out("\n");
+            }
+            while ((element = element->next) != NULL);
+        }
 
         if (listing->blocks_free >= 0) {
             string = lib_msprintf("%d blocks free.\n", listing->blocks_free);

@@ -28,10 +28,9 @@
 
 #include "raster.h"
 #include "types.h"
-/*#include "vic-mem.h"*/
 
-#define VIC_PAL_SCREEN_WIDTH            272
-#define VIC_NTSC_SCREEN_WIDTH           208
+#define VIC_PAL_SCREEN_WIDTH            284     /* 71 cycles * 4 pixels */
+#define VIC_NTSC_SCREEN_WIDTH           260     /* 65 cycles * 4 pixels */
 
 #define VIC_PAL_MAX_TEXT_COLS           32
 #define VIC_NTSC_MAX_TEXT_COLS          31
@@ -41,31 +40,24 @@
 #define VIC_PAL_DISPLAY_WIDTH           224 /* FIXME: REMOVE */
 #define VIC_NTSC_DISPLAY_WIDTH          200 /* FIXME: REMOVE */
 
-#define VIC_NUM_SPRITES 0
-
 #define VIC_NUM_COLORS 16
 
-/* This is the only machine that needs those defines.  (MSDOS?, OS2?) */
+/* This is the only machine that needs those defines.  (OS2?) */
 #define RASTER_PIXEL(c) (vic.pixel_table.sing[(c)])
 
 /* FIXME: MSDOS does not need double pixel.
 `ifdef' them out once all video chips actually honour this.  */
 #define RASTER_PIXEL2(c) (vic.pixel_table.doub[(c)])
 
-/* On MS-DOS, do not duplicate pixels.  Otherwise, we would always need at
-   least 466 horizontal pixels to contain the whole screen.  */
-/* But this is no problem as 320*200 does not fit anyhow.  */
-#if !defined(__OS2__) && !defined(DINGUX_SDL) && !defined(DINGOO_NATIVE)
 #define VIC_DUPLICATES_PIXELS
-#endif
 
 #ifdef VIC_DUPLICATES_PIXELS
-typedef WORD VIC_PIXEL;
+typedef uint16_t VIC_PIXEL;
 #define VIC_PIXEL(n)    RASTER_PIXEL2(n)
 #define VIC_PIXEL_WIDTH 2
 #define VIC_PIXEL_WIDTH_SHIFT 1
 #else
-typedef BYTE VIC_PIXEL;
+typedef uint8_t VIC_PIXEL;
 #define VIC_PIXEL(n)    RASTER_PIXEL(n)
 #define VIC_PIXEL_WIDTH 1
 #define VIC_PIXEL_WIDTH_SHIFT 0
@@ -76,31 +68,47 @@ typedef BYTE VIC_PIXEL;
 
 /* `clk' value for the beginning of the current line.  */
 #define VIC_LINE_START_CLK(clk)  (((clk) / vic.cycles_per_line) \
-                                 * vic.cycles_per_line)
+                                  * vic.cycles_per_line)
 
+#if 1
+/* HACK See below comments about a version that would work for both interlaced and not.
+ * I just added this to get interlaced vic20 snapshots working. */
+#define VIC_RASTER_Y(clk)   ( \
+                                (unsigned int) \
+                                    ( \
+                                        vic.interlace_enabled \
+                                            ? (((clk) - vic.framestart_cycle) / vic.cycles_per_line) \
+                                            : (((clk) / vic.cycles_per_line) % vic.screen_height) \
+                                    ) \
+                            )
+
+#endif
+#if 0
 /* Current vertical position of the raster.  Unlike `rasterline', which is
    only accurate if a pending `A_RASTERDRAW' event has been served, this is
    guarranteed to be always correct.  It is a bit slow, though.  */
 #define VIC_RASTER_Y(clk)     ((unsigned int)((clk) / vic.cycles_per_line)   \
                                % vic.screen_height)
+#endif
+#if 0
+/* this is faster than the above and does not break with interlace video */
+/* FIXME: apparently this breaks non interlaced :( we need to fix it so it works with PAL too */
+#define VIC_RASTER_Y(clk)     ((unsigned int)((clk) - vic.framestart_cycle) / vic.cycles_per_line)
+#endif
 
 #define VIC_RASTER_X(cycle)      (((int)(cycle) - 7) * 4 * VIC_PIXEL_WIDTH)
 
 /* char affected by a change in this cycle rounded to whole chars */
-#define VIC_RASTER_CHAR(cycle)   ((int)((cycle) \
-                                 - vic.raster.display_xstart / (VIC_PIXEL_WIDTH * 4) - 6) / 2)
+#define VIC_RASTER_CHAR(cycle)   ((int)((cycle) - vic.raster.display_xstart / (VIC_PIXEL_WIDTH * 4) - 6) / 2)
 
 /* char affected by a change in this cycle */
-#define VIC_RASTER_CHAR_INT(cycle)   ((int)((cycle) \
-                                 - vic.raster.display_xstart / (VIC_PIXEL_WIDTH * 4) - 7) / 2)
+#define VIC_RASTER_CHAR_INT(cycle)   ((int)((cycle) - vic.raster.display_xstart / (VIC_PIXEL_WIDTH * 4) - 7) / 2)
 /* half of the char affected by a change in this cycle */
-#define VIC_RASTER_CHAR_FRAC(cycle)   ((int)((cycle) \
-                                 - vic.raster.display_xstart / (VIC_PIXEL_WIDTH * 4) - 7) % 2)
+#define VIC_RASTER_CHAR_FRAC(cycle)   ((int)((cycle) - vic.raster.display_xstart / (VIC_PIXEL_WIDTH * 4) - 7) % 2)
 
 /* Video mode definitions. */
 
-enum vic_video_mode_s
-{
+enum vic_video_mode_s {
     VIC_STANDARD_MODE,
     VIC_NUM_VMODES
 };
@@ -149,8 +157,7 @@ typedef enum vic_area_state_s vic_area_state_t;
 
 struct video_chip_cap_s;
 
-struct vic_s
-{
+struct vic_s {
     int initialized;
 
     signed int log;
@@ -159,7 +166,7 @@ struct vic_s
 
     struct palette_s *palette;
 
-    BYTE regs[0x10];
+    uint8_t regs[0x10];
 
     /* Cycle # within the current line.  */
     unsigned int raster_cycle;
@@ -197,27 +204,33 @@ struct vic_s
     vic_fetch_state_t fetch_state;
 
     /* Screen memory buffer (1 char) */
-    BYTE vbuf;
+    uint8_t vbuf;
 
     /* Offset to the cbuf/gbuf buffers */
     unsigned int buf_offset;
 
     /* Color memory buffer */
-    BYTE cbuf[VIC_MAX_TEXT_COLS];
+    uint8_t cbuf[VIC_MAX_TEXT_COLS];
 
     /* Graphics buffer (chargen/bitmap) */
-    BYTE gbuf[VIC_MAX_TEXT_COLS];
+    uint8_t gbuf[VIC_MAX_TEXT_COLS];
 
-    unsigned int cycles_per_line;
+    /* Geometry and timing parameters of the selected VIC emulation.  */
     unsigned int screen_height;
     unsigned int first_displayed_line;
     unsigned int last_displayed_line;
-    unsigned int screen_width;
-    unsigned int display_width;
-    unsigned int cycle_offset;
-    unsigned int max_text_cols;
+
     int screen_leftborderwidth;
     int screen_rightborderwidth;
+
+    unsigned int screen_width;  /* max width of video (different for PAL/NTSC) */
+    unsigned int display_width; /* width to display (different for border modes) */
+
+    /* parameters (set by vic-chip-model). */
+    unsigned int cycles_per_line;
+
+    unsigned int cycle_offset;
+    unsigned int max_text_cols;
 
     vic_light_pen_t light_pen;
 
@@ -225,13 +238,19 @@ struct vic_s
     struct video_chip_cap_s *video_chip_cap;
 
     struct {
-        BYTE sing[0x100];
-        WORD doub[0x100];
+        uint8_t sing[0x100];
+        uint16_t doub[0x100];
     } pixel_table;
+
+    /* Interlace flag - 0 if normal/non-interlaced, 1 if interlaced */
+    int interlace_enabled;
+    /* which of the two interlace fields is shown */
+    int interlace_field;
+    /* cycle at which the current frame started */
+    CLOCK framestart_cycle;
 };
 typedef struct vic_s vic_t;
 
 extern vic_t vic;
 
 #endif
-

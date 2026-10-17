@@ -3,7 +3,7 @@
  *
  * Written by
  *  Ettore Perazzoli <ettore@comm2000.it>
- *  André Fachat <fachat@physik.tu-chemnitz.de>
+ *  Andre Fachat <fachat@physik.tu-chemnitz.de>
  *
  * This file is part of VICE, the Versatile Commodore Emulator.
  * See README for copyright notice.
@@ -46,16 +46,16 @@
  * would take 2 tables, each 16 times as big, and that would
  * not be so nice on the cpu cache.
  */
-static DWORD dwg_table[16];
+uint32_t dwg_table[16];
 
 static void init_drawing_tables(void)
 {
     int byte, p;
-    BYTE msk;
+    uint8_t msk;
 
     for (byte = 0; byte < 0x10; byte++) {
         for (msk = 0x08, p = 0; p < 4; msk >>= 1, p++) {
-            *((BYTE *)(dwg_table + byte) + p)
+            *((uint8_t *)(dwg_table + byte) + p)
                 = (byte & msk ? 1 : 0);
         }
     }
@@ -80,47 +80,67 @@ static inline void DRAW(int reverse_flag, int offset, int scr_rel,
 {
     /* FIXME: `p' has to be aligned on a 4 byte boundary!
               Is there a better way than masking `offset'?  */
-    BYTE *p = crtc.raster.draw_buffer_ptr + (offset & ~3);
-    DWORD *pw = (DWORD *)p;
-    BYTE *chargen_ptr, *screen_ptr;
+    uint8_t *p = crtc.raster.draw_buffer_ptr + (offset & ~3);
+    uint32_t *pw = (uint32_t *)p;
+    uint8_t *chargen_ptr, *screen_ptr;
     int screen_rel;
     int i, d;
     /* pointer to current chargen line */
     chargen_ptr = crtc.chargen_base
-                + crtc.chargen_rel
-                + (crtc.raster.ycounter & 0x0f);
+                  + crtc.chargen_rel
+                  + (crtc.raster.ycounter & 0x0f);
     /* pointer to current screen line */
-    screen_ptr = crtc.screen_base;
-    screen_rel = ((scr_rel) + (xs));
+#if CRTC_BEAM_RACING
+    if (xs == 0) {
+        /* When called with scr_rel = crtc.screen_rel, not prev_screen_rel */
+        screen_ptr = &crtc.prefetch[0];
+        screen_rel = xs;
+    } else /* Uncached access; called with crtc.prev_screen_rel. */
+#endif
+    {
+        screen_ptr = crtc.screen_base;
+        screen_rel = scr_rel + xs;
+    }
 
     if (crtc.crsrmode && crtc.cursor_lines && crtc.crsrstate) {
-        int crsrrel = ((crtc.regs[14] << 8) | crtc.regs[15]) & crtc.vaddr_mask;
+        /* Note: only the B series have a hardware cursor and there we have
+         * only 1 char/cycle, so multiplying by hw_cols is not needed. */
+        int crsrrel = ((crtc.regs[CRTC_REG_CURSORPOSH] << 8) |
+                        crtc.regs[CRTC_REG_CURSORPOSL]) & crtc.vaddr_mask_eff;
+#if CRTC_BEAM_RACING
+        if (xs == 0) { /* same condition as above */
+            crsrrel -= scr_rel;
+        }
+#endif
 
-        for (i = (xs); i < (xc); i++) {
+        for (i = xs; i < xc; i++) {
             d = *(chargen_ptr
-                + (screen_ptr[screen_rel & crtc.vaddr_mask] << 4));
+                  + (screen_ptr[screen_rel & crtc.vaddr_mask_eff] << 4));
 
             /* FIXME: mask with 0x3fff (screen_rel must be expanded) */
-            if (screen_rel == crsrrel)
+            if (screen_rel == crsrrel) {
                 d ^= 0xff;
+            }
 
             screen_rel++;
 
-            if ((reverse_flag))
+            if (reverse_flag) {
                 d ^= 0xff;
+            }
 
             *pw++ = dwg_table[d >> 4];
             *pw++ = dwg_table[d & 0x0f];
         }
     } else {
-        for (i = (xs); i < (xc); i++) {
+        for (i = xs; i < xc; i++) {
             /* we use 16 bytes/char character generator */
             d = *(chargen_ptr
-                + (screen_ptr[screen_rel & crtc.vaddr_mask] << 4));
+                  + (screen_ptr[screen_rel & crtc.vaddr_mask_eff] << 4));
             screen_rel++;
 
-            if ((reverse_flag))
+            if (reverse_flag) {
                 d ^= 0xff;
+            }
 
             *pw++ = dwg_table[d >> 4];
             *pw++ = dwg_table[d & 0x0f];
@@ -128,7 +148,7 @@ static inline void DRAW(int reverse_flag, int offset, int scr_rel,
     }
 
     /* blank the rest */
-    for (; i < (xe); i++) {
+    for (; i < xe; i++) {
         *pw++ = 0;
         *pw++ = 0;
     }
@@ -136,7 +156,6 @@ static inline void DRAW(int reverse_flag, int offset, int scr_rel,
     if (crtc.hires_draw_callback) {
         (crtc.hires_draw_callback)(p, xs, xc, scr_rel + xs, crtc.raster.ycounter);
     }
-
 }
 
 static void draw_standard_line(void)
@@ -247,4 +266,3 @@ void crtc_draw_init(void)
 
     setup_modes();
 }
-

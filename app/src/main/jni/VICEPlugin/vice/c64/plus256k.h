@@ -27,20 +27,27 @@
 #ifndef VICE_PLUS256K_H
 #define VICE_PLUS256K_H
 
+#include "snapshot.h"
 #include "types.h"
 
 extern int plus256k_enabled;
 
-extern int plus256k_resources_init(void);
-extern void plus256k_resources_shutdown(void);
-extern int plus256k_cmdline_options_init(void);
-extern void plus256k_init(void);
-extern void plus256k_reset(void);
-extern void plus256k_shutdown(void);
+int plus256k_resources_init(void);
+void plus256k_resources_shutdown(void);
+int plus256k_cmdline_options_init(void);
+void plus256k_init(void);
+void plus256k_reset(void);
+void plus256k_shutdown(void);
 
-extern void plus256k_ram_low_store(WORD addr, BYTE value);
-extern void plus256k_ram_high_store(WORD addr, BYTE value);
-extern BYTE plus256k_ram_low_read(WORD addr);
-extern BYTE plus256k_ram_high_read(WORD addr);
+void plus256k_ram_inject(uint16_t addr, uint8_t value);
+void plus256k_ram_low_store(uint16_t addr, uint8_t value);
+void plus256k_ram_high_store(uint16_t addr, uint8_t value);
+uint8_t plus256k_ram_low_read(uint16_t addr);
+uint8_t plus256k_ram_high_read(uint16_t addr);
+
+int set_plus256k_enabled(int value, int disable_reset);
+
+int plus256k_snapshot_write(struct snapshot_s *s);
+int plus256k_snapshot_read(struct snapshot_s *s);
 
 #endif

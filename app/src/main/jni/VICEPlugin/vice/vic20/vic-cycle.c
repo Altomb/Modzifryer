@@ -34,12 +34,20 @@
 #include "maincpu.h"
 #include "mem.h"
 #include "raster.h"
+#include "raster-canvas.h"
 #include "types.h"
 #include "vic.h"
 #include "victypes.h"
+#include "vic20-resources.h"
 #include "vic20mem.h"
 #include "vic20memrom.h"
+#include "vic20.h"
+#include "vic20via.h"
+#include "videoarch.h"
 #include "viewport.h"
+
+#include "vic-cycle.h"
+
 
 /* ------------------------------------------------------------------------- */
 
@@ -60,12 +68,16 @@ static inline void vic_cycle_open_v(void)
 {
     vic.area = VIC_AREA_PENDING;
     vic.raster.display_ystart = vic.raster_line;
-    vic.raster.geometry->gfx_position.y = vic.raster_line - vic.first_displayed_line;
+    vic.raster.geometry->gfx_position.y = vic.raster_line;
 
     if (vic.text_lines == 0) {
         vic_cycle_close_v();
     } else {
-        vic.raster.display_ystop = vic.screen_height - 1;
+        if (vic.screen_height == VIC20_NTSC_SCREEN_LINES) {
+            vic.raster.display_ystop = vic.screen_height;
+        } else {
+            vic.raster.display_ystop = vic.screen_height - 1;
+        }
     }
 }
 
@@ -87,7 +99,7 @@ static inline void vic_cycle_open_h(void)
 
     if (vic.area == VIC_AREA_PENDING) {
         vic.raster.display_ystart = vic.raster_line;
-        vic.raster.geometry->gfx_position.y = vic.raster_line - vic.first_displayed_line;
+        vic.raster.geometry->gfx_position.y = vic.raster_line;
         vic.area = VIC_AREA_DISPLAY;
     }
 
@@ -169,6 +181,7 @@ static inline void vic_cycle_end_of_frame(void)
     vic.raster.ycounter = 0;
     vic.memptr = 0;
     vic.memptr_inc = 0;
+    vic.framestart_cycle = maincpu_clk;
 }
 
 /* Handle memptr increase */
@@ -210,27 +223,33 @@ static inline void vic_cycle_latch_rows(void)
 /* Fetch hendling */
 
 /* Perform actual fetch */
-static inline BYTE vic_cycle_do_fetch(int addr, BYTE *color)
+static inline uint8_t vic_cycle_do_fetch(int addr, uint8_t *color)
 {
-    BYTE b, c;
+    uint8_t b, c;
     int color_addr = 0x9400 + (addr & 0x3ff);
+    int color_addr2 = (addr & 0x03ff) | (vic20_vflihack_userport << 10);
 
     if ((addr & 0x9000) == 0x8000) {
         /* chargen */
         b = vic20memrom_chargen_rom[addr & 0xfff];
-        c = mem_ram[color_addr];
+        c = vflimod_enabled ? vfli_ram[color_addr2] : mem_ram[color_addr];
     } else if ((addr < 0x0400) || ((addr >= 0x1000) && (addr < 0x2000))) {
         /* RAM */
         b = mem_ram[addr];
-        c = mem_ram[color_addr];
+        c = vflimod_enabled ? vfli_ram[color_addr2] : mem_ram[color_addr];
+    } else if (vflimod_enabled && (addr >= 0x0400) && (addr < 0x1000)) {
+        /* only for mike's VFLI hack */
+        /* RAM */
+        b = mem_ram[addr];
+        c = vfli_ram[color_addr2];
     } else if (addr >= 0x9400 && addr < 0x9800) {
         /* color RAM */
-        b = mem_ram[addr];
+        b = vflimod_enabled ? vfli_ram[color_addr2] : mem_ram[color_addr];
         c = b; /* FIXME is this correct? */
     } else {
         /* unconnected */
         b = vic20_v_bus_last_data & (0xf0 | vic20_v_bus_last_high);
-        c = mem_ram[color_addr]; /* FIXME is this correct? */
+        c = vflimod_enabled ? vfli_ram[color_addr2] : mem_ram[color_addr]; /* FIXME: is this correct? */
     }
     *color = vic20_v_bus_last_high = c;
     vic20_v_bus_last_data = b;
@@ -255,7 +274,7 @@ static inline int vic_cycle_fix_addr(int addr)
 static inline void vic_cycle_fetch(void)
 {
     int addr;
-    BYTE b;
+    uint8_t b;
 
     switch (vic.fetch_state) {
         /* fetch has not started yet */
@@ -276,9 +295,7 @@ static inline void vic_cycle_fetch(void)
 
         /* fetch from screen/color memomy */
         case VIC_FETCH_MATRIX:
-            addr = (((vic.regs[5] & 0xf0) << 6)
-                 | ((vic.regs[2] & 0x80) << 2))
-                 + ((vic.memptr + vic.buf_offset));
+            addr = (((vic.regs[5] & 0xf0) << 6) | ((vic.regs[2] & 0x80) << 2))+ ((vic.memptr + vic.buf_offset));
 
             vic.vbuf = vic_cycle_do_fetch(vic_cycle_fix_addr(addr), &b);
             vic.cbuf[vic.buf_offset] = b;
@@ -289,8 +306,7 @@ static inline void vic_cycle_fetch(void)
         /* fetch from chargen */
         case VIC_FETCH_CHARGEN:
             b = vic.vbuf;
-            addr = ((vic.regs[5] & 0xf) << 10)
-                 + ((b * vic.char_height + (vic.raster.ycounter & ((vic.char_height >> 1) | 7))));
+            addr = ((vic.regs[5] & 0xf) << 10) + ((b * vic.char_height + (vic.raster.ycounter & ((vic.char_height >> 1) | 7))));
 
             vic.gbuf[vic.buf_offset] = vic_cycle_do_fetch(vic_cycle_fix_addr(addr), &b);
 
@@ -311,9 +327,10 @@ static inline void vic_cycle_fetch(void)
 }
 
 /* ------------------------------------------------------------------------- */
-
 void vic_cycle(void)
 {
+    int interlace_enable_flag;
+
     if (vic.area == VIC_AREA_IDLE) {
         /* Check for vertical flipflop */
         if (vic.regs[1] == (vic.raster_line >> 1)) {
@@ -323,10 +340,79 @@ void vic_cycle(void)
 
     /* Next cycle */
     vic.raster_cycle++;
-    if (vic.raster_cycle == vic.cycles_per_line) {
-        vic_cycle_end_of_line();
-        if (vic.raster_line == vic.screen_height) {
-            vic_cycle_end_of_frame();
+
+    interlace_enable_flag = (vic.cycles_per_line == VIC20_NTSC_CYCLES_PER_LINE) ? (vic.regs[0] & 0x80) >> 7 : 0;
+
+    if (vic.interlace_enabled) {
+        /* FIXME: this is really not what happens. in reality the last line of the
+                  second field plus the first line of the first field add up to one
+                  additional line. currently this is fixed up later in vic_read_rasterline
+        */
+        /* interlace */
+        if (vic.interlace_field == 0) {
+            if (vic.raster_cycle == vic.cycles_per_line) {
+                vic_cycle_end_of_line();
+                if (vic.raster_line >= vic.screen_height) {
+                    vic.interlace_field = 1;
+                    vic.raster.canvas->videoconfig->interlaced = 1;
+                    vic.raster.canvas->videoconfig->interlace_field = 1;
+                    vic.screen_height = VIC20_NTSC_INTERLACE_FIELD2_SCREEN_LINES;
+                    vic.raster.geometry->screen_size.height = vic.screen_height;
+                    vic_cycle_end_of_frame();
+                    if (!interlace_enable_flag) {
+                        vic.interlace_enabled = 0;
+                    }
+                }
+            }
+        } else {
+            if (vic.raster_cycle == vic.cycles_per_line) {
+                vic_cycle_end_of_line();
+                if (vic.raster_line >= vic.screen_height) {
+                    vic.interlace_field = 0;
+                    vic.raster.canvas->videoconfig->interlaced = 1;
+                    vic.raster.canvas->videoconfig->interlace_field = 0;
+                    vic.screen_height = VIC20_NTSC_INTERLACE_FIELD1_SCREEN_LINES;
+                    vic.raster.geometry->screen_size.height = vic.screen_height;
+                    vic_cycle_end_of_frame();
+                    if (!interlace_enable_flag) {
+                        vic.interlace_enabled = 0;
+                    }
+                }
+            }
+        }
+
+        if (!vic.interlace_enabled) {
+            vic.interlace_field = 0;
+            vic.raster.canvas->videoconfig->interlaced = 0;
+            vic.raster.canvas->videoconfig->interlace_field = 0;
+            vic.screen_height = VIC20_NTSC_SCREEN_LINES;
+            vic.raster.geometry->screen_size.height = vic.screen_height;
+        }
+
+    } else {
+        /* no interlace */
+        if (vic.raster_cycle == vic.cycles_per_line) {
+            vic_cycle_end_of_line();
+            if (vic.raster_line >= vic.screen_height) {
+                /* disable interlace if it was enabled */
+                if ((vic.cycles_per_line == VIC20_NTSC_CYCLES_PER_LINE) &&
+                    (vic.raster.canvas->videoconfig->interlaced == 1)) {
+                    vic.interlace_field = 0;
+                    vic.raster.canvas->videoconfig->interlaced = 0;
+                    vic.raster.canvas->videoconfig->interlace_field = 0;
+                    vic.screen_height = VIC20_NTSC_SCREEN_LINES;
+                    vic.raster.geometry->screen_size.height = vic.screen_height;
+                }
+                vic_cycle_end_of_frame();
+                if (interlace_enable_flag) {
+                    vic.interlace_enabled = 1;
+                    vic.interlace_field = 0;
+                    vic.raster.canvas->videoconfig->interlaced = 1;
+                    vic.raster.canvas->videoconfig->interlace_field = 0;
+                    vic.screen_height = VIC20_NTSC_INTERLACE_FIELD1_SCREEN_LINES;
+                    vic.raster.geometry->screen_size.height = vic.screen_height;
+                }
+            }
         }
     }
 
@@ -371,4 +457,3 @@ void vic_cycle(void)
     /* Perform fetch */
     vic_cycle_fetch();
 }
-

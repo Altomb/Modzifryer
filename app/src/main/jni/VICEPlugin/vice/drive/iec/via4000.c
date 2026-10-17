@@ -6,7 +6,7 @@
  *
  * Based on old code by
  *  Andreas Boose <viceteam@t-online.de>
- *  Andre' Fachat <fachat@physik.tu-chemnitz.de>
+ *  Andre Fachat <fachat@physik.tu-chemnitz.de>
  *  Daniel Sladic <sladic@eecg.toronto.edu>
  *  Ettore Perazzoli <ettore@comm2000.it>
  *
@@ -36,10 +36,8 @@
 
 #include "debug.h"
 #include "drive.h"
-#include "drivecpu.h"
 #include "drivesync.h"
 #include "drivetypes.h"
-#include "glue1571.h"
 #include "iecbus.h"
 #include "iecdrive.h"
 #include "interrupt.h"
@@ -61,51 +59,58 @@ typedef struct drivevia_context_s {
 } drivevia_context_t;
 
 
-void via4000_store(drive_context_t *ctxptr, WORD addr, BYTE data)
+void via4000_store(diskunit_context_t *ctxptr, uint16_t addr, uint8_t data)
 {
+    ctxptr->cpu->cpu_last_data = data;
     viacore_store(ctxptr->via4000, addr, data);
 }
 
-BYTE via4000_read(drive_context_t *ctxptr, WORD addr)
+uint8_t via4000_read(diskunit_context_t *ctxptr, uint16_t addr)
 {
-    return viacore_read(ctxptr->via4000, addr);
+    return ctxptr->cpu->cpu_last_data = viacore_read(ctxptr->via4000, addr);
 }
 
-BYTE via4000_peek(drive_context_t *ctxptr, WORD addr)
+uint8_t via4000_peek(diskunit_context_t *ctxptr, uint16_t addr)
 {
     return viacore_peek(ctxptr->via4000, addr);
+}
+
+int via4000_dump(diskunit_context_t *ctxptr, uint16_t addr)
+{
+    viacore_dump(ctxptr->via4000);
+    return 0;
 }
 
 static void set_ca2(via_context_t *via_context, int state)
 {
 }
 
-static void set_cb2(via_context_t *via_context, int state)
+static void set_cb2(via_context_t *via_context, int state, int offset)
 {
 }
 
 static void set_int(via_context_t *via_context, unsigned int int_num,
                     int value, CLOCK rclk)
 {
-    drive_context_t *drive_context = (drive_context_t *)(via_context->context);
+    diskunit_context_t *dc = (diskunit_context_t *)(via_context->context);
 
-    interrupt_set_irq(drive_context->cpu->int_status, int_num, value, rclk);
+    interrupt_set_irq(dc->cpu->int_status, int_num, value, rclk);
 }
 
 static void restore_int(via_context_t *via_context, unsigned int int_num,
                         int value)
 {
-    drive_context_t *drive_context = (drive_context_t *)(via_context->context);
+    diskunit_context_t *dc = (diskunit_context_t *)(via_context->context);
 
-    interrupt_restore_irq(drive_context->cpu->int_status, int_num, value);
+    interrupt_restore_irq(dc->cpu->int_status, int_num, value);
 }
 
-static void undump_pra(via_context_t *via_context, BYTE byte)
+static void undump_pra(via_context_t *via_context, uint8_t byte)
 {
     drivevia_context_t *viap = (drivevia_context_t *)(via_context->prv);
 
     if (iecbus != NULL) {
-        BYTE *drive_bus, *drive_data;
+        uint8_t *drive_bus, *drive_data;
         unsigned int unit;
 
         drive_bus = &(iecbus->drv_bus[viap->number + 8]);
@@ -113,24 +118,24 @@ static void undump_pra(via_context_t *via_context, BYTE byte)
 
         *drive_data = ~byte;
         *drive_bus = ((((*drive_data) << 3) & 0x40)
-            | (((*drive_data) << 6)
-            & (((*drive_data) | iecbus->cpu_bus) << 3) & 0x80));
+                      | (((*drive_data) << 6)
+                         & (((*drive_data) | iecbus->cpu_bus) << 3) & 0x80));
 
         iecbus->cpu_port = iecbus->cpu_bus;
-        for (unit = 4; unit < 8+DRIVE_NUM; unit++)
+        for (unit = 4; unit < 8 + NUM_DISK_UNITS; unit++) {
             iecbus->cpu_port &= iecbus->drv_bus[unit];
+        }
 
         iecbus->drv_port = (((iecbus->cpu_port >> 4) & 0x4)
-                           | (iecbus->cpu_port >> 7)
-                           | ((iecbus->cpu_bus << 3) & 0x80));
-
+                            | (iecbus->cpu_port >> 7)
+                            | ((iecbus->cpu_bus << 3) & 0x80));
     } else {
-        iec_drive_write((BYTE)(~byte), viap->number);
+        iec_drive_write((uint8_t)(~byte), viap->number);
     }
 }
 
-static void store_pra(via_context_t *via_context, BYTE byte, BYTE oldpa,
-                      WORD addr)
+static void store_pra(via_context_t *via_context, uint8_t byte, uint8_t oldpa,
+                      uint16_t addr)
 {
     drivevia_context_t *viap;
 
@@ -140,7 +145,7 @@ static void store_pra(via_context_t *via_context, BYTE byte, BYTE oldpa,
         DEBUG_IEC_DRV_WRITE(byte);
 
         if (iecbus != NULL) {
-            BYTE *drive_data, *drive_bus;
+            uint8_t *drive_data, *drive_bus;
             unsigned int unit;
 
             drive_bus = &(iecbus->drv_bus[viap->number + 8]);
@@ -148,21 +153,21 @@ static void store_pra(via_context_t *via_context, BYTE byte, BYTE oldpa,
 
             *drive_data = ~byte;
             *drive_bus = ((((*drive_data) << 3) & 0x40)
-                | (((*drive_data) << 6)
-                & (((*drive_data) | iecbus->cpu_bus) << 3) & 0x80));
+                          | (((*drive_data) << 6)
+                             & (((*drive_data) | iecbus->cpu_bus) << 3) & 0x80));
 
             iecbus->cpu_port = iecbus->cpu_bus;
-            for (unit = 4; unit < 8+DRIVE_NUM; unit++)
+            for (unit = 4; unit < 8 + NUM_DISK_UNITS; unit++) {
                 iecbus->cpu_port &= iecbus->drv_bus[unit];
+            }
 
             iecbus->drv_port = (((iecbus->cpu_port >> 4) & 0x4)
-                               | (iecbus->cpu_port >> 7)
-                               | ((iecbus->cpu_bus << 3) & 0x80));
+                                | (iecbus->cpu_port >> 7)
+                                | ((iecbus->cpu_bus << 3) & 0x80));
 
             DEBUG_IEC_BUS_WRITE(iecbus->drv_port);
-
         } else {
-            iec_drive_write((BYTE)(~byte), viap->number);
+            iec_drive_write((uint8_t)(~byte), viap->number);
             DEBUG_IEC_BUS_WRITE(~byte);
         }
 
@@ -170,7 +175,7 @@ static void store_pra(via_context_t *via_context, BYTE byte, BYTE oldpa,
     }
 }
 
-static void undump_prb(via_context_t *via_context, BYTE byte)
+static void undump_prb(via_context_t *via_context, uint8_t byte)
 {
     drivevia_context_t *viap;
 
@@ -180,8 +185,8 @@ static void undump_prb(via_context_t *via_context, BYTE byte)
     viap->drive->led_status |= (byte & 0x20) ? 2 : 0;
 }
 
-static void store_prb(via_context_t *via_context, BYTE byte, BYTE p_oldpb,
-                      WORD addr)
+static void store_prb(via_context_t *via_context, uint8_t byte, uint8_t p_oldpb,
+                      uint16_t addr)
 {
     drivevia_context_t *viap;
 
@@ -191,33 +196,33 @@ static void store_prb(via_context_t *via_context, BYTE byte, BYTE p_oldpb,
     viap->drive->led_status |= (byte & 0x20) ? 2 : 0;
 }
 
-static void undump_pcr(via_context_t *via_context, BYTE byte)
+static void undump_pcr(via_context_t *via_context, uint8_t byte)
 {
 }
 
-static BYTE store_pcr(via_context_t *via_context, BYTE byte, WORD addr)
+static uint8_t store_pcr(via_context_t *via_context, uint8_t byte, uint16_t addr)
 {
     return byte;
 }
 
-static void undump_acr(via_context_t *via_context, BYTE byte)
+static void undump_acr(via_context_t *via_context, uint8_t byte)
 {
 }
 
-static void store_acr(via_context_t *via_context, BYTE byte)
+static void store_acr(via_context_t *via_context, uint8_t byte)
 {
 }
 
-static void store_sr(via_context_t *via_context, BYTE byte)
+static void store_sr(via_context_t *via_context, uint8_t byte)
 {
     drivevia_context_t *viap;
 
     viap = (drivevia_context_t *)(via_context->prv);
 
-    iec_fast_drive_write(~byte, viap->number);
+    iec_fast_drive_write((uint8_t)(~byte), viap->number);
 }
 
-static void store_t2l(via_context_t *via_context, BYTE byte)
+static void store_t2l(via_context_t *via_context, uint8_t byte)
 {
 }
 
@@ -225,19 +230,19 @@ static void reset(via_context_t *via_context)
 {
 }
 
-static BYTE read_pra(via_context_t *via_context, WORD addr)
+static uint8_t read_pra(via_context_t *via_context, uint16_t addr, bool peek_only)
 {
-    BYTE byte;
+    uint8_t byte;
     drivevia_context_t *viap;
 
     viap = (drivevia_context_t *)(via_context->prv);
 
     if (iecbus != NULL) {
         byte = (((via_context->via[VIA_PRA] & 0x1a)
-               | iecbus->drv_port) ^ 0x85);
+                 | iecbus->drv_port) ^ 0x85);
     } else {
         byte = (((via_context->via[VIA_PRA] & 0x1a)
-               | iec_drive_read(viap->number)) ^ 0x85);
+                 | iec_drive_read(viap->number)) ^ 0x85);
     }
 
     DEBUG_IEC_DRV_READ(byte);
@@ -247,27 +252,27 @@ static BYTE read_pra(via_context_t *via_context, WORD addr)
     return byte;
 }
 
-static BYTE read_prb(via_context_t *via_context)
+static uint8_t read_prb(via_context_t *via_context, bool peek_only)
 {
-    BYTE byte;
+    uint8_t byte;
     drivevia_context_t *viap;
-    drive_context_t *drive;
+    diskunit_context_t *drive;
 
     viap = (drivevia_context_t *)(via_context->prv);
-    drive = (drive_context_t *)(via_context->context);
+    drive = (diskunit_context_t *)(via_context->context);
 
     byte = (viap->number << 3) | (pc8477_irq(drive->pc8477) ? 0x80 : 0);
 
     return byte;
 }
 
-void via4000_init(drive_context_t *ctxptr)
+void via4000_init(diskunit_context_t *ctxptr)
 {
     viacore_init(ctxptr->via4000, ctxptr->cpu->alarm_context,
-                 ctxptr->cpu->int_status, ctxptr->cpu->clk_guard);
+                 ctxptr->cpu->int_status);
 }
 
-void via4000_setup_context(drive_context_t *ctxptr)
+void via4000_setup_context(diskunit_context_t *ctxptr)
 {
     drivevia_context_t *viap;
     via_context_t *via;
@@ -285,17 +290,17 @@ void via4000_setup_context(drive_context_t *ctxptr)
     via->rmw_flag = &(ctxptr->cpu->rmw_flag);
     via->clk_ptr = ctxptr->clk_ptr;
 
-    via->myname = lib_msprintf("4000Drive%dVia1", ctxptr->mynumber);
-    via->my_module_name = lib_msprintf("4000VIA1D%d", ctxptr->mynumber);
+    via->myname = lib_msprintf("4000Drive%uVia1", ctxptr->mynumber);
+    via->my_module_name = lib_msprintf("4000VIA1D%u", ctxptr->mynumber);
 
     viacore_setup_context(via);
 
-    via->my_module_name_alt1 = lib_msprintf("VIA1D%d", ctxptr->mynumber);
+    via->my_module_name_alt1 = lib_msprintf("VIA1D%u", ctxptr->mynumber);
     via->my_module_name_alt2 = lib_msprintf("VIA4000");
 
     via->irq_line = IK_IRQ;
 
-    viap->drive = ctxptr->drive;
+    viap->drive = ctxptr->drives[0];
     iecbus = iecbus_drive_port();
 
     via->undump_pra = undump_pra;
@@ -316,4 +321,3 @@ void via4000_setup_context(drive_context_t *ctxptr)
     via->set_cb2 = set_cb2;
     via->reset = reset;
 }
-

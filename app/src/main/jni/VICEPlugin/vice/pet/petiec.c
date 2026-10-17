@@ -3,7 +3,7 @@
  *
  * Written by
  *  Daniel Sladic <sladic@eecg.toronto.edu>
- *  André Fachat <fachat@physik.tu-chemnitz.de>
+ *  Andre Fachat <fachat@physik.tu-chemnitz.de>
  *
  * This file is part of VICE, the Versatile Commodore Emulator.
  * See README for copyright notice.
@@ -33,6 +33,7 @@
 #include "iecdrive.h"
 #include "petiec.h"
 #include "types.h"
+#include "debug.h"
 
 
 void petiec_init(void)
@@ -54,7 +55,25 @@ iecbus_t *iecbus_drive_port(void)
     return NULL;
 }
 
-void parallel_cable_drive_write(int port, BYTE data, int handshake, unsigned int dnr)
+/* This function must have no side effects */
+uint8_t iec_drive_read(unsigned int dnr)
+{
+    /* FIXME: unused */
+    return 0;
+}
+
+void iec_drive_write(uint8_t data, unsigned int dnr)
+{
+    /* FIXME: unused */
+    iec_update_ports();
+}
+
+uint8_t parallel_cable_drive_read(int type, int handshake)
+{
+    return 0;
+}
+
+void parallel_cable_drive_write(int port, uint8_t data, int handshake, unsigned int dnr)
 {
 }
 
@@ -63,3 +82,47 @@ int iec_available_busses(void)
     return IEC_BUS_IEEE;
 }
 
+void iec_fast_drive_direction(int direction, unsigned int dnr)
+{
+}
+
+void iec_fast_drive_write(uint8_t data, unsigned int dnr)
+{
+}
+
+#ifdef DEBUG
+void debug_iec_drv_read(unsigned int data)
+{
+    /* FIXME: unused */
+}
+
+void debug_iec_drv_write(unsigned int data)
+{
+    /* FIXME: unused */
+}
+
+void debug_iec_bus_read(unsigned int data)
+{
+    /* FIXME: unused */
+}
+
+void debug_iec_bus_write(unsigned int data)
+{
+    /* FIXME: unused */
+}
+#endif
+
+/* KLUDGES: dummy to satisfy linker, unused */
+uint8_t plus4tcbm_outputa[2], plus4tcbm_outputb[2], plus4tcbm_outputc[2];
+
+void plus4tcbm_update_pa(uint8_t byte, unsigned int dnr)
+{
+}
+
+void plus4tcbm_update_pb(uint8_t byte, unsigned int dnr)
+{
+}
+
+void plus4tcbm_update_pc(uint8_t byte, unsigned int dnr)
+{
+}

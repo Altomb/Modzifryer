@@ -35,6 +35,8 @@
 
 /* Global clock counter.  */
 CLOCK maincpu_clk = 0L;
+/* if != 0, exit when this many cycles have been executed */
+CLOCK maincpu_clk_limit = 0L;
 
 #define REWIND_FETCH_OPCODE(clock) /*clock-=2*/
 
@@ -46,17 +48,11 @@ CLOCK maincpu_clk = 0L;
 
 #define SKIP_CYCLE 0
 
-/* Route stack operations through read/write handlers */
-
-#define PUSH(val) (*_mem_write_tab_ptr[0x01])((WORD)(0x100 + (reg_sp--)), (BYTE)(val))
-#define PULL()    (*_mem_read_tab_ptr[0x01])((WORD)(0x100 + (++reg_sp)))
-#define STACK_PEEK()  (*_mem_read_tab_ptr[0x01])((WORD)(0x100 + reg_sp))
-
 /* opcode_t etc */
 
 #if !defined WORDS_BIGENDIAN && defined ALLOW_UNALIGNED_ACCESS
 
-#define opcode_t DWORD
+#define opcode_t uint32_t
 
 #define p0 (opcode & 0xff)
 #define p1 ((opcode >> 8) & 0xff)
@@ -68,10 +64,10 @@ CLOCK maincpu_clk = 0L;
 
 #define opcode_t          \
     struct {              \
-        BYTE ins;         \
+        uint8_t ins;         \
         union {           \
-            BYTE op8[2];  \
-            WORD op16;    \
+            uint8_t op8[2];  \
+            uint16_t op16;    \
         } op;             \
     }
 
@@ -105,13 +101,22 @@ CLOCK maincpu_clk = 0L;
 #endif /* WORDS_BIGENDIAN || !ALLOW_UNALIGNED_ACCESS */
 
 
+/* HACK: memmap updates for the reg_pc < bank_limit case */
+#ifdef FEATURE_CPUMEMHISTORY
+#define MEMMAP_UPDATE(addr) memmap_mem_update(addr, 0, 0)
+#else
+#define MEMMAP_UPDATE(addr)
+#endif
+
+
 /* FETCH_OPCODE implementation(s) */
 /* FIXME: update last_read on "< bank_limit" case */
 #if !defined WORDS_BIGENDIAN && defined ALLOW_UNALIGNED_ACCESS
 #define FETCH_OPCODE(o) \
     do { \
         if (((int)reg_pc) < bank_limit) {                       \
-            o = (*((DWORD *)(bank_base + reg_pc)) & 0xffffff);  \
+            o = (*((uint32_t *)(bank_base + reg_pc)) & 0xffffff);  \
+            MEMMAP_UPDATE(reg_pc);                              \
             CLK_INC();                                          \
             CLK_INC();                                          \
             if (fetch_tab[o & 0xff]) {                          \
@@ -134,6 +139,7 @@ CLOCK maincpu_clk = 0L;
     do { \
         if (((int)reg_pc) < bank_limit) {                         \
             (o).ins = *(bank_base + reg_pc);                      \
+            MEMMAP_UPDATE(reg_pc);                                \
             CLK_INC();                                            \
             (o).op.op16 = *(bank_base + reg_pc + 1);              \
             CLK_INC();                                            \

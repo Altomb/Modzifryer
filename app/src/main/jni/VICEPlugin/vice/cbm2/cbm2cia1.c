@@ -2,7 +2,8 @@
  * cbm2cia1.c - Definitions for the MOS6526 (CIA) chip in the CBM-II
  *
  * Written by
- *  Andre' Fachat <fachat@physik.tu-chemnitz.de>
+ *  Andre Fachat <fachat@physik.tu-chemnitz.de>
+ *  Marco van den Heuvel <blackystardust68@yahoo.com>
  *
  * This file is part of VICE, the Versatile Commodore Emulator.
  * See README for copyright notice.
@@ -26,7 +27,7 @@
 /* #define DEBUG_CIA1 */
 
 #ifdef DEBUG_CIA1
-#define DBG(_x_)        log_debug _x_
+#define DBG(_x_) log_printf  _x_
 #else
 #define DBG(_x_)
 #endif
@@ -39,7 +40,7 @@
 #include "cbm2.h"
 #include "cbm2cia.h"
 #include "cia.h"
-#include "drivecpu.h"
+#include "drive.h"
 #include "interrupt.h"
 #include "joystick.h"
 #include "keyboard.h"
@@ -48,12 +49,11 @@
 #include "machine.h"
 #include "maincpu.h"
 #include "parallel.h"
-#include "printer.h"
 #include "tpi.h"
 #include "types.h"
-#include "userport_joystick.h"
+#include "userport.h"
 
-void cia1_store(WORD addr, BYTE data)
+void cia1_store(uint16_t addr, uint8_t data)
 {
 #ifdef DEBUG_CIA1
     if (!((addr >= 0x08) && (addr <= 0x0b))) {
@@ -63,14 +63,14 @@ void cia1_store(WORD addr, BYTE data)
     ciacore_store(machine_context.cia1, addr, data);
 }
 
-BYTE cia1_read(WORD addr)
+uint8_t cia1_read(uint16_t addr)
 {
 #ifdef DEBUG_CIA1
     static int olddata, oldaddr;
-    BYTE data;
+    uint8_t data;
     data = ciacore_read(machine_context.cia1, addr);
 /*    if (!((addr >= 0x08) && (addr <= 0x0b))) { */
-    if ((oldaddr != addr) || (olddata != data)) { 
+    if ((oldaddr != addr) || (olddata != data)) {
         DBG(("cia1_read: %04x %02x", addr, data));
         oldaddr = addr; olddata = data;
     }
@@ -80,7 +80,7 @@ BYTE cia1_read(WORD addr)
 #endif
 }
 
-BYTE cia1_peek(WORD addr)
+uint8_t cia1_peek(uint16_t addr)
 {
     return ciacore_peek(machine_context.cia1, addr);
 }
@@ -122,86 +122,75 @@ void cia1_set_ieee_dir(cia_context_t *cia_context, int isout)
 
 static void do_reset_cia(cia_context_t *cia_context)
 {
-    printer_userport_write_strobe(1);
-    printer_userport_write_data(0xff);
+    store_userport_pbx(0xff, USERPORT_NO_PULSE);
+    store_userport_pa2(1);
 }
 
 static void pulse_ciapc(cia_context_t *cia_context, CLOCK rclk)
 {
-
 }
 
-static void store_ciapa(cia_context_t *cia_context, CLOCK rclk, BYTE byte)
+static void store_ciapa(cia_context_t *cia_context, CLOCK rclk, uint8_t byte)
 {
+    store_userport_pa2((uint8_t)((byte & 4) >> 2));
+    store_userport_pa3((uint8_t)((byte & 8) >> 3));
+
     /* FIXME: PA0 and PA1 are used as selector for the
        Paddle 1/2 selection for the A/D converter. */
-    parallel_cpu_set_bus((BYTE)(cia1_ieee_is_output ? byte : 0xff));
+    parallel_cpu_set_bus((uint8_t)(cia1_ieee_is_output ? byte : 0xff));
 }
 
-static void undump_ciapa(cia_context_t *cia_context, CLOCK rclk, BYTE byte)
+static void undump_ciapa(cia_context_t *cia_context, CLOCK rclk, uint8_t byte)
 {
-    parallel_cpu_set_bus((BYTE)(cia1_ieee_is_output ? byte : 0xff));
+    store_userport_pa2((uint8_t)((byte & 4) >> 2));
+    store_userport_pa3((uint8_t)((byte & 8) >> 3));
+    parallel_cpu_set_bus((uint8_t)(cia1_ieee_is_output ? byte : 0xff));
 }
 
-static void undump_ciapb(cia_context_t *cia_context, CLOCK rclk, BYTE b)
+static void undump_ciapb(cia_context_t *cia_context, CLOCK rclk, uint8_t b)
 {
 }
 
-static void store_ciapb(cia_context_t *cia_context, CLOCK rclk, BYTE byte)
+static void store_ciapb(cia_context_t *cia_context, CLOCK rclk, uint8_t byte)
 {
-    printer_userport_write_data(byte);
-    printer_userport_write_strobe(0);
-    printer_userport_write_strobe(1);
+    store_userport_pbx(byte, USERPORT_NO_PULSE);
 
-    /* FIXME: in the upcoming userport system this call needs to be conditional */
-    userport_joystick_store_pbx(byte);
+    store_userport_pa2(0);
+    store_userport_pa2(1);
 }
 
 /* read_* functions must return 0xff if nothing to read!!! */
-static BYTE read_ciapa(cia_context_t *cia_context)
+static uint8_t read_ciapa(cia_context_t *cia_context)
 {
-    BYTE byte;
+    uint8_t byte;
 
-    drivecpu_execute_all(maincpu_clk);
+    drive_catch_up_hook(maincpu_clk);
 
     /* this reads the 8 bit IEEE488 data bus, but joystick 1 and 2 buttons
        can pull down inputs pa6 and pa7 resp. */
     byte = parallel_bus;
-    if (parallel_debug) {
+#ifdef DEBUG
+    if (debug.ieee) {
         log_message(LOG_DEFAULT,
                     "read: parallel_bus=%02x, pra=%02x, ddra=%02x -> %02x\n",
                     parallel_bus, cia_context->c_cia[CIA_PRA],
                     cia_context->c_cia[CIA_DDRA], byte);
     }
-    if (machine_class == VICE_MACHINE_CBM5x0) {
-        byte = ((byte & ~(cia_context->c_cia[CIA_DDRA]))
-               | (cia_context->c_cia[CIA_PRA] & cia_context->c_cia[CIA_DDRA]))
-               & ~( ((joystick_value[1] & 0x10) ? 0x40 : 0)
-               | ((joystick_value[2] & 0x10) ? 0x80 : 0) );
-    } else {
-        byte = ((byte & ~(cia_context->c_cia[CIA_DDRA]))
-               | (cia_context->c_cia[CIA_PRA] & cia_context->c_cia[CIA_DDRA]));
-    }
+#endif
+    byte = ((byte & ~(cia_context->c_cia[CIA_DDRA]))
+            | (cia_context->c_cia[CIA_PRA] & cia_context->c_cia[CIA_DDRA]));
     return byte;
 }
 
 /* read_* functions must return 0xff if nothing to read!!! */
-static BYTE read_ciapb(cia_context_t *cia_context)
+static uint8_t read_ciapb(cia_context_t *cia_context)
 {
-    BYTE byte = 0xff;
+    uint8_t byte = 0xff;
 
-    if (machine_class == VICE_MACHINE_CBM5x0) {
-        byte = ((0xff & ~(cia_context->c_cia[CIA_DDRB]))
-               | (cia_context->c_cia[CIA_PRB] & cia_context->c_cia[CIA_DDRB]))
-               & ~( (joystick_value[1] & 0x0f)
-               | ((joystick_value[2] & 0x0f) << 4));
-    } else {
-        /* FIXME: in the upcoming userport system this call needs to be conditional */
-        byte = userport_joystick_read_pbx(byte);
+    byte = read_userport_pbx(byte);
 
-        byte &= ((0xff & ~(cia_context->c_cia[CIA_DDRB]))
-               | (cia_context->c_cia[CIA_PRB] & cia_context->c_cia[CIA_DDRB]));
-    }
+    byte &= ((0xff & ~(cia_context->c_cia[CIA_DDRB]))
+             | (cia_context->c_cia[CIA_PRB] & cia_context->c_cia[CIA_DDRB]));
     return byte;
 }
 
@@ -213,28 +202,32 @@ static void read_sdr(cia_context_t *cia_context)
 {
 }
 
-static void store_sdr(cia_context_t *cia_context, BYTE byte)
+static void store_sdr(cia_context_t *cia_context, uint8_t byte)
 {
 }
 
 void cia1_init(cia_context_t *cia_context)
 {
     ciacore_init(machine_context.cia1, maincpu_alarm_context,
-                 maincpu_int_status, maincpu_clk_guard);
+                 maincpu_int_status);
 }
 
-void cia1_set_timing(cia_context_t *cia_context, int todticks)
+void cia1_set_timing(cia_context_t *cia_context, int tickspersec, int powerfreq)
 {
     DBG(("cia1_set_timing: %d ticks", todticks));
-    cia_context->todticks = todticks;
+    cia_context->power_freq = powerfreq;
+    cia_context->ticks_per_sec = tickspersec;
+    cia_context->todticks = tickspersec / powerfreq;
+    cia_context->power_tickcounter = 0;
+    cia_context->power_ticks = 0;
 }
 
-void cia1_setup_context(machine_context_t *machine_context)
+void cia1_setup_context(machine_context_t *machine_ctx)
 {
     cia_context_t *cia;
 
-    machine_context->cia1 = lib_malloc(sizeof(cia_context_t));
-    cia = machine_context->cia1;
+    machine_ctx->cia1 = lib_calloc(1, sizeof(cia_context_t));
+    cia = machine_ctx->cia1;
 
     cia->prv = NULL;
     cia->context = NULL;
@@ -242,11 +235,7 @@ void cia1_setup_context(machine_context_t *machine_context)
     cia->rmw_flag = &maincpu_rmw_flag;
     cia->clk_ptr = &maincpu_clk;
 
-    if (machine_class == VICE_MACHINE_CBM5x0) {
-        cia1_set_timing(cia, C500_NTSC_CYCLES_PER_RFSH);
-    } else {
-        cia1_set_timing(cia, C610_NTSC_CYCLES_PER_RFSH);
-    }
+    cia1_set_timing(cia, C610_NTSC_CYCLES_PER_SEC, 60);
 
     ciacore_setup_context(cia);
 
@@ -273,4 +262,3 @@ void cia1_setup_context(machine_context_t *machine_context)
     cia->pre_read = NULL;
     cia->pre_peek = NULL;
 }
-

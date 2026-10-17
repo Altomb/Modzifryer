@@ -3,6 +3,7 @@
  *
  * Written by
  *  Andreas Boose <viceteam@t-online.de>
+ *  Marco van den Heuvel <blackystardust68@yahoo.com>
  *
  * This file is part of VICE, the Versatile Commodore Emulator.
  * See README for copyright notice.
@@ -30,14 +31,41 @@
 #include "c64mem.h"
 #include "cia.h"
 #include "datasette.h"
+#include "tapeport.h"
 
-
-void datasette_trigger_flux_change(unsigned int on)
+void machine_trigger_flux_change(int port, unsigned int on)
 {
-    ciacore_set_flag(machine_context.cia1);
+    if (port == TAPEPORT_PORT_1) {
+        ciacore_set_flag(machine_context.cia1);
+    }
 }
 
-void datasette_set_tape_sense(int sense)
+void machine_set_tape_read_in(int port, unsigned int on)
 {
-    mem_set_tape_sense(sense);
+    if (port == TAPEPORT_PORT_1) {
+        if (on) {
+            ciacore_set_flag(machine_context.cia1);
+        }
+    }
+}
+
+void machine_set_tape_sense(int port, int sense)
+{
+    if (port == TAPEPORT_PORT_1) {
+        mem_set_tape_sense(sense);
+    }
+}
+
+void machine_set_tape_write_in(int port, int val)
+{
+    if (port == TAPEPORT_PORT_1) {
+        mem_set_tape_write_in(val);
+    }
+}
+
+void machine_set_tape_motor_in(int port, int val)
+{
+    if (port == TAPEPORT_PORT_1) {
+        mem_set_tape_motor_in(val);
+    }
 }

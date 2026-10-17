@@ -3,7 +3,7 @@
  *
  * Written by
  *  Jouko Valta <jopi@stekt.oulu.fi>
- *  André Fachat <fachat@physik.tu-chemnitz.de>
+ *  Andre Fachat <fachat@physik.tu-chemnitz.de>
  *
  * This file is part of VICE, the Versatile Commodore Emulator.
  * See README for copyright notice.
@@ -33,18 +33,17 @@
 struct cia_context_s;
 struct machine_context_s;
 
-extern void cia1_setup_context(struct machine_context_s *machine_context);
+void cia1_setup_context(struct machine_context_s *machine_context);
 
-extern void cia1_init(struct cia_context_s *cia_context);
-extern void cia1_store(WORD addr, BYTE value);
-extern BYTE cia1_read(WORD addr);
-extern BYTE cia1_peek(WORD addr);
+void cia1_init(struct cia_context_s *cia_context);
+void cia1_store(uint16_t addr, uint8_t value);
+uint8_t cia1_read(uint16_t addr);
+uint8_t cia1_peek(uint16_t addr);
 
-extern void cia1_set_ieee_dir(struct cia_context_s *cia_context, int isout);
+void cia1_set_ieee_dir(struct cia_context_s *cia_context, int isout);
 
-extern void cia1_update_model(void);
+void cia1_update_model(void);
 
-extern void cia1_set_timing(struct cia_context_s *cia_context, int todticks);
+void cia1_set_timing(struct cia_context_s *cia_context, int tickspersec, int powerfreq);
 
 #endif
-

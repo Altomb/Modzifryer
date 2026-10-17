@@ -50,7 +50,7 @@ rom is mapped to $e000
 *** Register Details
 
 Writing anywhere to the IO2 area adresses a MC6521 (2 8bit i/o ports). However
-its registers are not simply memory mapped, instead A0-A5 go to D0-D5, D1 to D7 
+its registers are not simply memory mapped, instead A0-A5 go to D0-D5, D1 to D7
 and A6-A7 to RS1/RS0.
 
 addr    dfXX    RRDD DDDD
@@ -65,7 +65,7 @@ data      .X    .... ..D.
 *** MC6821 Registers
 
 RS1  RS0 (CRA2 CRB2 = control register bit 2)
- 
+
 0    0    1    .     Data A
 0    0    0    .     Data Direction A
 0    1    .    .     Control Register A
@@ -78,8 +78,8 @@ RS1  RS0 (CRA2 CRB2 = control register bit 2)
 PA (Output Data)
 
 A0,A1,A2       - ROM Bank
-A3             - extra ROM enable/disable (?)
-A4             - RAM enable/disable (?)
+A3             - extra ROM enable (0) / disable (1)
+A4             - RAM enable (0) / disable (1)
 A5-A7 unused
 
 PB (Output Data)
@@ -115,63 +115,69 @@ CB2            - enable Cartridge (?)
 #define CARTRIDGE_INCLUDE_SLOTMAIN_API
 #include "c64cartsystem.h"
 #undef CARTRIDGE_INCLUDE_SLOTMAIN_API
-#include "c64export.h"
 #include "c64mem.h"
 #include "cartio.h"
 #include "cartridge.h"
+#include "export.h"
 #include "maincpu.h"
 #include "machine.h"
 #include "magicformel.h"
 #include "mc6821core.h"
+#include "ram.h"
 #include "snapshot.h"
 #include "types.h"
 #include "util.h"
 #include "crt.h"
 
 /* ---------------------------------------------------------------------*/
+#define CART_RAM_SIZE (8 * 1024)
 
 /* some prototypes are needed */
-static void magicformel_io1_store(WORD addr, BYTE value);
-static BYTE magicformel_io1_read(WORD addr);
-static BYTE magicformel_io1_peek(WORD addr);
-static void magicformel_io2_store(WORD addr, BYTE value);
-static BYTE magicformel_io2_read(WORD addr);
-static BYTE magicformel_io2_peek(WORD addr);
+static void magicformel_io1_store(uint16_t addr, uint8_t value);
+static uint8_t magicformel_io1_read(uint16_t addr);
+static uint8_t magicformel_io1_peek(uint16_t addr);
+static void magicformel_io2_store(uint16_t addr, uint8_t value);
+static uint8_t magicformel_io2_read(uint16_t addr);
+static uint8_t magicformel_io2_peek(uint16_t addr);
 
 static io_source_t magicformel_io1_device = {
-    CARTRIDGE_NAME_MAGIC_FORMEL,
-    IO_DETACH_CART,
-    NULL,
-    0xde00, 0xdeff, 0xff,
-    0,
-    magicformel_io1_store,
-    magicformel_io1_read,
-    magicformel_io1_peek,
-    NULL, /* dump */
-    CARTRIDGE_MAGIC_FORMEL,
-    0,
-    0
+    CARTRIDGE_NAME_MAGIC_FORMEL, /* name of the device */
+    IO_DETACH_CART,              /* use cartridge ID to detach the device when involved in a read-collision */
+    IO_DETACH_NO_RESOURCE,       /* does not use a resource for detach */
+    0xde00, 0xdeff, 0xff,        /* range for the device, regs:$de00-$deff */
+    0,                           /* read validity is determined by the device upon a read */
+    magicformel_io1_store,       /* store function */
+    NULL,                        /* NO poke function */
+    magicformel_io1_read,        /* read function */
+    magicformel_io1_peek,        /* peek function */
+    NULL,                        /* TODO: device state information dump function */
+    CARTRIDGE_MAGIC_FORMEL,      /* cartridge ID */
+    IO_PRIO_NORMAL,              /* normal priority, device read needs to be checked for collisions */
+    0,                           /* insertion order, gets filled in by the registration function */
+    IO_MIRROR_NONE               /* NO mirroring */
 };
 
 static io_source_t magicformel_io2_device = {
-    CARTRIDGE_NAME_MAGIC_FORMEL,
-    IO_DETACH_CART,
-    NULL,
-    0xdf00, 0xdfff, 0xff,
-    1, /* read is always valid */
-    magicformel_io2_store,
-    magicformel_io2_read,
-    magicformel_io2_peek,
-    NULL, /* dump */
-    CARTRIDGE_MAGIC_FORMEL,
-    0,
-    0
+    CARTRIDGE_NAME_MAGIC_FORMEL, /* name of the device */
+    IO_DETACH_CART,              /* use cartridge ID to detach the device when involved in a read-collision */
+    IO_DETACH_NO_RESOURCE,       /* does not use a resource for detach */
+    0xdf00, 0xdfff, 0xff,        /* range for the device, regs:$df00-$dfff */
+    1,                           /* read is always valid */
+    magicformel_io2_store,       /* store function */
+    NULL,                        /* NO poke function */
+    magicformel_io2_read,        /* read function */
+    magicformel_io2_peek,        /* peek function */
+    NULL,                        /* TODO: device state information dump function */
+    CARTRIDGE_MAGIC_FORMEL,      /* cartridge ID */
+    IO_PRIO_NORMAL,              /* normal priority, device read needs to be checked for collisions */
+    0,                           /* insertion order, gets filled in by the registration function */
+    IO_MIRROR_NONE               /* NO mirroring */
 };
 
 static io_source_list_t *magicformel_io1_list_item = NULL;
 static io_source_list_t *magicformel_io2_list_item = NULL;
 
-static const c64export_resource_t export_res = {
+static const export_resource_t export_res = {
     CARTRIDGE_NAME_MAGIC_FORMEL, 1, 1, &magicformel_io1_device, &magicformel_io2_device, CARTRIDGE_MAGIC_FORMEL
 };
 
@@ -187,7 +193,7 @@ static int hwversion = 0;
 static mc6821_state my6821;
 
 /****************************************************************************
-* 
+*
 ****************************************************************************/
 #ifdef LOG_BANKS
 static int logbanks[0x10];
@@ -211,31 +217,23 @@ static void log_bank(int bank)
 #endif
 
 /****************************************************************************
-* 
+*
 ****************************************************************************/
 
 /*
     magic formel switches GAME depending on ADDR ($E000-$FFFF)
 */
 
-static int kernal_decoder(WORD addr)
+static void change_config(void)
 {
-    export_game = kernal_enabled || freeze_enabled;
-
-    if (export_game) {
-        cart_config_changed_slotmain(2, (BYTE)(3 | (romh_bank << CMODE_BANK_SHIFT)), CMODE_READ | CMODE_PHI2_RAM);
+    if (kernal_enabled || freeze_enabled) {
+        cart_config_changed_slotmain(2, (uint8_t)(3 | (romh_bank << CMODE_BANK_SHIFT)), CMODE_READ | CMODE_PHI2_RAM);
     } else {
-        cart_config_changed_slotmain(2, (BYTE)(2 | (romh_bank << CMODE_BANK_SHIFT)), CMODE_READ | CMODE_PHI2_RAM);
+        cart_config_changed_slotmain(2, (uint8_t)(2 | (romh_bank << CMODE_BANK_SHIFT)), CMODE_READ | CMODE_PHI2_RAM);
     }
-
-    if (addr < 0xe000) {
-        return 0;
-    }
-
-    return 1;
 }
 
-static void freeze_flipflop(int reset,int freeze,int clear)
+static void freeze_flipflop(int reset, int freeze, int clear)
 {
     if (reset) {
         freeze_enabled = 1;
@@ -254,11 +252,11 @@ static void freeze_flipflop(int reset,int freeze,int clear)
  ***************************************************************************/
 
 #ifdef LOG_PORTS
-static void mf_print_pa(BYTE data)
+static void mf_print_pa(uint8_t data)
 {
     /*
         PA (Output Data)
-        
+
         A0,A1,A2       - ROM Bank
         A3             - extra ROM enable/disable (?)
         A4             - RAM enable/disable (?)
@@ -271,9 +269,9 @@ static void mf_print_pa(BYTE data)
     DBG(("[UNUSED %02x] ", (data) & 0xe0));
 }
 
-static void mf_print_pb(BYTE data)
+static void mf_print_pb(uint8_t data)
 {
-    BYTE page;
+    uint8_t page;
 
     /*
         PB (Output Data)
@@ -298,7 +296,7 @@ static void mf_print_pb(BYTE data)
 
 static void mf_set_pa(mc6821_state *ctx)
 {
-    BYTE data = ctx->dataA;
+    uint8_t data = ctx->dataA;
 #ifdef LOG_PORTS
     mf_print_pa(ctx->dataA);
     mf_print_pb(ctx->dataB);
@@ -317,8 +315,8 @@ static void mf_set_pa(mc6821_state *ctx)
     } else {
         romh_bank = data & 0x0f;
     }
-    freeze_flipflop(0 /* reset */,0 /* freeze */, ctx->CB2);
-    kernal_decoder(0xdf00);
+    freeze_flipflop(0 /* reset */, 0 /* freeze */, ctx->CB2);
+    change_config();
 
 #ifdef LOG_BANKS
     log_bank(romh_bank);
@@ -336,7 +334,7 @@ static void mf_set_pa(mc6821_state *ctx)
 
 static void mf_set_pb(mc6821_state *ctx)
 {
-    BYTE data = ctx->dataB;
+    uint8_t data = ctx->dataB;
 #ifdef LOG_PORTS
     mf_print_pa(ctx->dataA);
     mf_print_pb(ctx->dataB);
@@ -368,7 +366,7 @@ static void mf_set_pb(mc6821_state *ctx)
     }
 
     freeze_flipflop(0 /* reset */, 0 /* freeze */, ctx->CB2);
-    kernal_decoder(0xdf00);
+    change_config();
 }
 
 /*
@@ -387,15 +385,15 @@ static void mf_set_ca2(mc6821_state *ctx)
 
 static void mf_set_cb2(mc6821_state *ctx)
 {
-    freeze_flipflop(0 /* reset */,0 /* freeze */, ctx->CB2);
-    kernal_decoder(0xdf00);
+    freeze_flipflop(0 /* reset */, 0 /* freeze */, ctx->CB2);
+    change_config();
 }
 
 /****************************************************************************
-* 
+*
 ****************************************************************************/
 
-static BYTE magicformel_io1_read(WORD addr)
+static uint8_t magicformel_io1_read(uint16_t addr)
 {
 #ifdef DEBUG_IO1_NO_DISABLE
     if (1) {
@@ -411,12 +409,12 @@ static BYTE magicformel_io1_read(WORD addr)
     return 0;
 }
 
-static BYTE magicformel_io1_peek(WORD addr)
+static uint8_t magicformel_io1_peek(uint16_t addr)
 {
     return export_ram0[(ram_page << 8) + (addr & 0xff)];
 }
 
-static void magicformel_io1_store(WORD addr, BYTE value)
+static void magicformel_io1_store(uint16_t addr, uint8_t value)
 {
 #ifdef DEBUG_IO1_NO_DISABLE
     if (1) {
@@ -435,37 +433,33 @@ static void magicformel_io1_store(WORD addr, BYTE value)
     d1 goes to d7
 */
 
-static BYTE magicformel_io2_read(WORD addr)
+static uint8_t magicformel_io2_read(uint16_t addr)
 {
-    int data, port, reg;
+    int port, reg;
 
-    /* fixme: what about d0..d5 ? */
-    data = (addr & 0x3f);   /* d0..d5 (d7) */
     port = (addr >> 7) & 1; /* rs1 */
     reg = (addr >> 6) & 1;  /* rs0 */
 
-    DBG(("MF: read from io2 %04x data %02x port %02x reg %02x\n",addr,data,port,reg));
+    DBG(("MF: read from io2 %04x data %02x port %02x reg %02x\n", addr, addr & 0x3f, port, reg));
 
     return mc6821core_read(&my6821, port /* rs1 */, reg /* rs0 */);
 }
 
-static BYTE magicformel_io2_peek(WORD addr)
+static uint8_t magicformel_io2_peek(uint16_t addr)
 {
-    int data, port, reg;
+    int port, reg;
 
-    /* fixme: what about d0..d5 ? */
-    data = (addr & 0x3f);   /* d0..d5 (d7) */
     port = (addr >> 7) & 1; /* rs1 */
     reg = (addr >> 6) & 1;  /* rs0 */
 
     return mc6821core_peek(&my6821, port /* rs1 */, reg /* rs0 */);
 }
 
-static void magicformel_io2_store(WORD addr, BYTE value)
+static void magicformel_io2_store(uint16_t addr, uint8_t value)
 {
     int port;
-    WORD reg;
-    BYTE data;
+    uint16_t reg;
+    uint8_t data;
 
     data = (addr & 0x3f) | ((value & 2) << 6); /* d0..d5 d7 */
     port = (addr >> 7) & 1; /* rs1 */
@@ -476,7 +470,7 @@ static void magicformel_io2_store(WORD addr, BYTE value)
 
 
 /****************************************************************************
-* 
+*
 ****************************************************************************/
 /* ---------------------------------------------------------------------*/
 
@@ -484,45 +478,34 @@ static void magicformel_io2_store(WORD addr, BYTE value)
     the "mf-windows" stuff only works if it reads RAM here, the freezer must
     however always read ROM
 */
-BYTE magicformel_romh_read(WORD addr)
+uint8_t magicformel_romh_read(uint16_t addr)
 {
-    if (freeze_enabled) {
-        if (kernal_decoder(addr)) {
-            return romh_banks[(addr & 0x1fff) + (romh_bank << 13)];
-        }
-    }
-    return mem_read_without_ultimax(addr);
-}
-
-BYTE magicformel_romh_read_hirom(WORD addr)
-{
-    if (kernal_decoder(addr)) {
+    if (freeze_enabled && addr >= 0xe000) {
         return romh_banks[(addr & 0x1fff) + (romh_bank << 13)];
     }
     return mem_read_without_ultimax(addr);
 }
 
-int magicformel_romh_phi1_read(WORD addr, BYTE *value)
+uint8_t magicformel_romh_read_hirom(uint16_t addr)
+{
+    if (addr >= 0xe000) {
+        return romh_banks[(addr & 0x1fff) + (romh_bank << 13)];
+    }
+    return mem_read_without_ultimax(addr);
+}
+
+int magicformel_romh_phi1_read(uint16_t addr, uint8_t *value)
 {
     return CART_READ_C64MEM;
 }
 
-int magicformel_romh_phi2_read(WORD addr, BYTE *value)
+int magicformel_romh_phi2_read(uint16_t addr, uint8_t *value)
 {
     return magicformel_romh_phi1_read(addr, value);
 }
 
-int magicformel_peek_mem(struct export_s *export, WORD addr, BYTE *value)
+int magicformel_peek_mem(export_t *ex, uint16_t addr, uint8_t *value)
 {
-    if (addr >= 0x8000 && addr <= 0x9fff) {
-        if (export_ram) {
-            *value = export_ram0[addr & 0x1fff];
-            return CART_READ_VALID;
-        }
-        *value = roml_banks[(addr & 0x1fff) + (roml_bank << 13)];
-        return CART_READ_VALID;
-    }
-
     if (addr >= 0xe000) {
         *value = romh_banks[(addr & 0x1fff) + (romh_bank << 13)];
         return CART_READ_VALID;
@@ -530,8 +513,26 @@ int magicformel_peek_mem(struct export_s *export, WORD addr, BYTE *value)
     return CART_READ_THROUGH;
 }
 
-
 /****************************************************************************/
+
+/* FIXME: this still needs to be tweaked to match the hardware */
+static RAMINITPARAM ramparam = {
+    .start_value = 255,
+    .value_invert = 2,
+    .value_offset = 1,
+
+    .pattern_invert = 0x100,
+    .pattern_invert_value = 255,
+
+    .random_start = 0,
+    .random_repeat = 0,
+    .random_chance = 0,
+};
+
+void magicformel_powerup(void)
+{
+    ram_init_with_pattern(export_ram0, CART_RAM_SIZE, &ramparam);
+}
 
 /* ultimax, rom bank 1 */
 void magicformel_freeze(void)
@@ -544,9 +545,8 @@ void magicformel_freeze(void)
     io1_enabled = 1;
 
     freeze_flipflop(0 /* reset */, 1 /* freeze */, my6821.CB2);
-    kernal_decoder(0xfffe);
 
-    cart_config_changed_slotmain(2, (BYTE)(3 | ((romh_bank & 0x0f) << CMODE_BANK_SHIFT)), CMODE_READ | CMODE_RELEASE_FREEZE);
+    cart_config_changed_slotmain(CMODE_RAM, (uint8_t)(CMODE_ULTIMAX | ((romh_bank & 0x0f) << CMODE_BANK_SHIFT)), CMODE_READ | CMODE_RELEASE_FREEZE);
 }
 
 void magicformel_config_init(void)
@@ -560,10 +560,9 @@ void magicformel_config_init(void)
 
     kernal_enabled = 1;   /* PB7 */
 
-    freeze_flipflop(1 /* reset */,0 /* freeze */, my6821.CB2);
-    kernal_decoder(0xfffe);
+    freeze_flipflop(1 /* reset */, 0 /* freeze */, my6821.CB2);
 
-    cart_config_changed_slotmain(2, (BYTE)(3 | (romh_bank << CMODE_BANK_SHIFT)), CMODE_READ);
+    cart_config_changed_slotmain(CMODE_RAM, (uint8_t)(CMODE_ULTIMAX | (romh_bank << CMODE_BANK_SHIFT)), CMODE_READ);
 }
 
 void magicformel_reset(void)
@@ -579,7 +578,7 @@ void magicformel_reset(void)
     mc6821core_reset(&my6821);
 }
 
-void magicformel_config_setup(BYTE *rawcart)
+void magicformel_config_setup(uint8_t *rawcart)
 {
     memcpy(roml_banks, rawcart, 0x20000);
     memcpy(romh_banks, rawcart, 0x20000);
@@ -587,7 +586,7 @@ void magicformel_config_setup(BYTE *rawcart)
 
 static int magicformel_common_attach(void)
 {
-    if (c64export_add(&export_res) < 0) {
+    if (export_add(&export_res) < 0) {
         return -1;
     }
 
@@ -596,7 +595,7 @@ static int magicformel_common_attach(void)
     return 0;
 }
 
-int magicformel_bin_attach(const char *filename, BYTE *rawcart)
+int magicformel_bin_attach(const char *filename, uint8_t *rawcart)
 {
     hwversion = 2;
     if (util_file_load(filename, rawcart, 0x20000, UTIL_FILE_LOAD_SKIP_ADDRESS) < 0) {
@@ -616,7 +615,7 @@ int magicformel_bin_attach(const char *filename, BYTE *rawcart)
     load CRT, handles 64k (v1.2), 64k+32k (v2.0), 64k+64k (v2.0)
 */
 
-int magicformel_crt_attach(FILE *fd, BYTE *rawcart)
+int magicformel_crt_attach(FILE *fd, uint8_t *rawcart)
 {
     crt_chip_header_t chip;
     int i, cnt = 0;
@@ -637,14 +636,14 @@ int magicformel_crt_attach(FILE *fd, BYTE *rawcart)
     }
 
     if (cnt == 8) {
-        DBG(("MF: 64k ROM loaded.\n"));
+        DBG(("MF: 64KiB ROM loaded.\n"));
         hwversion = 0;
     } else if (cnt == 12) {
-        DBG(("MF: 64k+32k ROM loaded.\n"));
+        DBG(("MF: 64KiB+32KiB ROM loaded.\n"));
         hwversion = 1;
         memcpy(&rawcart[0x18000], &rawcart[0x10000], 0x8000);
     } else if (cnt == 16) {
-        DBG(("MF: 2*64k ROM loaded.\n"));
+        DBG(("MF: 2*64KiB ROM loaded.\n"));
         hwversion = 2;
     } else {
         return -1;
@@ -654,7 +653,7 @@ int magicformel_crt_attach(FILE *fd, BYTE *rawcart)
 
 void magicformel_detach(void)
 {
-    c64export_remove(&export_res);
+    export_remove(&export_res);
     io_source_unregister(magicformel_io1_list_item);
     io_source_unregister(magicformel_io2_list_item);
     magicformel_io1_list_item = NULL;
@@ -663,54 +662,82 @@ void magicformel_detach(void)
 
 /* ---------------------------------------------------------------------*/
 
-#define CART_DUMP_VER_MAJOR   0
-#define CART_DUMP_VER_MINOR   0
-#define SNAP_MODULE_NAME  "CARTMF"
+/* CARTMF snapshot module format:
+
+   type  | name          | description
+   -----------------------------------
+   BYTE  | RAM page      | current RAM page
+   BYTE  | I/O-1 enable  | I/O-1 enable flag
+   BYTE  | kernal enable | kernal enable flag
+   BYTE  | freeze enable | freeze enable flag
+   BYTE  | export game   | game line state
+   BYTE  | hw version    | hardware version
+   ARRAY | ROML          | 131072 BYTES of ROML data
+   ARRAY | RAM           | 8192 BYTES of RAM data
+   BYTE  | CTRL A        | A control register
+   BYTE  | CTRL B        | B control register
+   BYTE  | DATA A        | A data register
+   BYTE  | DATA B        | B data register
+   BYTE  | DIR A         | A direction register
+   BYTE  | DIR B         | B direction register
+   BYTE  | CA2           | CA2 line flag
+   BYTE  | CA2 state     | CA2 line state
+   BYTE  | CB2           | CB2 line flag
+   BYTE  | CB2 state     | CB2 line state
+ */
+
+static const char snap_module_name[] = "CARTMF";
+#define SNAP_MAJOR   0
+#define SNAP_MINOR   0
 
 int magicformel_snapshot_write_module(snapshot_t *s)
 {
     snapshot_module_t *m;
 
-    m = snapshot_module_create(s, SNAP_MODULE_NAME,
-                          CART_DUMP_VER_MAJOR, CART_DUMP_VER_MINOR);
+    m = snapshot_module_create(s, snap_module_name, SNAP_MAJOR, SNAP_MINOR);
+
     if (m == NULL) {
         return -1;
     }
 
     if (0
-        || (SMW_B(m, (BYTE)ram_page) < 0)
-        || (SMW_B(m, (BYTE)io1_enabled) < 0)
-        || (SMW_B(m, (BYTE)kernal_enabled) < 0)
-        || (SMW_B(m, (BYTE)freeze_enabled) < 0)
-        || (SMW_B(m, (BYTE)export_game) < 0)
-        || (SMW_B(m, (BYTE)hwversion) < 0)
+        || (SMW_B(m, (uint8_t)ram_page) < 0)
+        || (SMW_B(m, (uint8_t)io1_enabled) < 0)
+        || (SMW_B(m, (uint8_t)kernal_enabled) < 0)
+        || (SMW_B(m, (uint8_t)freeze_enabled) < 0)
+        || (SMW_B(m, (uint8_t)export_game) < 0)
+        || (SMW_B(m, (uint8_t)hwversion) < 0)
         || (SMW_BA(m, roml_banks, 0x20000) < 0)
         || (SMW_BA(m, export_ram0, 0x2000) < 0)) {
-        snapshot_module_close(m);
-        return -1;
+        goto fail;
     }
 
-    if (mc6821core_snapshot_write_data(&my6821, m)  < 0) {
-        return -1;
+    if (mc6821core_snapshot_write_data(&my6821, m) < 0) {
+        goto fail;
     }
 
+    return snapshot_module_close(m);
+
+fail:
     snapshot_module_close(m);
-    return 0;
+    return -1;
 }
 
 int magicformel_snapshot_read_module(snapshot_t *s)
 {
-    BYTE vmajor, vminor;
+    uint8_t vmajor, vminor;
     snapshot_module_t *m;
 
-    m = snapshot_module_open(s, SNAP_MODULE_NAME, &vmajor, &vminor);
+    m = snapshot_module_open(s, snap_module_name, &vmajor, &vminor);
+
     if (m == NULL) {
         return -1;
     }
 
-    if ((vmajor != CART_DUMP_VER_MAJOR) || (vminor != CART_DUMP_VER_MINOR)) {
-        snapshot_module_close(m);
-        return -1;
+    /* Do not accept versions higher than current */
+    if (snapshot_version_is_bigger(vmajor, vminor, SNAP_MAJOR, SNAP_MINOR)) {
+        snapshot_set_error(SNAPSHOT_MODULE_HIGHER_VERSION);
+        goto fail;
     }
 
     if (0
@@ -722,11 +749,10 @@ int magicformel_snapshot_read_module(snapshot_t *s)
         || (SMR_B_INT(m, &hwversion) < 0)
         || (SMR_BA(m, roml_banks, 0x20000) < 0)
         || (SMR_BA(m, export_ram0, 0x2000) < 0)) {
-        snapshot_module_close(m);
-        return -1;
+        goto fail;
     }
 
-    if (mc6821core_snapshot_read_data(&my6821, m)  < 0) {
+    if (mc6821core_snapshot_read_data(&my6821, m) < 0) {
         return -1;
     }
 
@@ -735,4 +761,8 @@ int magicformel_snapshot_read_module(snapshot_t *s)
     memcpy(romh_banks, roml_banks, 0x20000);
 
     return magicformel_common_attach();
+
+fail:
+    snapshot_module_close(m);
+    return -1;
 }

@@ -4,6 +4,7 @@
  * Written by
  *  Andreas Boose <viceteam@t-online.de>
  *  Ettore Perazzoli <ettore@comm2000.it>
+ *  Marco van den Heuvel <blackystardust68@yahoo.com>
  *
  * This file is part of VICE, the Versatile Commodore Emulator.
  * See README for copyright notice.
@@ -32,14 +33,16 @@
 #include <string.h>
 
 #include "c64model.h"
+#include "c64rom.h"
 #include "c64-cmdline-options.h"
 #include "c64-resources.h"
 #include "cmdline.h"
+#include "log.h"
 #include "machine.h"
 #include "resources.h"
-#include "translate.h"
+#include "vicii.h"
 
-int set_cia_model(const char *value, void *extra_param)
+static int set_cia_model(const char *value, void *extra_param)
 {
     int model;
 
@@ -72,6 +75,18 @@ static struct model_s model_match[] = {
     { "c64oldntsc", C64MODEL_C64_OLD_NTSC },
     { "paln", C64MODEL_C64_PAL_N },
     { "drean", C64MODEL_C64_PAL_N },
+    { "sx64", C64MODEL_C64SX_PAL },
+    { "sx64pal", C64MODEL_C64SX_PAL },
+    { "sx64ntsc", C64MODEL_C64SX_NTSC },
+    { "pet64", C64MODEL_PET64_PAL },
+    { "pet64pal", C64MODEL_PET64_PAL },
+    { "pet64ntsc", C64MODEL_PET64_NTSC },
+    { "max", C64MODEL_ULTIMAX },
+    { "ultimax", C64MODEL_ULTIMAX },
+    { "gs", C64MODEL_C64_GS },
+    { "c64gs", C64MODEL_C64_GS },
+    { "jap", C64MODEL_C64_JAP },
+    { "c64jap", C64MODEL_C64_JAP },
     { NULL, C64MODEL_UNKNOWN }
 };
 
@@ -103,129 +118,152 @@ static int set_c64_model(const char *param, void *extra_param)
 static int set_video_standard(const char *param, void *extra_param)
 {
     int value = vice_ptr_to_int(extra_param);
+    int vicii_model;
 
     switch (machine_class) {
         case VICE_MACHINE_C64SC:
+            resources_get_int("VICIIModel", &vicii_model);
             switch (value) {
                 case MACHINE_SYNC_PAL:
                 default:
-                    return set_c64_model("pal", NULL);
-
+                    if (vicii_model == VICII_MODEL_8562 || vicii_model == VICII_MODEL_8565) {
+                        return resources_set_int("VICIIModel", VICII_MODEL_8565);
+                    } else if (vicii_model == VICII_MODEL_6567R56A) {
+                        return resources_set_int("VICIIModel", VICII_MODEL_6569R1);
+                    } else {
+                        return resources_set_int("VICIIModel", VICII_MODEL_6569);
+                    }
+                    break;
                 case MACHINE_SYNC_NTSC:
-                    return set_c64_model("ntsc", NULL);
-
+                    if (vicii_model == VICII_MODEL_8562 || vicii_model == VICII_MODEL_8565) {
+                        return resources_set_int("VICIIModel", VICII_MODEL_8562);
+                    } else {
+                        return resources_set_int("VICIIModel", VICII_MODEL_6567);
+                    }
+                    break;
                 case MACHINE_SYNC_NTSCOLD:
-                    return set_c64_model("oldntsc", NULL);
-
+                        return resources_set_int("VICIIModel", VICII_MODEL_6567R56A);
                 case MACHINE_SYNC_PALN:
-                    return set_c64_model("paln", NULL);
+                        return resources_set_int("VICIIModel", VICII_MODEL_6572);
             }
         default:
             return resources_set_int("MachineVideoStandard", value);
     }
 }
 
-static const cmdline_option_t cmdline_options[] = {
-    { "-pal", CALL_FUNCTION, 0,
-      set_video_standard, (void *)MACHINE_SYNC_PAL, NULL, NULL,
-      USE_PARAM_STRING, USE_DESCRIPTION_ID,
-      IDCLS_UNUSED, IDCLS_USE_PAL_SYNC_FACTOR,
-      NULL, NULL },
-    { "-ntsc", CALL_FUNCTION, 0,
-      set_video_standard, (void *)MACHINE_SYNC_NTSC, NULL, NULL,
-      USE_PARAM_STRING, USE_DESCRIPTION_ID,
-      IDCLS_UNUSED, IDCLS_USE_NTSC_SYNC_FACTOR,
-      NULL, NULL },
-    { "-ntscold", CALL_FUNCTION, 0,
-      set_video_standard, (void *)MACHINE_SYNC_NTSCOLD, NULL, NULL,
-      USE_PARAM_STRING, USE_DESCRIPTION_ID,
-      IDCLS_UNUSED, IDCLS_USE_OLD_NTSC_SYNC_FACTOR,
-      NULL, NULL },
-    { "-paln", CALL_FUNCTION, 0,
-      set_video_standard, (void *)MACHINE_SYNC_PALN, NULL, NULL,
-      USE_PARAM_STRING, USE_DESCRIPTION_ID,
-      IDCLS_UNUSED, IDCLS_USE_PALN_SYNC_FACTOR,
-      NULL, NULL },
-    { "-kernal", SET_RESOURCE, 1,
+struct kernal_s {
+    const char *name;
+    int rev;
+};
+
+/* NOTE: this table is duplicated in psid.c */
+static struct kernal_s kernal_match[] = {
+    { "0",    C64_KERNAL_JAP },
+    { "jap",  C64_KERNAL_JAP },
+    { "1",    C64_KERNAL_REV1 },
+    { "2",    C64_KERNAL_REV2 },
+    { "3",    C64_KERNAL_REV3 },
+    { "67",   C64_KERNAL_SX64 },
+    { "sx",   C64_KERNAL_SX64 },
+    { "39",   C64_KERNAL_GS64 },
+    { "gs",   C64_KERNAL_GS64 },
+    { "100",  C64_KERNAL_4064 },
+    { "4064", C64_KERNAL_4064 },
+    { NULL, C64_KERNAL_UNKNOWN }
+};
+
+static int set_kernal_revision(const char *param, void *extra_param)
+{
+    int rev = C64_KERNAL_UNKNOWN;
+    int i = 0;
+
+    if (!param) {
+        return -1;
+    }
+
+    do {
+        if (strcmp(kernal_match[i].name, param) == 0) {
+            rev = kernal_match[i].rev;
+        }
+        i++;
+    } while ((rev == C64_KERNAL_UNKNOWN) && (kernal_match[i].name != NULL));
+
+    log_verbose(LOG_DEFAULT, "set_kernal_revision (\"-kernalrev\") val:'%s' rev: %d", param, rev);
+
+    if (rev == C64_KERNAL_UNKNOWN) {
+        log_error(LOG_DEFAULT, "invalid kernal revision (%d)", rev);
+        return -1;
+    }
+
+    if (resources_set_int("KernalRev", rev) < 0) {
+        log_error(LOG_DEFAULT, "failed to set kernal revision (%d)", rev);
+    }
+
+    return 0;
+}
+
+static const cmdline_option_t cmdline_options[] =
+{
+    /* NOTE: although we use CALL_FUNCTION, we put the resource that will be
+             modified into the array - this helps reconstructing the cmdline */
+    { "-pal", CALL_FUNCTION, CMDLINE_ATTRIB_NONE,
+      set_video_standard, (void *)MACHINE_SYNC_PAL, "MachineVideoStandard", (void *)MACHINE_SYNC_PAL,
+      NULL, "Use PAL sync factor" },
+    { "-ntsc", CALL_FUNCTION, CMDLINE_ATTRIB_NONE,
+      set_video_standard, (void *)MACHINE_SYNC_NTSC, "MachineVideoStandard", (void *)MACHINE_SYNC_NTSC,
+      NULL, "Use NTSC sync factor" },
+    { "-ntscold", CALL_FUNCTION, CMDLINE_ATTRIB_NONE,
+      set_video_standard, (void *)MACHINE_SYNC_NTSCOLD, "MachineVideoStandard", (void *)MACHINE_SYNC_NTSCOLD,
+      NULL, "Use old NTSC sync factor" },
+    { "-paln", CALL_FUNCTION, CMDLINE_ATTRIB_NONE,
+      set_video_standard, (void *)MACHINE_SYNC_PALN, "MachineVideoStandard", (void *)MACHINE_SYNC_PALN,
+      NULL, "Use PAL-N sync factor" },
+    { "-power50", SET_RESOURCE, CMDLINE_ATTRIB_NONE,
+      NULL, NULL, "MachinePowerFrequency", (void *)50,
+      NULL, "Use 50Hz Power-grid frequency" },
+    { "-power60", SET_RESOURCE, CMDLINE_ATTRIB_NONE,
+      NULL, NULL, "MachinePowerFrequency", (void *)60,
+      NULL, "Use 60Hz Power-grid frequency" },
+    { "-kernal", SET_RESOURCE, CMDLINE_ATTRIB_NEED_ARGS,
       NULL, NULL, "KernalName", NULL,
-      USE_PARAM_ID, USE_DESCRIPTION_ID,
-      IDCLS_P_NAME, IDCLS_SPECIFY_KERNAL_ROM_NAME,
-      NULL, NULL },
-    { "-basic", SET_RESOURCE, 1,
+      "<Name>", "Specify name of Kernal ROM image" },
+    { "-basic", SET_RESOURCE, CMDLINE_ATTRIB_NEED_ARGS,
       NULL, NULL, "BasicName", NULL,
-      USE_PARAM_ID, USE_DESCRIPTION_ID,
-      IDCLS_P_NAME, IDCLS_SPECIFY_BASIC_ROM_NAME,
-      NULL, NULL },
-    { "-chargen", SET_RESOURCE, 1,
+      "<Name>", "Specify name of BASIC ROM image" },
+    { "-chargen", SET_RESOURCE, CMDLINE_ATTRIB_NEED_ARGS,
       NULL, NULL, "ChargenName", NULL,
-      USE_PARAM_ID, USE_DESCRIPTION_ID,
-      IDCLS_P_NAME, IDCLS_SPECIFY_CHARGEN_ROM_NAME,
-      NULL, NULL },
-    { "-kernalrev", SET_RESOURCE, 1,
-      NULL, NULL, "KernalRev", NULL,
-      USE_PARAM_ID, USE_DESCRIPTION_ID,
-      IDCLS_P_REVISION, IDCLS_PATCH_KERNAL_TO_REVISION,
-      NULL, NULL },
-#ifdef HAVE_RS232
-    { "-acia1", SET_RESOURCE, 0,
+      "<Name>", "Specify name of character generator ROM image" },
+    { "-kernalrev", CALL_FUNCTION, CMDLINE_ATTRIB_NEED_ARGS,
+      set_kernal_revision, NULL, NULL, NULL,
+      "<Revision>", "Patch the Kernal ROM to the specified <revision> "
+      "(0/jap: japanese 1: rev. 1, 2: rev. 2, 3: rev. 3, 39/gs: C64 GS, 67/sx: sx64, 100/4064: 4064)" },
+#if defined(HAVE_RS232DEV) || defined(HAVE_RS232NET)
+    { "-acia1", SET_RESOURCE, CMDLINE_ATTRIB_NONE,
       NULL, NULL, "Acia1Enable", (void *)1,
-      USE_PARAM_STRING, USE_DESCRIPTION_ID,
-      IDCLS_UNUSED, IDCLS_ENABLE_DEXX_ACIA_RS232_EMU,
-      NULL, NULL },
-    { "+acia1", SET_RESOURCE, 0,
+      NULL, "Enable the ACIA RS232 interface emulation" },
+    { "+acia1", SET_RESOURCE, CMDLINE_ATTRIB_NONE,
       NULL, NULL, "Acia1Enable", (void *)0,
-      USE_PARAM_STRING, USE_DESCRIPTION_ID,
-      IDCLS_UNUSED, IDCLS_DISABLE_DEXX_ACIA_RS232_EMU,
-      NULL, NULL },
+      NULL, "Disable the ACIA RS232 interface emulation" },
 #endif
-#ifdef COMMON_KBD
-    { "-keymap", SET_RESOURCE, 1,
-      NULL, NULL, "KeymapIndex", NULL,
-      USE_PARAM_ID, USE_DESCRIPTION_ID,
-      IDCLS_P_NUMBER, IDCLS_SPECIFY_INDEX_KEYMAP_FILE_0_2,
-      NULL, NULL },
-    { "-symkeymap", SET_RESOURCE, 1,
-      NULL, NULL, "KeymapSymFile", NULL,
-      USE_PARAM_ID, USE_DESCRIPTION_ID,
-      IDCLS_P_NAME, IDCLS_SPECIFY_SYM_KEYMAP_FILE_NAME,
-      NULL, NULL },
-    { "-symdekeymap", SET_RESOURCE, 1,
-      NULL, NULL, "KeymapSymDeFile", NULL,
-      USE_PARAM_ID, USE_DESCRIPTION_ID,
-      IDCLS_P_NAME, IDCLS_SPECIFY_NAME_SYM_DE_KEYMAP,
-      NULL, NULL },
-    { "-poskeymap", SET_RESOURCE, 1,
-      NULL, NULL, "KeymapPosFile", NULL,
-      USE_PARAM_ID, USE_DESCRIPTION_ID,
-      IDCLS_P_NAME, IDCLS_SPECIFY_POS_KEYMAP_FILE_NAME,
-      NULL, NULL },
-#endif
-    { "-ciamodel", CALL_FUNCTION, 1,
+    { "-ciamodel", CALL_FUNCTION, CMDLINE_ATTRIB_NEED_ARGS,
       set_cia_model, NULL, NULL, NULL,
-      USE_PARAM_ID, USE_DESCRIPTION_ID,
-      IDCLS_P_MODEL, IDCLS_SET_BOTH_CIA_MODELS,
-      NULL, NULL },
-    { "-cia1model", SET_RESOURCE, 1,
+      "<Model>", "Set both CIA models (0 = old 6526, 1 = new 8521)" },
+    { "-cia1model", SET_RESOURCE, CMDLINE_ATTRIB_NEED_ARGS,
       NULL, NULL, "CIA1Model", NULL,
-      USE_PARAM_ID, USE_DESCRIPTION_ID,
-      IDCLS_P_MODEL, IDCLS_SET_CIA1_MODEL,
-      NULL, NULL },
-    { "-cia2model", SET_RESOURCE, 1,
+      "<Model>", "Set CIA 1 model (0 = old 6526, 1 = new 8521)" },
+    { "-cia2model", SET_RESOURCE, CMDLINE_ATTRIB_NEED_ARGS,
       NULL, NULL, "CIA2Model", NULL,
-      USE_PARAM_ID, USE_DESCRIPTION_ID,
-      IDCLS_P_MODEL, IDCLS_SET_CIA2_MODEL,
-      NULL, NULL },
-    { "-model", CALL_FUNCTION, 1,
+      "<Model>", "Set CIA 2 model (0 = old 6526, 1 = new 8521)" },
+    { "-model", CALL_FUNCTION, CMDLINE_ATTRIB_NEED_ARGS,
       set_c64_model, NULL, NULL, NULL,
-      USE_PARAM_ID, USE_DESCRIPTION_ID,
-      IDCLS_P_MODEL, IDCLS_SET_C64_MODEL,
-      NULL, NULL },
-    { "-burstmod", SET_RESOURCE, 1,
+      "<Model>", "Set C64 model (c64/c64c/c64old, ntsc/newntsc/oldntsc, drean, jap, c64gs, pet64, ultimax)" },
+    { "-burstmod", SET_RESOURCE, CMDLINE_ATTRIB_NEED_ARGS,
       NULL, NULL, "BurstMod", NULL,
-      USE_PARAM_ID, USE_DESCRIPTION_ID,
-      IDCLS_P_VALUE, IDCLS_SET_BURST_MOD,
-      NULL, NULL },
-    { NULL }
+      "<value>", "Burst modification (0 = None, 1 = CIA1, 2 = CIA2)" },
+    { "-iecreset", SET_RESOURCE, CMDLINE_ATTRIB_NEED_ARGS,
+      NULL, NULL, "IECReset", NULL,
+      "<value>", "Computer reset goes to IEC bus (0 = No, 1 = Yes)" },
+    CMDLINE_LIST_END
 };
 
 int c64_cmdline_options_init(void)

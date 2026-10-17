@@ -5,7 +5,7 @@
  *  Andreas Boose <viceteam@t-online.de>
  *  Daniel Sladic <sladic@eecg.toronto.edu>
  *  Ettore Perazzoli <ettore@comm2000.it>
- *  André Fachat <fachat@physik.tu-chemnitz.de>
+ *  Andre Fachat <fachat@physik.tu-chemnitz.de>
  *  Teemu Rantanen <tvr@cs.hut.fi>
  *
  * This file is part of VICE, the Versatile Commodore Emulator.
@@ -76,30 +76,30 @@ static void iec_debug_ports(void)
         }
     }
 
-    time_usec = (unsigned long) ( (1000000. * maincpu_clk) / cycles_per_second );
+    time_usec = (unsigned long) ((1000000. * maincpu_clk) / cycles_per_second );
 
-    if ( (old_iecbus.cpu_bus != iecbus.cpu_bus) || firstcall) {
+    if ((old_iecbus.cpu_bus != iecbus.cpu_bus) || firstcall) {
         log_message(LOG_DEFAULT, "#%lu: cpu_bus changed from $%02x to $%02x.", time_usec, old_iecbus.cpu_bus, iecbus.cpu_bus);
         old_iecbus.cpu_bus = iecbus.cpu_bus;
     }
 
-    if ( (old_iecbus.cpu_port != iecbus.cpu_port) || firstcall) {
+    if ((old_iecbus.cpu_port != iecbus.cpu_port) || firstcall) {
         log_message(LOG_DEFAULT, "#%lu: cpu_port changed from $%02x to $%02x.", time_usec, old_iecbus.cpu_port, iecbus.cpu_port);
         old_iecbus.cpu_port = iecbus.cpu_port;
     }
 
-    if ( (old_iecbus.drv_port != iecbus.drv_port) || firstcall) {
+    if ((old_iecbus.drv_port != iecbus.drv_port) || firstcall) {
         log_message(LOG_DEFAULT, "#%lu: drv_port changed from $%02x to $%02x.", time_usec, old_iecbus.drv_port, iecbus.drv_port);
         old_iecbus.drv_port = iecbus.drv_port;
     }
 
-    for (unit = 0; unit < 8 + DRIVE_NUM; unit++) {
-        if ( (old_iecbus.drv_bus[unit] != iecbus.drv_bus[unit]) || firstcall) {
+    for (unit = 0; unit < 8 + NUM_DISK_UNITS; unit++) {
+        if ((old_iecbus.drv_bus[unit] != iecbus.drv_bus[unit]) || firstcall) {
             log_message(LOG_DEFAULT, "#%lu: drv_bus[ %2u] changed from $%02x to $%02x.", time_usec, unit, old_iecbus.drv_bus[unit], iecbus.drv_bus[unit]);
             old_iecbus.drv_bus[unit] = iecbus.drv_bus[unit];
         }
 
-        if ( (old_iecbus.drv_data[unit] != iecbus.drv_data[unit]) || firstcall) {
+        if ((old_iecbus.drv_data[unit] != iecbus.drv_data[unit]) || firstcall) {
             log_message(LOG_DEFAULT, "#%lu: drv_data[%2u] changed from $%02x to $%02x.", time_usec, unit, old_iecbus.drv_data[unit], iecbus.drv_data[unit]);
             old_iecbus.drv_data[unit] = iecbus.drv_data[unit];
         }
@@ -116,7 +116,9 @@ static void iec_debug_ports(void)
 
 #endif
 
-void iec_update_cpu_bus(BYTE data)
+int c64iec_active = 1;
+
+void iec_update_cpu_bus(uint8_t data)
 {
     iecbus.cpu_bus = (((data << 2) & 0x80) | ((data << 2) & 0x40) | ((data << 1) & 0x10));
 }
@@ -126,7 +128,7 @@ void iec_update_ports(void)
     unsigned int unit;
 
     iecbus.cpu_port = iecbus.cpu_bus;
-    for (unit = 4; unit < 8 + DRIVE_NUM; unit++) {
+    for (unit = 4; unit < 8 + NUM_DISK_UNITS; unit++) {
         iecbus.cpu_port &= iecbus.drv_bus[unit];
     }
 
@@ -140,14 +142,15 @@ void iec_update_ports_embedded(void)
     iec_update_ports();
 }
 
-void iec_drive_write(BYTE data, unsigned int dnr)
+void iec_drive_write(uint8_t data, unsigned int dnr)
 {
     iecbus.drv_bus[dnr + 8] = (((data << 3) & 0x40) | ((data << 6) & ((~data ^ iecbus.cpu_bus) << 3) & 0x80));
     iecbus.drv_data[dnr + 8] = data;
     iec_update_ports();
 }
 
-BYTE iec_drive_read(unsigned int dnr)
+/* This function must have no side effects */
+uint8_t iec_drive_read(unsigned int dnr)
 {
     return iecbus.drv_port;
 }
@@ -160,10 +163,40 @@ iecbus_t *iecbus_drive_port(void)
 /* This function is called from ui_update_menus() */
 int iec_available_busses(void)
 {
-    return IEC_BUS_IEC | (cartridge_type_enabled(CARTRIDGE_IEEE488) ? IEC_BUS_IEEE : 0);
+    if (cartridge_type_enabled(CARTRIDGE_IEEE488) ||
+        cartridge_type_enabled(CARTRIDGE_IEEEFLASH64)) {
+        return IEC_BUS_IEC | IEC_BUS_IEEE;
+    } else {
+        return IEC_BUS_IEC;
+    }
 }
 
 void c64iec_init(void)
 {
     iecbus_update_ports = iec_update_ports;
+}
+
+void c64iec_enable(int val)
+{
+    c64iec_active = val ? 1 : 0;
+}
+
+int c64iec_get_active_state(void)
+{
+    return c64iec_active;
+}
+
+/* KLUDGES: dummy to satisfy linker, unused */
+uint8_t plus4tcbm_outputa[2], plus4tcbm_outputb[2], plus4tcbm_outputc[2];
+
+void plus4tcbm_update_pa(uint8_t byte, unsigned int dnr)
+{
+}
+
+void plus4tcbm_update_pb(uint8_t byte, unsigned int dnr)
+{
+}
+
+void plus4tcbm_update_pc(uint8_t byte, unsigned int dnr)
+{
 }

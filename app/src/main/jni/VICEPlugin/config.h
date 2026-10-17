@@ -342,7 +342,7 @@
 #define HAVE_MEMMOVE 1
 
 /* Define to 1 if you have the <memory.h> header file. */
-/* #undef HAVE_MEMORY_H */
+#define HAVE_MEMORY_H 1
 
 /* Define to 1 if you have the <midasdll.h> header file. */
 /* #undef HAVE_MIDASDLL_H */
@@ -497,7 +497,7 @@
 /* #undef HAVE_STATIC_LAME */
 
 /* Define to 1 if you have the <stdint.h> header file. */
-/* #undef HAVE_STDINT_H */
+#define HAVE_STDINT_H 1
 
 /* We are using stdlib.h */
 #define HAVE_STDLIB /**/
@@ -518,7 +518,7 @@
 #define HAVE_STRINGS_H 1
 
 /* Define to 1 if you have the <string.h> header file. */
-/* #undef HAVE_STRING_H */
+#define HAVE_STRING_H 1
 
 /* Define to 1 if you have the `strncasecmp' function. */
 #define HAVE_STRNCASECMP 1
@@ -741,13 +741,13 @@
 #define SIZEOF_UNSIGNED_SHORT 2
 
 /* Define to 1 if you have the ANSI C header files. */
-/* #undef STDC_HEADERS */
+#define STDC_HEADERS 1
 
 /* Enable SCO Unixware 7.x support */
 /* #undef UNIXWARE_COMPILE */
 
 /* Are we compiling for unix? */
-/* #undef UNIX_COMPILE */
+#define UNIX_COMPILE 1
 
 /* Define if this version is unstable. */
 #define UNSTABLE /**/
@@ -882,3 +882,13 @@
 
 /* Define as `fork' if `vfork' does not work. */
 /* #undef vfork */
+
+#define VICE_DATADIR "."
+#define VICE_DATADIR "."
+#define VICE_DOCDIR "."
+#define VICE_DRIVESDIR "."
+#define VICE_HOTKEYSDIR "."
+#define VICE_MACHINEDIR "."
+#define VICE_SOUNDFILEDIR "."
+#define VICE_THEME_DIR "."
+#define VICE_ICONDIR "."

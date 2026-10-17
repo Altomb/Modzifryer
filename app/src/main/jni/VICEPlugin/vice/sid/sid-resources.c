@@ -5,6 +5,7 @@
  *  Teemu Rantanen <tvr@cs.hut.fi>
  *  Ettore Perazzoli <ettore@comm2000.it>
  *  Andreas Boose <viceteam@t-online.de>
+ *  Marco van den Heuvel <blackystardust68@yahoo.com>
  *
  * This file is part of VICE, the Versatile Commodore Emulator.
  * See README for copyright notice.
@@ -30,21 +31,29 @@
 
 #include <stdio.h>
 
-#ifdef HAVE_CATWEASELMKIII
 #include "catweaselmkiii.h"
-#endif
-
 #include "hardsid.h"
 #include "log.h"
 #include "machine.h"
 #ifdef HAVE_PARSID
 #include "parsid.h"
 #endif
+#ifdef HAVE_USBSID
+#include "usbsid.h"
+#endif
 #include "resources.h"
 #include "sid-resources.h"
 #include "sid.h"
 #include "sound.h"
 #include "types.h"
+
+/*#define DEBUG_SIDRES*/
+
+#ifdef DEBUG_SIDRES
+#define DBG(x)  log_printf x
+#else
+#define DBG(x)
+#endif
 
 /* Resource handling -- Added by Ettore 98-04-26.  */
 
@@ -53,65 +62,104 @@
 
 /* #define SID_ENGINE_MODEL_DEBUG */
 
+#if defined(HAVE_FASTSID) || defined(HAVE_RESID) || defined(HAVE_RESID_DTV) || defined(HAVE_RESIDFP)
 static int sid_filters_enabled;       /* app_resources.sidFilters */
+#endif
 static int sid_model;                 /* app_resources.sidModel */
-#if defined(HAVE_RESID) || defined(HAVE_RESID_FP)
+#if defined(HAVE_RESID) || defined(HAVE_RESIDFP)
 static int sid_resid_sampling;
+#endif
+#if defined(HAVE_RESID)
 static int sid_resid_passband;
 static int sid_resid_gain;
 static int sid_resid_filter_bias;
+static int sid_resid_8580_passband;
+static int sid_resid_8580_gain;
+static int sid_resid_8580_filter_bias;
+static int sid_resid_enable_raw_output;
+#endif
+#if defined(HAVE_RESIDFP)
+static int sid_residfp_6581_old_caps;
+static int sid_residfp_6581_filter_curve;
+static int sid_residfp_6581_filter_range;
+static int sid_residfp_8580_filter_curve;
+static int sid_residfp_combined_waveform_strength;
 #endif
 int sid_stereo = 0;
 int checking_sid_stereo;
-unsigned int sid_stereo_address_start;
-unsigned int sid_stereo_address_end;
-unsigned int sid_triple_address_start;
-unsigned int sid_triple_address_end;
+unsigned int sid2_address_start;
+unsigned int sid2_address_end;
+unsigned int sid3_address_start;
+unsigned int sid3_address_end;
+unsigned int sid4_address_start;
+unsigned int sid4_address_end;
+unsigned int sid5_address_start;
+unsigned int sid5_address_end;
+unsigned int sid6_address_start;
+unsigned int sid6_address_end;
+unsigned int sid7_address_start;
+unsigned int sid7_address_end;
+unsigned int sid8_address_start;
+unsigned int sid8_address_end;
+unsigned int sid9_address_start;
+unsigned int sid9_address_end;
+unsigned int sid10_address_start;
+unsigned int sid10_address_end;
 static int sid_engine;
 #ifdef HAVE_HARDSID
 static int sid_hardsid_main;
 static int sid_hardsid_right;
 #endif
-#ifdef HAVE_PARSID
-int parsid_port = 0;
+#ifdef HAVE_USBSID
+static int sid_usbsid_readmode;
+static int sid_usbsid_audiomode;
+static int sid_usbsid_buffsize;
+static int sid_usbsid_diffsize;
 #endif
 
 static int set_sid_engine(int set_engine, void *param)
 {
     int engine = set_engine;
 
+    DBG(("set_sid_engine: %d\n", engine));
+
     if (engine == SID_ENGINE_DEFAULT) {
-#ifdef HAVE_RESID
-        if (machine_class != VICE_MACHINE_VIC20) {
-            engine = SID_ENGINE_RESID;
-        } else {
-            engine = SID_ENGINE_FASTSID;
-        }
+#if defined(HAVE_RESIDFP)
+        engine = SID_ENGINE_RESIDFP;
+#elif defined(HAVE_RESID)
+        engine = SID_ENGINE_RESID;
 #else
         engine = SID_ENGINE_FASTSID;
 #endif
     }
 
-    if (engine != SID_ENGINE_FASTSID
-#ifdef HAVE_RESID
-        && engine != SID_ENGINE_RESID
+    switch (engine) {
+#ifdef HAVE_FASTSID
+        case SID_ENGINE_FASTSID:
 #endif
-#ifdef HAVE_RESID_FP
-        && engine != SID_ENGINE_RESID_FP
+#ifdef HAVE_RESID
+        case SID_ENGINE_RESID:
+#endif
+#ifdef HAVE_RESIDFP
+        case SID_ENGINE_RESIDFP:
 #endif
 #ifdef HAVE_CATWEASELMKIII
-        && engine != SID_ENGINE_CATWEASELMKIII
+        case SID_ENGINE_CATWEASELMKIII:
 #endif
 #ifdef HAVE_HARDSID
-        && engine != SID_ENGINE_HARDSID
+        case SID_ENGINE_HARDSID:
 #endif
 #ifdef HAVE_PARSID
-        && engine != SID_ENGINE_PARSID_PORT1
-        && engine != SID_ENGINE_PARSID_PORT2
-        && engine != SID_ENGINE_PARSID_PORT3
+#if !defined(WINDOWS_COMPILE) || (defined(WINDOWS_COMPILE) && defined(HAVE_LIBIEEE1284))
+        case SID_ENGINE_PARSID:
 #endif
-    ) {
-        return -1;
+#endif
+#ifdef HAVE_USBSID
+        case SID_ENGINE_USBSID:
+#endif
+            break;
+        default:
+            return -1;
     }
 
     if (sid_engine_set(engine) < 0) {
@@ -120,32 +168,35 @@ static int set_sid_engine(int set_engine, void *param)
 
     sid_engine = engine;
 
-#ifdef HAVE_PARSID
-    if (engine == SID_ENGINE_PARSID_PORT1) {
-        parsid_port = 1;
-    }
-    if (engine == SID_ENGINE_PARSID_PORT2) {
-        parsid_port = 2;
-    }
-    if (engine == SID_ENGINE_PARSID_PORT3) {
-        parsid_port = 3;
-    }
-#endif
-
 #ifdef SID_ENGINE_MODEL_DEBUG
-    log_debug("SID engine set to %d", engine);
+    log_debug(LOG_DEFAULT, "SID engine set to %d", engine);
 #endif
     sound_state_changed = 1;
 
     return 0;
 }
 
+#if defined(HAVE_FASTSID) || defined(HAVE_RESID) || defined(HAVE_RESID_DTV) || defined(HAVE_RESIDFP)
 static int set_sid_filters_enabled(int val, void *param)
 {
-    sid_filters_enabled = val;
+    sid_filters_enabled = val ? 1 : 0;
+
     sid_state_changed = 1;
+
     return 0;
 }
+#endif
+
+#if defined(HAVE_RESID) || defined(HAVE_RESID_DTV)
+static int set_sid_resid_enable_raw_output(int val, void *param)
+{
+    sid_resid_enable_raw_output = val ? 1 : 0;
+
+    sid_state_changed = 1;
+
+    return 0;
+}
+#endif
 
 static int set_sid_stereo(int val, void *param)
 {
@@ -158,7 +209,7 @@ static int set_sid_stereo(int val, void *param)
         sid_stereo = 0;
     } else {
         if (val != sid_stereo) {
-            if (val < 0 || val > 2) {
+            if (val < 0 || val > (SOUND_SIDS_MAX - 1)) {
                 return -1;
             }
             sid_stereo = val;
@@ -169,35 +220,31 @@ static int set_sid_stereo(int val, void *param)
     return 0;
 }
 
-int sid_set_sid_stereo_address(int val, void *param)
-{
-    unsigned int sid2_adr;
-
-    sid2_adr = (unsigned int)val;
-
-    if (machine_sid2_check_range(sid2_adr) < 0) {
-        return -1;
+#define SET_SIDx_ADDRESS(sid_nr)                                        \
+    int sid_set_sid##sid_nr##_address(int val, void *param)             \
+    {                                                                   \
+        unsigned int sid_adr;                                           \
+                                                                        \
+        sid_adr = (unsigned int)val;                                    \
+                                                                        \
+        if (machine_sid##sid_nr##_check_range(sid_adr) < 0) {           \
+            return -1;                                                  \
+        }                                                               \
+                                                                        \
+        sid##sid_nr##_address_start = sid_adr;                          \
+        sid##sid_nr##_address_end = sid##sid_nr##_address_start + 0x20; \
+        return 0;                                                       \
     }
 
-    sid_stereo_address_start = sid2_adr;
-    sid_stereo_address_end = sid_stereo_address_start + 32;
-    return 0;
-}
-
-int sid_set_sid_triple_address(int val, void *param)
-{
-    unsigned int sid3_adr;
-
-    sid3_adr = (unsigned int)val;
-
-    if (machine_sid3_check_range(sid3_adr) < 0) {
-        return -1;
-    }
-
-    sid_triple_address_start = sid3_adr;
-    sid_triple_address_end = sid_triple_address_start + 32;
-    return 0;
-}
+SET_SIDx_ADDRESS(2)
+SET_SIDx_ADDRESS(3)
+SET_SIDx_ADDRESS(4)
+SET_SIDx_ADDRESS(5)
+SET_SIDx_ADDRESS(6)
+SET_SIDx_ADDRESS(7)
+SET_SIDx_ADDRESS(8)
+SET_SIDx_ADDRESS(9)
+SET_SIDx_ADDRESS(10)
 
 static int set_sid_model(int val, void *param)
 {
@@ -210,32 +257,58 @@ static int set_sid_model(int val, void *param)
             sid_model = SID_MODEL_DTVSID;
         } else
 #endif
-        if (machine_class == VICE_MACHINE_C128) {
+        if ((machine_class == VICE_MACHINE_C128) ||
+            (machine_class == VICE_MACHINE_C64) ||
+            (machine_class == VICE_MACHINE_C64SC) ||
+            (machine_class == VICE_MACHINE_SCPU64)){
             sid_model = SID_MODEL_8580;
         }
     }
 
+    switch (sid_model) {
+        case SID_MODEL_6581:
+        case SID_MODEL_8580:
+        case SID_MODEL_8580D:
+#ifdef HAVE_RESID
+        case SID_MODEL_DTVSID:
+#endif
+            break;
+        default:
+            return -1;
+    }
+
 #ifdef SID_ENGINE_MODEL_DEBUG
-    log_debug("SID model set to %d", sid_model);
+    log_debug(LOG_DEFAULT, "SID model set to %d", sid_model);
 #endif
     sid_state_changed = 1;
     return 0;
 }
 
-#if defined(HAVE_RESID) || defined(HAVE_RESID_FP) || defined(HAVE_RESID_DTV)
+#if defined(HAVE_RESID) || defined(HAVE_RESID_DTV) || defined(HAVE_RESIDFP)
 static int set_sid_resid_sampling(int val, void *param)
 {
+    switch (val) {
+        case SID_RESID_SAMPLING_FAST:
+        case SID_RESID_SAMPLING_INTERPOLATION:
+        case SID_RESID_SAMPLING_RESAMPLING:
+        case SID_RESID_SAMPLING_FAST_RESAMPLING:
+            break;
+        default:
+            return -1;
+    }
+
     sid_resid_sampling = val;
     sid_state_changed = 1;
     return 0;
 }
-
+#endif
+#if defined(HAVE_RESID) || defined(HAVE_RESID_DTV)
 static int set_sid_resid_passband(int i, void *param)
 {
-    if (i < 0) {
-        i = 0;
-    } else if (i > 90) {
-        i = 90;
+    if (i < RESID_6581_PASSBAND_MIN) {
+        i = RESID_6581_PASSBAND_MIN;
+    } else if (i > RESID_6581_PASSBAND_MAX) {
+        i = RESID_6581_PASSBAND_MAX;
     }
 
     sid_resid_passband = i;
@@ -245,10 +318,10 @@ static int set_sid_resid_passband(int i, void *param)
 
 static int set_sid_resid_gain(int i, void *param)
 {
-    if (i < 90) {
-        i = 90;
-    } else if (i > 100) {
-        i = 100;
+    if (i < RESID_6581_FILTER_GAIN_MIN) {
+        i = RESID_6581_FILTER_GAIN_MIN;
+    } else if (i > RESID_6581_FILTER_GAIN_MAX) {
+        i = RESID_6581_FILTER_GAIN_MAX;
     }
 
     sid_resid_gain = i;
@@ -258,14 +331,118 @@ static int set_sid_resid_gain(int i, void *param)
 
 static int set_sid_resid_filter_bias(int i, void *param)
 {
-    if (i < -5000) {
-        i = 5000;
-    } else if (i > 5000) {
-        i = 5000;
+    if (i < RESID_6581_FILTER_BIAS_MIN) {
+        i = RESID_6581_FILTER_BIAS_MIN;
+    } else if (i > RESID_6581_FILTER_BIAS_MAX) {
+        i = RESID_6581_FILTER_BIAS_MAX;
     }
 
     sid_resid_filter_bias = i;
     sid_state_changed = 1;
+    return 0;
+}
+
+static int set_sid_resid_8580_passband(int i, void *param)
+{
+    if (i < RESID_8580_PASSBAND_MIN) {
+        i = RESID_8580_PASSBAND_MIN;
+    } else if (i > RESID_8580_PASSBAND_MAX) {
+        i = RESID_8580_PASSBAND_MAX;
+    }
+
+    sid_resid_8580_passband = i;
+    sid_state_changed = 1;
+    return 0;
+}
+
+static int set_sid_resid_8580_gain(int i, void *param)
+{
+    if (i < RESID_8580_FILTER_GAIN_MIN) {
+        i = RESID_8580_FILTER_GAIN_MIN;
+    } else if (i > RESID_8580_FILTER_GAIN_MAX) {
+        i = RESID_8580_FILTER_GAIN_MAX;
+    }
+
+    sid_resid_8580_gain = i;
+    sid_state_changed = 1;
+    return 0;
+}
+
+static int set_sid_resid_8580_filter_bias(int i, void *param)
+{
+    if (i < RESID_8580_FILTER_BIAS_MIN) {
+        i = RESID_8580_FILTER_BIAS_MIN;
+    } else if (i > RESID_8580_FILTER_BIAS_MAX) {
+        i = RESID_8580_FILTER_BIAS_MAX;
+    }
+
+    sid_resid_8580_filter_bias = i;
+    sid_state_changed = 1;
+    return 0;
+}
+
+#endif
+
+#if defined(HAVE_RESIDFP)
+
+static int set_sid_residfp_8580_filter_curve(int i, void *param)
+{
+    if (i < RESIDFP_8580_FILTER_CURVE_MIN) {
+        i = RESIDFP_8580_FILTER_CURVE_MIN;
+    } else if (i > RESIDFP_8580_FILTER_CURVE_MAX) {
+        i = RESIDFP_8580_FILTER_CURVE_MAX;
+    }
+
+    sid_residfp_8580_filter_curve = i;
+    sid_state_changed = 1;
+    return 0;
+}
+
+static int set_sid_residfp_6581_filter_curve(int i, void *param)
+{
+    if (i < RESIDFP_6581_FILTER_CURVE_MIN) {
+        i = RESIDFP_6581_FILTER_CURVE_MIN;
+    } else if (i > RESIDFP_6581_FILTER_CURVE_MAX) {
+        i = RESIDFP_6581_FILTER_CURVE_MAX;
+    }
+
+    sid_residfp_6581_filter_curve = i;
+    sid_state_changed = 1;
+    return 0;
+}
+
+static int set_sid_residfp_6581_filter_range(int i, void *param)
+{
+    if (i < RESIDFP_6581_FILTER_RANGE_MIN) {
+        i = RESIDFP_6581_FILTER_RANGE_MIN;
+    } else if (i > RESIDFP_6581_FILTER_RANGE_MAX) {
+        i = RESIDFP_6581_FILTER_RANGE_MAX;
+    }
+
+    sid_residfp_6581_filter_range = i;
+    sid_state_changed = 1;
+    return 0;
+}
+
+static int set_sid_residfp_combined_waveform_strength(int i, void *param)
+{
+    if (i < RESIDFP_COMBINED_WAVEFORM_STRENGTH_MIN) {
+        i = RESIDFP_COMBINED_WAVEFORM_STRENGTH_MIN;
+    } else if (i > RESIDFP_COMBINED_WAVEFORM_STRENGTH_MAX) {
+        i = RESIDFP_COMBINED_WAVEFORM_STRENGTH_MAX;
+    }
+
+    sid_residfp_combined_waveform_strength = i;
+    sid_state_changed = 1;
+    return 0;
+}
+
+static int set_sid_residfp_6581_old_caps(int val, void *param)
+{
+    sid_residfp_6581_old_caps = val ? 1 : 0;
+
+    sid_state_changed = 1;
+
     return 0;
 }
 
@@ -289,52 +466,221 @@ static int set_sid_hardsid_right(int val, void *param)
 }
 #endif
 
-#if defined(HAVE_RESID) || defined(HAVE_RESID_FP) || defined(HAVE_RESID_DTV)
+#ifdef HAVE_USBSID
+static int set_sid_usbsid_readmode(int val, void *param)
+{
+    sid_usbsid_readmode = (unsigned int)val;
+    usbsid_set_readmode(sid_usbsid_readmode);
+
+    return 0;
+}
+
+static int set_sid_usbsid_audiomode(int val, void *param)
+{
+    sid_usbsid_audiomode = (unsigned int)val;
+    usbsid_set_audiomode(sid_usbsid_readmode);
+
+    return 0;
+}
+
+static int set_sid_usbsid_buffsize(int val, void *param)
+{
+    sid_usbsid_buffsize = (unsigned int)val;
+    usbsid_drv_set_buffsize(sid_usbsid_buffsize);
+
+    return 0;
+}
+
+static int set_sid_usbsid_diffsize(int val, void *param)
+{
+    sid_usbsid_diffsize = (unsigned int)val;
+    usbsid_drv_set_diffsize(sid_usbsid_diffsize);
+
+    return 0;
+}
+#endif
+
+
+#ifdef HAVE_RESID
+static int sid_enabled = 1;
+
+void sid_set_enable(int value)
+{
+    int val = value ? 1 : 0;
+    if (val == sid_enabled) {
+        return;
+    }
+
+#ifdef HAVE_FASTSID
+    if (val) {
+        sid_engine_set(SID_ENGINE_FASTSID);
+    } else
+#endif
+
+#ifdef HAVE_USBSID
+    if (val) {
+        sid_engine_set(SID_ENGINE_USBSID);
+    } else
+#endif
+
+    {
+        sid_engine_set(sid_engine);
+    }
+    sid_enabled = val;
+    sid_state_changed = 1;
+}
+#endif
+
+#if defined(HAVE_RESID) || defined(HAVE_RESID_DTV) || defined(HAVE_RESIDFP)
 static const resource_int_t resid_resources_int[] = {
-    { "SidResidSampling", 0, RES_EVENT_NO, NULL,
+    { "SidResidSampling", SID_RESID_SAMPLING_RESAMPLING, RES_EVENT_NO, NULL,
       &sid_resid_sampling, set_sid_resid_sampling, NULL },
-    { "SidResidPassband", 90, RES_EVENT_NO, NULL,
+#if defined(HAVE_RESID) || defined(HAVE_RESID_DTV)
+    { "SidResidEnableRawOutput", 0, RES_EVENT_NO, NULL,
+      &sid_resid_enable_raw_output, set_sid_resid_enable_raw_output, NULL },
+    { "SidResidPassband", RESID_6581_PASSBAND_DEFAULT, RES_EVENT_NO, NULL,
       &sid_resid_passband, set_sid_resid_passband, NULL },
-    { "SidResidGain", 97, RES_EVENT_NO, NULL,
+    { "SidResidGain", RESID_6581_FILTER_GAIN_DEFAULT, RES_EVENT_NO, NULL,
       &sid_resid_gain, set_sid_resid_gain, NULL },
-    { "SidResidFilterBias", 0, RES_EVENT_NO, NULL,
+    { "SidResidFilterBias", RESID_6581_FILTER_BIAS_DEFAULT, RES_EVENT_NO, NULL,
       &sid_resid_filter_bias, set_sid_resid_filter_bias, NULL },
-    { NULL }
+    { "SidResid8580Passband", RESID_8580_PASSBAND_DEFAULT, RES_EVENT_NO, NULL,
+      &sid_resid_8580_passband, set_sid_resid_8580_passband, NULL },
+    { "SidResid8580Gain", RESID_8580_FILTER_GAIN_DEFAULT, RES_EVENT_NO, NULL,
+      &sid_resid_8580_gain, set_sid_resid_8580_gain, NULL },
+    { "SidResid8580FilterBias", RESID_8580_FILTER_BIAS_DEFAULT, RES_EVENT_NO, NULL,
+      &sid_resid_8580_filter_bias, set_sid_resid_8580_filter_bias, NULL },
+#endif
+    RESOURCE_INT_LIST_END
 };
 #endif
 
-static const resource_int_t common_resources_int[] = {
+#if defined(HAVE_RESIDFP)
+static const resource_int_t residfp_resources_int[] = {
+    { "SidResid6581OldCaps", 0, RES_EVENT_NO, NULL,
+      &sid_residfp_6581_old_caps, set_sid_residfp_6581_old_caps, NULL },
+    { "SidResid6581FilterCurve", RESIDFP_6581_FILTER_CURVE_DEFAULT, RES_EVENT_NO, NULL,
+      &sid_residfp_6581_filter_curve, set_sid_residfp_6581_filter_curve, NULL },
+    { "SidResid6581FilterRange", RESIDFP_6581_FILTER_RANGE_DEFAULT, RES_EVENT_NO, NULL,
+      &sid_residfp_6581_filter_range, set_sid_residfp_6581_filter_range, NULL },
+    { "SidResid8580FilterCurve", RESIDFP_8580_FILTER_CURVE_DEFAULT, RES_EVENT_NO, NULL,
+      &sid_residfp_8580_filter_curve, set_sid_residfp_8580_filter_curve, NULL },
+    { "SidResidCombinedWaveformStrength", RESIDFP_COMBINED_WAVEFORM_STRENGTH_DEFAULT, RES_EVENT_NO, NULL,
+      &sid_residfp_combined_waveform_strength, set_sid_residfp_combined_waveform_strength, NULL },
+    RESOURCE_INT_LIST_END
+};
+#endif
+
+static resource_int_t common_resources_int[] = {
+    /* CAUTION: position is hardcoded below */
+#if defined (HAVE_RESIDFP)
+    { "SidEngine", SID_ENGINE_DEFAULT,
+      RES_EVENT_STRICT, (resource_value_t)SID_ENGINE_RESIDFP,
+      &sid_engine, set_sid_engine, NULL },
+#elif defined (HAVE_RESID)
     { "SidEngine", SID_ENGINE_DEFAULT,
       RES_EVENT_STRICT, (resource_value_t)SID_ENGINE_RESID,
       &sid_engine, set_sid_engine, NULL },
+#else
+    { "SidEngine", SID_ENGINE_DEFAULT,
+      RES_EVENT_STRICT, (resource_value_t)SID_ENGINE_FASTSID,
+      &sid_engine, set_sid_engine, NULL },
+#endif
+#if defined(HAVE_FASTSID) || defined(HAVE_RESID) || defined(HAVE_RESIDFP) || defined(HAVE_RESID_DTV)
     { "SidFilters", 1, RES_EVENT_SAME, NULL,
       &sid_filters_enabled, set_sid_filters_enabled, NULL },
+#endif
+    /* CAUTION: position is hardcoded below */
     { "SidModel", SID_MODEL_DEFAULT, RES_EVENT_SAME, NULL,
       &sid_model, set_sid_model, NULL },
+    RESOURCE_INT_LIST_END
+};
+
 #ifdef HAVE_HARDSID
+/* FIXME: resources are not documented */
+static const resource_int_t hardsid_resources_int[] = {
     { "SidHardSIDMain", 0, RES_EVENT_STRICT, (resource_value_t)0,
       &sid_hardsid_main, set_sid_hardsid_main, NULL },
     { "SidHardSIDRight", 1, RES_EVENT_NO, NULL,
       &sid_hardsid_right, set_sid_hardsid_right, NULL },
-#endif
-    { NULL }
+    RESOURCE_INT_LIST_END
 };
+#endif
+
+#ifdef HAVE_USBSID
+static const resource_int_t usbsid_resources_int[] = {
+    { "SidUSBSIDReadMode", 0, RES_EVENT_NO, NULL,
+      &sid_usbsid_readmode, set_sid_usbsid_readmode, NULL },
+    { "SidUSBSIDAudioMode", 0, RES_EVENT_NO, NULL,
+      &sid_usbsid_audiomode, set_sid_usbsid_audiomode, NULL },
+    { "SidUSBSIDDiffSize", 64, RES_EVENT_NO, NULL,
+      &sid_usbsid_diffsize, set_sid_usbsid_diffsize, NULL },
+    { "SidUSBSIDBufferSize", 8192, RES_EVENT_NO, NULL,
+      &sid_usbsid_buffsize, set_sid_usbsid_buffsize, NULL },
+    RESOURCE_INT_LIST_END
+};
+#endif
+
 
 static const resource_int_t stereo_resources_int[] = {
     { "SidStereo", 0, RES_EVENT_SAME, NULL,
       &sid_stereo, set_sid_stereo, NULL },
-    { NULL }
+    RESOURCE_INT_LIST_END
 };
 
 int sid_common_resources_init(void)
 {
+    /* Setup default factory value for sid engine and model. We do this
+       here so the default value will not end up in the config file. */
+
+    /* setup the default for sid engine */
+#ifdef HAVE_RESIDFP
+    common_resources_int[0].factory_value = SID_ENGINE_RESIDFP;
+#elif defined(HAVE_RESID)
+    common_resources_int[0].factory_value = SID_ENGINE_RESID;
+#else
+    common_resources_int[0].factory_value = SID_ENGINE_FASTSID;
+#endif
+    /* setup the default for sid model */
+    common_resources_int[2].factory_value = SID_MODEL_6581;
+#ifdef HAVE_RESID
+    if (machine_class == VICE_MACHINE_C64DTV) {
+        common_resources_int[2].factory_value = SID_MODEL_DTVSID;
+    } else
+#endif
+    if ((machine_class == VICE_MACHINE_C128) ||
+        (machine_class == VICE_MACHINE_C64) ||
+        (machine_class == VICE_MACHINE_C64SC) ||
+        (machine_class == VICE_MACHINE_SCPU64)){
+        common_resources_int[2].factory_value = SID_MODEL_8580;
+    }
+
+#ifdef HAVE_HARDSID
+    if (hardsid_available()) {
+        if (resources_register_int(hardsid_resources_int) < 0) {
+            return -1;
+        }
+    }
+#endif
+
+#ifdef HAVE_USBSID
+    if (resources_register_int(usbsid_resources_int) < 0) {
+        return -1;
+    }
+#endif
+
     return resources_register_int(common_resources_int);
 }
 
 int sid_resources_init(void)
 {
-#if defined(HAVE_RESID) || defined(HAVE_RESID_FP) || defined(HAVE_RESID_DTV)
+#if defined(HAVE_RESID) || defined(HAVE_RESID_DTV) || defined(HAVE_RESIDFP)
     if (resources_register_int(resid_resources_int) < 0) {
+        return -1;
+    }
+#endif
+#if defined(HAVE_RESIDFP)
+    if (resources_register_int(residfp_resources_int) < 0) {
         return -1;
     }
 #endif
@@ -353,74 +699,101 @@ static sid_engine_model_t *sid_engine_model_list[22];
 static int num_sid_engine_models;
 
 #ifdef HAVE_RESID_DTV
-static const sid_engine_model_t sid_engine_models_resid_dtv[] = {
+static sid_engine_model_t sid_engine_models_resid_dtv[] = {
     { "DTVSID (ReSID-DTV)", SID_RESID_DTVSID },
     { NULL, -1 }
 };
 #endif
 
-static const sid_engine_model_t sid_engine_models_fastsid[] = {
+#ifdef HAVE_FASTSID
+#if defined(HAVE_RESID) || defined(HAVE_RESIDFP)
+static sid_engine_model_t sid_engine_models_fastsid[] = {
     { "6581 (Fast SID)", SID_FASTSID_6581 },
     { "8580 (Fast SID)", SID_FASTSID_8580 },
     { NULL, -1 }
 };
+#else
+static sid_engine_model_t sid_engine_models_fastsid[] = {
+    { "6581", SID_FASTSID_6581 },
+    { "8580", SID_FASTSID_8580 },
+    { NULL, -1 }
+};
+#endif
+#endif
 
 #ifdef HAVE_RESID
-static const sid_engine_model_t sid_engine_models_resid[] = {
+#if defined(HAVE_FASTSID) || defined(HAVE_RESIDFP)
+static sid_engine_model_t sid_engine_models_resid[] = {
     { "6581 (ReSID)", SID_RESID_6581 },
     { "8580 (ReSID)", SID_RESID_8580 },
     { "8580 + digi boost (ReSID)", SID_RESID_8580D },
     { NULL, -1 }
 };
+#else
+static sid_engine_model_t sid_engine_models_resid[] = {
+    { "6581", SID_RESID_6581 },
+    { "8580", SID_RESID_8580 },
+    { "8580 + digi boost", SID_RESID_8580D },
+    { NULL, -1 }
+};
+#endif
+#endif
+
+#ifdef HAVE_RESIDFP
+#if defined(HAVE_FASTSID) || defined(HAVE_RESID)
+static sid_engine_model_t sid_engine_models_residfp[] = {
+    { "6581 (ReSIDfp)", SID_RESIDFP_6581 },
+    { "8580 (ReSIDfp)", SID_RESIDFP_8580 },
+    { "8580 + digi boost (ReSIDfp)", SID_RESIDFP_8580D },
+    { NULL, -1 }
+};
+#else
+static sid_engine_model_t sid_engine_models_residfp[] = {
+    { "6581", SID_RESIDFP_6581 },
+    { "8580", SID_RESIDFP_8580 },
+    { "8580 + digi boost", SID_RESIDFP_8580D },
+    { NULL, -1 }
+};
+#endif
 #endif
 
 #ifdef HAVE_CATWEASELMKIII
-static const sid_engine_model_t sid_engine_models_catweaselmkiii[] = {
+static sid_engine_model_t sid_engine_models_catweaselmkiii[] = {
     { "Catweasel MK3", SID_CATWEASELMKIII },
     { NULL, -1 }
 };
 #endif
 
 #ifdef HAVE_HARDSID
-static const sid_engine_model_t sid_engine_models_hardsid[] = {
+static sid_engine_model_t sid_engine_models_hardsid[] = {
     { "HardSID", SID_HARDSID },
     { NULL, -1 }
 };
 #endif
 
 #ifdef HAVE_PARSID
-static const sid_engine_model_t sid_engine_models_parsid[] = {
-    { "ParSID on Port 1", SID_PARSID_PORT1 },
-    { "ParSID on Port 2", SID_PARSID_PORT2 },
-    { "ParSID on Port 3", SID_PARSID_PORT3 },
+#if !defined(WINDOWS_COMPILE) || (defined(WINDOWS_COMPILE) && defined(HAVE_LIBIEEE1284))
+static sid_engine_model_t sid_engine_models_parsid[] = {
+    { "ParSID", SID_PARSID },
+    { NULL, -1 }
+};
+#endif
+#endif
+
+#ifdef HAVE_USBSID
+static sid_engine_model_t sid_engine_models_usbsid[] = {
+    { "USBSID-Pico", SID_USBSID },
     { NULL, -1 }
 };
 #endif
 
-#ifdef HAVE_RESID_FP
-static const sid_engine_model_t sid_engine_models_resid_fp[] = {
-    { "6581R3 4885 (ReSID-fp)",  SID_RESIDFP_6581R3_4885 },
-    { "6581R3 0486S (ReSID-fp)", SID_RESIDFP_6581R3_0486S },
-    { "6581R3 3984 (ReSID-fp)",  SID_RESIDFP_6581R3_3984 },
-    { "6581R4AR 3789 (ReSID-fp)", SID_RESIDFP_6581R4AR_3789 },
-    { "6581R3 4485 (ReSID-fp)",  SID_RESIDFP_6581R3_4485 },
-    { "6581R4 1986S (ReSID-fp)", SID_RESIDFP_6581R4_1986S },
-    { "8580R5 3691 (ReSID-fp)",  SID_RESIDFP_8580R5_3691 },
-    { "8580R5 3691 + digi boost (ReSID-fp)", SID_RESIDFP_8580R5_3691D },
-    { "8580R5 1489 (ReSID-fp)",  SID_RESIDFP_8580R5_1489 },
-    { "8580R5 1489 + digi boost (ReSID-fp)", SID_RESIDFP_8580R5_1489D, },
-    { NULL, -1 }
-};
-#endif
-
-static void add_sid_engine_models(const sid_engine_model_t *sid_engine_models)
+static void add_sid_engine_models(sid_engine_model_t *sid_engine_models)
 {
     int i = 0;
 
     while (sid_engine_models[i].name) {
         sid_engine_model_list[num_sid_engine_models++] = &sid_engine_models[i++];
     }
-
 }
 
 sid_engine_model_t **sid_get_engine_model_list(void)
@@ -433,11 +806,17 @@ sid_engine_model_t **sid_get_engine_model_list(void)
     }
 #endif
 
+#ifdef HAVE_FASTSID
     add_sid_engine_models(sid_engine_models_fastsid);
+#endif
 
 #ifdef HAVE_RESID
     /* Should we have if (machine_class != VICE_MACHINE_C64DTV) here? */
     add_sid_engine_models(sid_engine_models_resid);
+#endif
+
+#ifdef HAVE_RESIDFP
+    add_sid_engine_models(sid_engine_models_residfp);
 #endif
 
 #ifdef HAVE_CATWEASELMKIII
@@ -453,11 +832,17 @@ sid_engine_model_t **sid_get_engine_model_list(void)
 #endif
 
 #ifdef HAVE_PARSID
-    add_sid_engine_models(sid_engine_models_parsid);
+#if !defined(WINDOWS_COMPILE) || (defined(WINDOWS_COMPILE) && defined(HAVE_LIBIEEE1284))
+    if (parsid_available()) {
+        add_sid_engine_models(sid_engine_models_parsid);
+    }
+#endif
 #endif
 
-#ifdef HAVE_RESID_FP
-    add_sid_engine_models(sid_engine_models_resid_fp);
+#ifdef HAVE_USBSID
+    if (usbsid_available()) {
+        add_sid_engine_models(sid_engine_models_usbsid);
+    }
 #endif
 
     sid_engine_model_list[num_sid_engine_models] = NULL;
@@ -468,38 +853,35 @@ sid_engine_model_t **sid_get_engine_model_list(void)
 
 static int sid_check_engine_model(int engine, int model)
 {
+    DBG(("sid_check_engine_model SidEngine:%d SidModel:%d\n", engine, model));
     switch (engine) {
         case SID_ENGINE_CATWEASELMKIII:
         case SID_ENGINE_HARDSID:
-        case SID_ENGINE_PARSID_PORT1:
-        case SID_ENGINE_PARSID_PORT2:
-        case SID_ENGINE_PARSID_PORT3:
+        case SID_ENGINE_PARSID:
+        case SID_ENGINE_USBSID:
             return 0;
         default:
             break;
     }
 
     switch (engine << 8 | model) {
+#ifdef HAVE_FASTSID
         case SID_FASTSID_6581:
         case SID_FASTSID_8580:
+#endif
 #ifdef HAVE_RESID
         case SID_RESID_6581:
         case SID_RESID_8580:
         case SID_RESID_8580D:
 #endif
-#ifdef HAVE_RESID_FP
-        case SID_RESIDFP_6581R3_4885:
-        case SID_RESIDFP_6581R3_0486S:
-        case SID_RESIDFP_6581R3_3984:
-        case SID_RESIDFP_6581R4AR_3789:
-        case SID_RESIDFP_6581R3_4485:
-        case SID_RESIDFP_6581R4_1986S:
-        case SID_RESIDFP_8580R5_3691:
-        case SID_RESIDFP_8580R5_3691D:
-        case SID_RESIDFP_8580R5_1489:
-        case SID_RESIDFP_8580R5_1489D:
+#ifdef HAVE_RESIDFP
+        case SID_RESIDFP_6581:
+        case SID_RESIDFP_8580:
+        case SID_RESIDFP_8580D:
 #endif
+#if defined(HAVE_FASTSID) || defined(HAVE_RESID) || defined(HAVE_RESIDFP)
             return 0;
+#endif
 #ifdef HAVE_RESID_DTV
         case SID_RESID_DTVSID:
             if (machine_class == VICE_MACHINE_C64DTV) {
@@ -515,6 +897,7 @@ static int sid_check_engine_model(int engine, int model)
 
 int sid_set_engine_model(int engine, int model)
 {
+    DBG(("sid_set_engine_model SidEngine:%d SidModel:%d\n", engine, model));
     if (sid_check_engine_model(engine, model) < 0) {
         return -1;
     }

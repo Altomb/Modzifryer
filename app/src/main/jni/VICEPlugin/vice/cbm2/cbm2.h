@@ -2,8 +2,9 @@
  * cbm2.h
  *
  * Written by
- *  André Fachat <fachat@physik.tu-chemnitz.de>
+ *  Andre Fachat <fachat@physik.tu-chemnitz.de>
  *  Andreas Boose <viceteam@t-online.de>
+ *  Marco van den Heuvel <blackystardust68@yahoo.com>
  *
  * This file is part of VICE, the Versatile Commodore Emulator.
  * See README for copyright notice.
@@ -82,8 +83,8 @@
 
 struct snapshot_s;
 
-extern int cbm2_c500_snapshot_write_module(struct snapshot_s *p);
-extern int cbm2_c500_snapshot_read_module(struct snapshot_s *p);
+int cbm2_c500_snapshot_write_module(struct snapshot_s *p);
+int cbm2_c500_snapshot_read_module(struct snapshot_s *p);
 
 struct cia_context_s;
 struct tpi_context_s;
@@ -100,4 +101,3 @@ extern read_func_ptr_t *_mem_read_ind_tab_ptr;
 extern store_func_ptr_t *_mem_write_ind_tab_ptr;
 
 #endif
-

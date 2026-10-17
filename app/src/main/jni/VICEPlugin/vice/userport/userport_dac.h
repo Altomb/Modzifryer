@@ -2,7 +2,7 @@
  * userport_dac.h: Generic userport 8bit DAC sound device emulation.
  *
  * Written by
- *  Marco van den Heuvel <viceteam@t-online.de>
+ *  Marco van den Heuvel <blackystardust68@yahoo.com>
  *
  * This file is part of VICE, the Versatile Commodore Emulator.
  * See README for copyright notice.
@@ -30,11 +30,8 @@
 #include "types.h"
 #include "sound.h"
 
-extern int userport_dac_resources_init(void);
-extern int userport_dac_cmdline_options_init(void);
+int userport_dac_resources_init(void);
 
-extern void userport_dac_store(BYTE value);
-
-extern void userport_dac_sound_chip_init(void);
+void userport_dac_sound_chip_init(void);
 
 #endif

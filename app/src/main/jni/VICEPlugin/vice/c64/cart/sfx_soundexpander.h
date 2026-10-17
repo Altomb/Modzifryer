@@ -2,7 +2,7 @@
  * sfx_soundexpander.h
  *
  * Written by
- *  Marco van den Heuvel <viceteam@t-online.de>
+ *  Marco van den Heuvel <blackystardust68@yahoo.com>
  *
  * This file is part of VICE, the Versatile Commodore Emulator.
  * See README for copyright notice.
@@ -30,19 +30,21 @@
 #include "types.h"
 #include "sound.h"
 
-extern int sfx_soundexpander_cart_enabled(void);
-extern void sfx_soundexpander_reset(void);
-extern int sfx_soundexpander_enable(void);
-extern void sfx_soundexpander_detach(void);
+int sfx_soundexpander_cart_enabled(void);
+void sfx_soundexpander_reset(void);
+int sfx_soundexpander_enable(void);
+int sfx_soundexpander_disable(void);
+void sfx_soundexpander_detach(void);
 
-extern int sfx_soundexpander_resources_init(void);
-extern void sfx_soundexpander_resources_shutdown(void);
-extern int sfx_soundexpander_cmdline_options_init(void);
+int sfx_soundexpander_resources_init(void);
+void sfx_soundexpander_resources_shutdown(void);
+int sfx_soundexpander_cmdline_options_init(void);
 
-extern void sfx_soundexpander_sound_chip_init(void);
+void sfx_soundexpander_sound_chip_init(void);
 
 struct snapshot_s;
-extern int sfx_soundexpander_snapshot_read_module(struct snapshot_s *s);
-extern int sfx_soundexpander_snapshot_write_module(struct snapshot_s *s);
+
+int sfx_soundexpander_snapshot_read_module(struct snapshot_s *s);
+int sfx_soundexpander_snapshot_write_module(struct snapshot_s *s);
 
 #endif

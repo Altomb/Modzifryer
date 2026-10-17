@@ -1,0 +1,187 @@
+LOCAL_PATH := $(call my-dir)
+include $(CLEAR_VARS)
+LOCAL_MODULE := resid
+LOCAL_CFLAGS := $(MY_CFLAGS) -ffast-math -fno-exceptions
+
+MY_RESID_FILES = $(wildcard $(LOCAL_PATH)/vice/resid/*.cc)
+LOCAL_SRC_FILES := $(MY_RESID_FILES:$(LOCAL_PATH)/%=%)
+include $(BUILD_STATIC_LIBRARY)
+
+include $(CLEAR_VARS)
+LOCAL_MODULE := vice
+LOCAL_LDLIBS := -llog -lz
+
+MY_ARCHDEP := $(wildcard $(LOCAL_PATH)/vice/arch/shared/archdep_*.c)
+MY_HEADLESS := $(filter-out $(LOCAL_PATH)/vice/arch/headless/main.c,$(wildcard $(LOCAL_PATH)/vice/arch/headless/*.c))
+
+LOCAL_SRC_FILES := \
+    $(MY_ARCHDEP:$(LOCAL_PATH)/%=%) \
+    $(MY_HEADLESS:$(LOCAL_PATH)/%=%) \
+#    vice/arch/shared/socketdrv/socketdrv.c \
+    vice/arch/shared/signals.c \
+    VICEPlugin.cpp \
+    vice/alarm.c \
+    vice/charset.c \
+    vice/cmdline.c \
+    vice/crc32.c \
+    vice/debug.c \
+    vice/dma.c \
+    vice/event.c \
+    vice/findpath.c \
+    vice/fliplist.c \
+    vice/init.c \
+    vice/initcmdline.c \
+    vice/interrupt.c \
+    vice/joyport/joystick.c \
+    vice/kbdbuf.c \
+    vice/keyboard.c \
+    vice/log.c \
+    vice/machine.c \
+    vice/machine-bus.c \
+    vice/mainlock.c \
+    vice/monitor/monitor.c \
+    vice/monitor/monitor_network.c \
+    vice/network.c \
+    vice/palette.c \
+    vice/ram.c \
+    vice/romset.c \
+    vice/resources.c \
+    vice/screenshot.c \
+    vice/snapshot.c \
+    vice/sound.c \
+    vice/profiler.c \
+    vice/sysfile.c \
+    vice/traps.c \
+    vice/util.c \
+    vice/vsync.c \
+    vice/zfile.c \
+    vice/serial/serial-device.c \
+    vice/serial/serial-iec.c \
+    vice/serial/serial-trap.c \
+    vice/serial/serial-realdevice.c \
+    vice/serial/serial-iec-bus.c \
+    vice/serial/serial.c \
+    vice/serial/serial-iec-device.c \
+    vice/rs232drv/rs232.c \
+    vice/rs232drv/rs232drv.c \
+    vice/rs232drv/rs232net.c \
+    vice/zipcode.c \
+    vice/datasette/datasette.c \
+    vice/datasette/datasette-sound.c \
+    vice/c64/c64gluelogic.c \
+    vice/c64/c64keyboard.c \
+    vice/c64/c64memlimit.c \
+    vice/c64/c64memrom.c \
+    vice/c64/c64model.c \
+    vice/c64/c64rom.c \
+    vice/c64/c64romset.c \
+    vice/c64/c64rsuser.c \
+    vice/c64/c64video.c \
+    vice/c64/psid.c \
+    vice/c64/reloc65.c \
+    vice/c64/vsid.c \
+    vice/c64/vsid-cmdline-options.c \
+    vice/c64/vsid-debugcart.c \
+    vice/c64/vsid-resources.c \
+    vice/c64/vsid-snapshot.c \
+    vice/c64/vsid-stubs.c \
+    vice/c64/vsidcia1.c \
+    vice/c64/vsidcia2.c \
+    vice/c64/vsidmem.c \
+    vice/c64/vsidmeminit.c \
+    vice/c64/vsidmemsnapshot.c \
+    vice/c64/vsidpla.c \
+    vice/c64/vsidsound.c \
+    vice/core/ciacore.c \
+    vice/core/ciatimer.c \
+    vice/core/viacore.c \
+    vice/raster/raster.c \
+    vice/raster/raster-cache.c \
+    vice/raster/raster-canvas.c \
+    vice/raster/raster-changes.c \
+    vice/raster/raster-cmdline-options.c \
+    vice/raster/raster-line.c \
+    vice/raster/raster-line-changes.c \
+    vice/raster/raster-line-changes-sprite.c \
+    vice/raster/raster-modes.c \
+    vice/raster/raster-resources.c \
+    vice/raster/raster-sprite.c \
+    vice/raster/raster-sprite-cache.c \
+    vice/raster/raster-sprite-status.c \
+    vice/sid/fastsid.c \
+    vice/sid/sid.c \
+    vice/sid/sid-cmdline-options.c \
+    vice/sid/sid-resources.c \
+    vice/sid/sid-snapshot.c \
+    vice/sid/resid.cc \
+    vice/arch/shared/sounddrv/soundaiff.c \
+    vice/arch/shared/sounddrv/sounddump.c \
+    vice/arch/shared/sounddrv/soundfs.c \
+    vice/arch/shared/sounddrv/soundiff.c \
+    vice/arch/shared/sounddrv/soundmovie.c \
+    vice/arch/shared/sounddrv/soundvoc.c \
+    vice/arch/shared/sounddrv/soundwav.c \
+    vice/vicii/vicii.c \
+    vice/vicii/vicii-badline.c \
+    vice/vicii/vicii-color.c \
+    vice/vicii/vicii-cmdline-options.c \
+    vice/vicii/vicii-fetch.c \
+    vice/vicii/vicii-irq.c \
+    vice/vicii/vicii-mem.c \
+    vice/vicii/vicii-phi1.c \
+    vice/vicii/vicii-resources.c \
+    vice/vicii/vicii-snapshot.c \
+    vice/vicii/vicii-sprites.c \
+    vice/vicii/vicii-stubs.c \
+    vice/vicii/vicii-timing.c \
+    vice/hvsc/main.c \
+    vice/video/video-canvas.c \
+    vice/video/video-cmdline-options.c \
+    vice/video/video-viewport.c \
+    vice/video/video-sound.c \
+    vice/video/video-render.c \
+    vice/video/video-resources.c \
+    overrides/sounddrv/sounddummy.c \
+    overrides/vsidcpu.c \
+#terminator for last backslash
+
+LOCAL_CFLAGS := $(MY_CFLAGS) -DHAVE_CONFIG_H
+
+LOCAL_C_INCLUDES := $(LOCAL_PATH) \
+    $(LOCAL_PATH)/vice/arch/headless \
+    $(LOCAL_PATH)/vice/arch/shared \
+    $(LOCAL_PATH)/vice/arch/shared/sounddrv \
+    $(LOCAL_PATH)/vice \
+    $(LOCAL_PATH)/vice/c64 \
+    $(LOCAL_PATH)/vice/c64/cart \
+    $(LOCAL_PATH)/vice/c64dtv \
+    $(LOCAL_PATH)/vice/core \
+    $(LOCAL_PATH)/vice/core/rtc \
+    $(LOCAL_PATH)/vice/datasette \
+    $(LOCAL_PATH)/vice/diag \
+    $(LOCAL_PATH)/vice/diskimage \
+    $(LOCAL_PATH)/vice/drive \
+    $(LOCAL_PATH)/vice/drive/iec/c64exp \
+    $(LOCAL_PATH)/vice/fsdevice \
+    $(LOCAL_PATH)/vice/hvsc \
+    $(LOCAL_PATH)/vice/imagecontents \
+    $(LOCAL_PATH)/vice/joyport \
+    $(LOCAL_PATH)/vice/lib/p64 \
+    $(LOCAL_PATH)/vice/monitor \
+    $(LOCAL_PATH)/vice/printerdrv \
+    $(LOCAL_PATH)/vice/raster \
+    $(LOCAL_PATH)/vice/rs232drv \
+    $(LOCAL_PATH)/vice/samplerdrv \
+    $(LOCAL_PATH)/vice/sid \
+    $(LOCAL_PATH)/vice/tape \
+    $(LOCAL_PATH)/vice/tapeport \
+    $(LOCAL_PATH)/vice/userport \
+    $(LOCAL_PATH)/vice/vdrive \
+    $(LOCAL_PATH)/vice/vicii \
+    $(LOCAL_PATH)/vice/viciisc \
+    $(LOCAL_PATH)/vice/video \
+#terminator for last backslash
+
+LOCAL_STATIC_LIBRARIES := resid
+
+include $(BUILD_SHARED_LIBRARY)

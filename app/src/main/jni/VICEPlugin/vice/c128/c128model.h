@@ -29,22 +29,33 @@
 
 #include "types.h"
 
-#define C128MODEL_C128_PAL      0
-#define C128MODEL_C128DCR_PAL   1
+enum {
+    C128MODEL_C128_PAL = 0,
+    C128MODEL_C128D_PAL,
+    C128MODEL_C128DCR_PAL,
 
-#define C128MODEL_C128_NTSC     2
-#define C128MODEL_C128DCR_NTSC  3
+    C128MODEL_C128_NTSC,
+    C128MODEL_C128D_NTSC,
+    C128MODEL_C128DCR_NTSC,
 
-#define C128MODEL_NUM 4
+/* This entry always needs to be at the end */
+    C128MODEL_NUM
+};
 
 #define C128MODEL_UNKNOWN 99
 
-extern int c128model_get(void);
-extern int c128model_get_temp(int vicii_model, int sid_model, int vdc_revision,
-                             int vdc_64k, int cia1_model, int cia2_model);
-extern void c128model_set(int model);
-extern void c128model_set_temp(int model, int *vicii_model, int *sid_model,
-                              int *vdc_revision, int *vdc_64k, int *cia1_model, 
-                              int *cia2_model);
+#include "c64model.h" /* for the BOARD_ constants */
+
+#define OLD_CIA   0
+#define NEW_CIA   1
+
+#define OLD_SID   0
+#define NEW_SID   1
+
+#define VDC16K   0
+#define VDC64K   1
+
+int c128model_get(void);
+void c128model_set(int model);
 
 #endif

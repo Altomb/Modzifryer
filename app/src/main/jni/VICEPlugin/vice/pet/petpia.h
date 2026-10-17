@@ -3,7 +3,7 @@
  *
  * Written by
  *  Jouko Valta <jopi@stekt.oulu.fi>
- *  Andre' Fachat <fachat@physik.tu-chemnitz.de>
+ *  Andre Fachat <fachat@physik.tu-chemnitz.de>
  *
  * This file is part of VICE, the Versatile Commodore Emulator.
  * See README for copyright notice.
@@ -29,6 +29,8 @@
 #define VICE_PIA_H
 
 #include "types.h"
+#include <stdbool.h>
+#include <stdint.h>
 
 /* Signal values (for signaling edges on the control lines) */
 
@@ -44,32 +46,36 @@
 
 struct snapshot_s;
 
-extern int pia1_init_resources(void);
-extern int pia1_init_cmdline_options(void);
+int pia1_resources_init(void);
+int pia1_cmdline_options_init(void);
 
-extern void pia1_init(void);
-extern void pia1_reset(void);
-extern void pia1_signal(int line, int edge);
-extern void pia1_store(WORD addr, BYTE value);
-extern BYTE pia1_read(WORD addr);
-extern BYTE pia1_peek(WORD addr);
-extern void pia1_set_tape_sense(int v);
+void pia1_init(void);
+void pia1_reset(void);
+void pia1_signal(int line, int edge, CLOCK offset);
+void pia1_store(uint16_t addr, uint8_t value);
+uint8_t pia1_read(uint16_t addr);
+uint8_t pia1_peek(uint16_t addr);
+void pia1_set_tape1_sense(int v);
+void pia1_set_tape2_sense(int v);
+void pia1_set_tape1_write_in(int v);
+void pia1_set_tape2_write_in(int v);
+void pia1_set_tape1_motor_in(int v);
+void pia1_set_tape2_motor_in(int v);
+bool pia1_get_diagnostic_pin(void);
+int pia1_snapshot_read_module(struct snapshot_s *);
+int pia1_snapshot_write_module(struct snapshot_s *);
 
-extern int pia1_snapshot_read_module(struct snapshot_s *);
-extern int pia1_snapshot_write_module(struct snapshot_s *);
+void pia2_init(void);
+void pia2_reset(void);
+void pia2_signal(int line, int edge, CLOCK offset);
+void pia2_store(uint16_t addr, uint8_t value);
+uint8_t pia2_read(uint16_t addr);
+uint8_t pia2_peek(uint16_t addr);
 
-extern void pia2_init(void);
-extern void pia2_reset(void);
-extern void pia2_signal(int line, int edge);
-extern void pia2_store(WORD addr, BYTE value);
-extern BYTE pia2_read(WORD addr);
-extern BYTE pia2_peek(WORD addr);
+int pia1_dump(void);
+int pia2_dump(void);
 
-extern int pia1_dump(void);
-extern int pia2_dump(void);
-
-extern int pia2_snapshot_read_module(struct snapshot_s *);
-extern int pia2_snapshot_write_module(struct snapshot_s *);
+int pia2_snapshot_read_module(struct snapshot_s *);
+int pia2_snapshot_write_module(struct snapshot_s *);
 
 #endif
-

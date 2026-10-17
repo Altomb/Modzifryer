@@ -32,16 +32,15 @@
 #include "vic20.h"
 
 
-void machine_printer_setup_context(struct machine_context_s *machine_context)
+void machine_printer_setup_context(struct machine_context_s *machinecontext)
 {
-
 }
 
 int machine_printer_resources_init(void)
 {
-    if (printer_serial_init_resources() < 0
-        || printer_userport_init_resources())
+    if (printer_serial_init_resources() < 0 || printer_userport_init_resources()) {
         return -1;
+    }
     return 0;
 }
 
@@ -51,26 +50,15 @@ void machine_printer_resources_shutdown(void)
 
 int machine_printer_cmdline_options_init(void)
 {
-    if (printer_serial_init_cmdline_options() < 0
-        || printer_userport_init_cmdline_options() < 0)
-        return -1;
-    return 0;
-}
-
-static void vic20printer_userport_set_busy(unsigned int b)
-{
-    viacore_signal(machine_context.via2,
-                   VIA_SIG_CB1, b ? VIA_SIG_RISE : VIA_SIG_FALL);
+    return printer_serial_init_cmdline_options();
 }
 
 void machine_printer_init(void)
 {
     printer_serial_init();
-    printer_userport_init(vic20printer_userport_set_busy);
 }
 
 void machine_printer_shutdown(void)
 {
     printer_serial_shutdown();
 }
-

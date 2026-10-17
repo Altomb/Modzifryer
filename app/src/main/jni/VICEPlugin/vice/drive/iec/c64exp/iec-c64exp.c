@@ -26,13 +26,22 @@
 
 #include "vice.h"
 
+#include "iec-c64exp.h"
 #include "c64exp-cmdline-options.h"
 #include "c64exp-resources.h"
 #include "drivetypes.h"
 #include "dolphindos3.h"
 #include "profdos.h"
+#include "stardos-exp.h"
 #include "supercard.h"
 
+/* #define DEBUG_IECEXT */
+
+#ifdef DEBUG_IECEXT
+#define DBG(x)  log_printf x
+#else
+#define DBG(x)
+#endif
 
 int iec_c64exp_resources_init(void)
 {
@@ -49,24 +58,32 @@ int iec_c64exp_cmdline_options_init(void)
     return c64exp_cmdline_options_init();
 }
 
-void iec_c64exp_init(struct drive_context_s *drv)
+void iec_c64exp_init(struct diskunit_context_s *drv)
 {
+    DBG(("iec_c64exp_init profdos:%d supercard:%d stardos:%d dd3:%d",
+           drv->profdos, drv->supercard, drv->stardos, drv->dolphindos3));
     dd3_init(drv);
     profdos_init(drv);
+    stardos_exp_init(drv);
     supercard_init(drv);
 }
 
-void iec_c64exp_reset(struct drive_context_s *drv)
+void iec_c64exp_reset(struct diskunit_context_s *drv)
 {
+    DBG(("iec_c64exp_reset profdos:%d supercard:%d stardos:%d dd3:%d",
+           drv->profdos, drv->supercard, drv->stardos, drv->dolphindos3));
     dd3_reset(drv);
     profdos_reset(drv);
+    stardos_exp_reset(drv);
     supercard_reset(drv);
 }
 
-void iec_c64exp_mem_init(struct drive_context_s *drv, unsigned int type)
+void iec_c64exp_mem_init(struct diskunit_context_s *drv, unsigned int type)
 {
+    DBG(("iec_c64exp_mem_init profdos:%d supercard:%d stardos:%d dd3:%d",
+           drv->profdos, drv->supercard, drv->stardos, drv->dolphindos3));
     dd3_mem_init(drv, type);
     profdos_mem_init(drv, type);
+    stardos_exp_mem_init(drv, type);
     supercard_mem_init(drv, type);
 }
-

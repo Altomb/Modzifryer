@@ -30,9 +30,9 @@
 #include <stdlib.h>
 
 #include "archdep.h"
-#include "cbmdos.h"
 #include "diskconstants.h"
 #include "diskimage.h"
+#include "fsimage-dxx.h"
 #include "fsimage-gcr.h"
 #include "fsimage-p64.h"
 #include "fsimage-probe.h"
@@ -40,51 +40,67 @@
 #include "lib.h"
 #include "log.h"
 #include "types.h"
-#include "x64.h"
 #include "zfile.h"
+#include "util.h"
+#include "cbmdos.h"
 
+/*#define DEBUG_FSIMAGE*/
+
+#ifdef DEBUG_FSIMAGE
+#define DBG(x)  log_printf x
+#else
+#define DBG(x)
+#endif
 
 static log_t fsimage_log = LOG_DEFAULT;
 
 
-void fsimage_name_set(disk_image_t *image, char *name)
+/** \brief  Set image name
+ *
+ * \param[in]   name    image name
+ */
+void fsimage_name_set(disk_image_t *image, const char *name)
 {
     fsimage_t *fsimage;
 
     fsimage = image->media.fsimage;
 
-    fsimage->name = name;
+    fsimage->name = lib_strdup(name);
 }
 
-char *fsimage_name_get(disk_image_t *image)
+
+/** \brief  Get image name
+ *
+ * \param[in]   image   disk image
+ *
+ * \return  image name
+ */
+const char *fsimage_name_get(const disk_image_t *image)
 {
     fsimage_t *fsimage;
 
-    fsimage = image->media.fsimage;
+    fsimage = image ? image->media.fsimage : NULL;
 
-    return fsimage->name;
+    return fsimage ? fsimage->name : NULL;
 }
 
-void *fsimage_fd_get(disk_image_t *image)
+
+/** \brief  Get file descriptor for \a image
+ *
+ * \param[in]   image   disk image
+ *
+ * \return  file descriptor
+ *
+ * XXX: \a image should not be const, since we return the a member we later use
+ *      to manipulate the image.
+ */
+void *fsimage_fd_get(const disk_image_t *image)
 {
     fsimage_t *fsimage;
 
     fsimage = image->media.fsimage;
 
     return (void *)(fsimage->fd);
-}
-
-/*-----------------------------------------------------------------------*/
-
-void fsimage_error_info_create(fsimage_t *fsimage)
-{
-    fsimage->error_info = lib_calloc(1, MAX_BLOCKS_ANY);
-}
-
-void fsimage_error_info_destroy(fsimage_t *fsimage)
-{
-    lib_free(fsimage->error_info);
-    fsimage->error_info = NULL;
 }
 
 /*-----------------------------------------------------------------------*/
@@ -104,23 +120,84 @@ void fsimage_media_destroy(disk_image_t *image)
 
     fsimage = image->media.fsimage;
 
+    if (fsimage->fd) {
+        fsimage_close(image);
+    }
     lib_free(fsimage->name);
-    fsimage_error_info_destroy(fsimage);
-
     lib_free(fsimage);
 }
 
 /*-----------------------------------------------------------------------*/
 
+/* try to open image, return 0 on success, -1 on failure */
+int fsimage_open_probe(disk_image_t *image)
+{
+    fsimage_t *fsimage;
+    size_t length;
+    unsigned int isdir;
+
+    DBG(("fsimage_open_probe image:%p", image));
+
+    fsimage = image->media.fsimage;
+    fsimage->error_info.map = NULL;
+
+    /* stat file to find out if it exists or if it is a directory */
+    if (archdep_stat(fsimage->name, &length, &isdir) < 0) {
+        log_error(fsimage_log, "Cannot open file `%s'.", fsimage->name);
+        return -1;
+    }
+
+    /* it exists, is it a directory? */
+    if (isdir) {
+        log_error(fsimage_log, "Cannot open directory `%s' as an image.", fsimage->name);
+        return -1;
+    }
+
+    /* proceed with normal opening */
+    fsimage->fd = zfile_fopen(fsimage->name, MODE_READ);
+
+    if (fsimage->fd == NULL) {
+        log_error(fsimage_log, "Cannot open file `%s'.", fsimage->name);
+        return -1;
+    }
+
+    if (fsimage_probe(image) == 0) {
+        /* valid image */
+        fsimage_close(image);
+        return 0;
+    }
+
+    fsimage_close(image);
+    return -1;
+}
+
 int fsimage_open(disk_image_t *image)
 {
     fsimage_t *fsimage;
+    size_t length;
+    unsigned int isdir;
+
+    DBG(("fsimage_open image:%p", image));
 
     fsimage = image->media.fsimage;
+    fsimage->error_info.map = NULL;
 
+    /* stat file to find out if it exists or if it is a directory */
+    if (archdep_stat(fsimage->name, &length, &isdir) < 0) {
+        log_error(fsimage_log, "Cannot open file `%s'.", fsimage->name);
+        return -1;
+    }
+
+    /* it exists, is it a directory? */
+    if (isdir) {
+        log_error(fsimage_log, "Cannot open directory `%s' as an image.", fsimage->name);
+        return -1;
+    }
+
+    /* proceed with normal opening */
     if (image->read_only) {
         fsimage->fd = zfile_fopen(fsimage->name, MODE_READ);
-    } else  {
+    } else {
         fsimage->fd = zfile_fopen(fsimage->name, MODE_READ_WRITE);
 
         /* If we cannot open the image read/write, try to open it read only. */
@@ -139,8 +216,8 @@ int fsimage_open(disk_image_t *image)
         return 0;
     }
 
-    zfile_fclose(fsimage->fd);
     log_message(fsimage_log, "Unknown disk image `%s'.", fsimage->name);
+    fsimage_close(image);
     return -1;
 }
 
@@ -148,129 +225,74 @@ int fsimage_close(disk_image_t *image)
 {
     fsimage_t *fsimage;
 
+    DBG(("fsimage_close image:%p", image));
     fsimage = image->media.fsimage;
 
     if (fsimage->fd == NULL) {
-        log_error(fsimage_log, "Cannot close file `%s'.",  fsimage->name);
+        log_error(fsimage_log, "Cannot close file `%s'.", fsimage->name);
         return -1;
     }
 
-/*   if (image->type == DISK_IMAGE_TYPE_P64) {
-	fsimage_write_p64_image(image);
-    }*/
-    
-    zfile_fclose(fsimage->fd);
+    /* flush the image when closed; added by Roberto Muscedere on 20210125 */
+    if (image->type == DISK_IMAGE_TYPE_P64) {
+        fsimage_write_p64_image(image);
+    }
 
-    fsimage_error_info_destroy(fsimage);
+    if (fsimage->error_info.map) {
+        lib_free(fsimage->error_info.map);
+        fsimage->error_info.map = NULL;
+    }
+    zfile_fclose(fsimage->fd);
+    fsimage->fd = NULL;
 
     return 0;
 }
 
 /*-----------------------------------------------------------------------*/
 
-int fsimage_read_sector(disk_image_t *image, BYTE *buf, unsigned int track,
-                        unsigned int sector)
+int fsimage_read_sector(const disk_image_t *image, uint8_t *buf, const disk_addr_t *dadr)
 {
-    int sectors;
-    long offset;
     fsimage_t *fsimage;
 
     fsimage = image->media.fsimage;
 
-    if (fsimage->fd == NULL) {
+    if (fsimage == NULL || fsimage->fd == NULL) {
         log_error(fsimage_log, "Attempt to read without disk image.");
-        return 74;
+        return CBMDOS_IPE_NOT_READY;
     }
 
     switch (image->type) {
-      case DISK_IMAGE_TYPE_D64:
-      case DISK_IMAGE_TYPE_D67:
-      case DISK_IMAGE_TYPE_D71:
-      case DISK_IMAGE_TYPE_D81:
-      case DISK_IMAGE_TYPE_D80:
-      case DISK_IMAGE_TYPE_D82:
-      case DISK_IMAGE_TYPE_X64:
-      case DISK_IMAGE_TYPE_D1M:
-      case DISK_IMAGE_TYPE_D2M:
-      case DISK_IMAGE_TYPE_D4M:
-        sectors = disk_image_check_sector(image, track, sector);
-
-        if (sectors < 0) {
-            log_error(fsimage_log, "Track %i, Sector %i out of bounds.",
-                      track, sector);
-            return 66;
-        }
-
-        offset = sectors << 8;
-
-        if (image->type == DISK_IMAGE_TYPE_X64)
-            offset += X64_HEADER_LENGTH;
-
-        fseek(fsimage->fd, offset, SEEK_SET);
-
-        if (fread((char *)buf, 256, 1, fsimage->fd) < 1) {
+        case DISK_IMAGE_TYPE_D64:
+        case DISK_IMAGE_TYPE_D67:
+        case DISK_IMAGE_TYPE_D71:
+        case DISK_IMAGE_TYPE_D81:
+        case DISK_IMAGE_TYPE_D80:
+        case DISK_IMAGE_TYPE_D82:
+#ifdef HAVE_X64_IMAGE
+        case DISK_IMAGE_TYPE_X64:
+#endif
+        case DISK_IMAGE_TYPE_D1M:
+        case DISK_IMAGE_TYPE_D2M:
+        case DISK_IMAGE_TYPE_D4M:
+        case DISK_IMAGE_TYPE_DHD:
+        case DISK_IMAGE_TYPE_D90:
+            return fsimage_dxx_read_sector(image, buf, dadr);
+        case DISK_IMAGE_TYPE_G64:
+        case DISK_IMAGE_TYPE_G71:
+            return fsimage_gcr_read_sector(image, buf, dadr);
+        case DISK_IMAGE_TYPE_P64:
+            return fsimage_p64_read_sector(image, buf, dadr);
+        default:
             log_error(fsimage_log,
-                      "Error reading T:%i S:%i from disk image.",
-                      track, sector);
-            return -1;
-        }
-
-        if (fsimage->error_info != NULL) {
-            switch (fsimage->error_info[sectors]) {
-              case 0x0:
-              case 0x1:
-                return CBMDOS_IPE_OK;               /* 0 */
-              case 0x2:
-                return CBMDOS_IPE_READ_ERROR_BNF;   /* 20 */
-              case 0x3:
-                return CBMDOS_IPE_READ_ERROR_SYNC;  /* 21 */
-              case 0x4:
-                return CBMDOS_IPE_READ_ERROR_DATA;  /* 22 */
-              case 0x5:
-                return CBMDOS_IPE_READ_ERROR_CHK;   /* 23 */ 
-              case 0x7:
-                return CBMDOS_IPE_WRITE_ERROR_VER;  /* 25 */
-              case 0x8:
-                return CBMDOS_IPE_WRITE_PROTECT_ON; /* 26 */
-              case 0x9:
-                return CBMDOS_IPE_READ_ERROR_BCHK;  /* 27 */
-              case 0xA:
-                return CBMDOS_IPE_WRITE_ERROR_BIG;  /* 28 */
-              case 0xB:
-                return CBMDOS_IPE_DISK_ID_MISMATCH; /* 29 */
-              case 0xF:
-                return CBMDOS_IPE_NOT_READY;        /* 74 */
-              case 0x10:
-                return CBMDOS_IPE_READ_ERROR_GCR;   /* 24 */
-              default:
-                return 0;
-            }
-        }
-        break;
-      case DISK_IMAGE_TYPE_G64:
-        if (fsimage_gcr_read_sector(image, buf, track, sector) < 0) {
-            return -1;
-        }
-        break;
-      case DISK_IMAGE_TYPE_P64:
-        if (fsimage_p64_read_sector(image, buf, track, sector) < 0) {
-            return -1;
-        }
-        break;
-      default:
-        log_error(fsimage_log,
-                  "Unknown disk image type %i.  Cannot read sector.",
-                  image->type);
-        return -1;
+                      "Unknown disk image type %u.  Cannot read sector.",
+                      image->type);
+            return CBMDOS_IPE_NOT_READY;
     }
-    return 0;
 }
 
-int fsimage_write_sector(disk_image_t *image, BYTE *buf, unsigned int track,
-                         unsigned int sector)
+int fsimage_write_sector(disk_image_t *image, const uint8_t *buf,
+                         const disk_addr_t *dadr)
 {
-    int sectors;
-    long offset;
     fsimage_t *fsimage;
 
     fsimage = image->media.fsimage;
@@ -280,58 +302,39 @@ int fsimage_write_sector(disk_image_t *image, BYTE *buf, unsigned int track,
         return -1;
     }
 
-    if (image->read_only != 0) {
-        log_error(fsimage_log, "Attempt to write to read-only disk image.");
-        return -1;
-    }
-
-    sectors = disk_image_check_sector(image, track, sector);
-
     switch (image->type) {
-      case DISK_IMAGE_TYPE_D64:
-      case DISK_IMAGE_TYPE_D67:
-      case DISK_IMAGE_TYPE_D71:
-      case DISK_IMAGE_TYPE_D81:
-      case DISK_IMAGE_TYPE_D80:
-      case DISK_IMAGE_TYPE_D82:
-      case DISK_IMAGE_TYPE_X64:
-      case DISK_IMAGE_TYPE_D1M:
-      case DISK_IMAGE_TYPE_D2M:
-      case DISK_IMAGE_TYPE_D4M:
-        if (sectors < 0) {
-            log_error(fsimage_log, "Track: %i, Sector: %i out of bounds.",
-                      track, sector);
+        case DISK_IMAGE_TYPE_D64:
+        case DISK_IMAGE_TYPE_D67:
+        case DISK_IMAGE_TYPE_D71:
+        case DISK_IMAGE_TYPE_D81:
+        case DISK_IMAGE_TYPE_D80:
+        case DISK_IMAGE_TYPE_D82:
+#ifdef HAVE_X64_IMAGE
+        case DISK_IMAGE_TYPE_X64:
+#endif
+        case DISK_IMAGE_TYPE_D1M:
+        case DISK_IMAGE_TYPE_D2M:
+        case DISK_IMAGE_TYPE_D4M:
+        case DISK_IMAGE_TYPE_DHD:
+        case DISK_IMAGE_TYPE_D90:
+            if (fsimage_dxx_write_sector(image, buf, dadr) < 0) {
+                return -1;
+            }
+            break;
+        case DISK_IMAGE_TYPE_G64:
+        case DISK_IMAGE_TYPE_G71:
+            if (fsimage_gcr_write_sector(image, buf, dadr) < 0) {
+                return -1;
+            }
+            break;
+        case DISK_IMAGE_TYPE_P64:
+            if (fsimage_p64_write_sector(image, buf, dadr) < 0) {
+                return -1;
+            }
+            break;
+        default:
+            log_error(fsimage_log, "Unknown disk image.  Cannot write sector.");
             return -1;
-        }
-        offset = sectors << 8;
-
-        if (image->type == DISK_IMAGE_TYPE_X64)
-            offset += X64_HEADER_LENGTH;
-
-        fseek(fsimage->fd, offset, SEEK_SET);
-
-        if (fwrite((char *)buf, 256, 1, fsimage->fd) < 1) {
-            log_error(fsimage_log, "Error writing T:%i S:%i to disk image.",
-                      track, sector);
-            return -1;
-        }
-
-        /* Make sure the stream is visible to other readers.  */
-        fflush(fsimage->fd);
-        break;
-      case DISK_IMAGE_TYPE_G64:
-        if (fsimage_gcr_write_sector(image, buf, track, sector) < 0) {
-            return -1;
-        }
-        break;
-      case DISK_IMAGE_TYPE_P64:
-        if (fsimage_p64_write_sector(image, buf, track, sector) < 0) {
-            return -1;
-        }
-        break;
-      default:
-        log_error(fsimage_log, "Unknown disk image.  Cannot write sector.");
-        return -1;
     }
     return 0;
 }
@@ -341,8 +344,18 @@ int fsimage_write_sector(disk_image_t *image, BYTE *buf, unsigned int track,
 void fsimage_init(void)
 {
     fsimage_log = log_open("Filesystem Image");
+    fsimage_dxx_init();
     fsimage_gcr_init();
     fsimage_p64_init();
     fsimage_probe_init();
 }
 
+/*-----------------------------------------------------------------------*/
+
+off_t fsimage_size(const disk_image_t *image)
+{
+    fsimage_t *fsimage;
+
+    fsimage = image->media.fsimage;
+    return archdep_file_size(fsimage->fd);
+}

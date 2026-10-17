@@ -24,19 +24,30 @@
  *
  */
 
+#define DBGDRIVEROM
+
 #include "vice.h"
 
 #include <stdio.h>
 #include <string.h>
 
 #include "drive.h"
+#include "drivetypes.h"
 #include "driverom.h"
 #include "log.h"
+#include "machine-bus.h"
 #include "machine-drive.h"
 #include "resources.h"
 #include "sysfile.h"
 #include "traps.h"
 #include "types.h"
+#include "snapshot.h"
+
+#ifdef DBGDRIVEROM
+#define DBG(x)  log_printf x
+#else
+#define DBG(x)
+#endif
 
 /* patch for 1541 driverom at $EAAF */
 /* skips RAM and ROM check for fast drive reset */
@@ -60,14 +71,159 @@ static unsigned char rompatch[26]=
 static log_t driverom_log;
 
 /* If nonzero, we are far enough in init that we can load ROMs.  */
-int drive_rom_load_ok = 0;
+static int drive_rom_load_ok = 0;
 
+/* like driverom_load, but doesn't actually load anything, and only tests if the
+   file exists and matches the given size(s) */
+int driverom_probe(const char *resource_name, unsigned int *loaded,
+                        int min, int max, const char *name,
+                        unsigned int type, unsigned int *size)
+{
+    const char *rom_name = NULL;
+    int filesize;
+    unsigned int dnr;
+
+    DBG(("driverom_probe res:%s loaded:%u min:%d max:%d name:%s type:%u size:%u",
+       resource_name, *loaded, min, max, name, type, size ? *size : 0));
+
+    if (!drive_rom_load_ok) {
+        return 0;
+    }
+
+    resources_get_string(resource_name, &rom_name);
+
+    DBG(("driverom_probe rom_name: %s", rom_name));
+
+    if (size != NULL) {
+        *size = 0;
+    }
+    if (loaded != NULL) {
+        *loaded = 0;
+    }
+
+    filesize = sysfile_locate(rom_name, "DRIVES", NULL);
+
+    if (filesize < 0) {
+#if 1
+        log_error(driverom_log, "%s ROM image not found. "
+                  "Hardware-level %s emulation is not available.", name, name);
+#endif
+        goto exiterror;
+    }
+
+    if ((min < max)) {
+        if ((filesize > max)) {
+#if 1
+            log_error(driverom_log, "%s ROM image too large. "
+                    "Hardware-level %s emulation is not available.", name, name);
+#endif
+            goto exiterror;
+        }
+    }
+
+    if (loaded != NULL) {
+        *loaded = 1;
+    }
+    if (size != NULL) {
+        *size = (unsigned int)filesize;
+    }
+    DBG(("driverom_probe OK size: %d loaded:%u", filesize, *loaded));
+    return 0;
+
+exiterror:
+#if 1
+    /* FIXME: this should probably no more happen here */
+    /* disable the drives that used the ROM which could not be loaded */
+    for (dnr = 0; dnr < NUM_DISK_UNITS; dnr++) {
+        diskunit_context_t *unit = diskunit_context[dnr];
+        if (unit->type == type) {
+            unit->type = DRIVE_TYPE_NONE;
+            drive_disable(diskunit_context[dnr]);
+            machine_bus_status_drivetype_set(dnr + 8, 0);
+        }
+    }
+#endif
+    return -1;
+}
+
+int driverom_load(const char *resource_name, uint8_t *drive_rom, unsigned
+                  int *loaded, int min, int max, const char *name,
+                  unsigned int type, unsigned int *size)
+{
+    const char *rom_name = NULL;
+    int filesize;
+    unsigned int dnr;
+
+    DBG(("driverom_load res:%s loaded:%u min:%d max:%d name:%s type:%u size:%u",
+       resource_name, *loaded, min, max, name, type, size ? *size : 0));
+
+    if (!drive_rom_load_ok) {
+        return 0;
+    }
+
+    resources_get_string(resource_name, &rom_name);
+
+    DBG(("driverom_load rom_name: %s", rom_name));
+
+    if (size != NULL) {
+        *size = 0;
+    }
+    if (loaded != NULL) {
+        *loaded = 0;
+    }
+
+    filesize = sysfile_load(rom_name, "DRIVES", drive_rom, min, max);
+
+    if (filesize < 0) {
+        log_error(driverom_log, "%s ROM image not found. "
+                  "Hardware-level %s emulation is not available.", name, name);
+        goto exiterror;
+    }
+
+    *loaded = 1;
+    if (size != NULL) {
+        *size = (unsigned int)filesize;
+    }
+    DBG(("driverom_load filesize:%d", filesize));
+
+    /* Align to the end of available space */
+    if ((filesize <= min) && (min < max)) {
+        DBG(("driverom_load align drive rom"));
+        /* sysfile_load loaded the block to the top end of the buffer */
+        memmove(drive_rom, &drive_rom[max - min], min);
+    }
+
+    /* reset all drives that use the loaded ROM */
+    for (dnr = 0; dnr < NUM_DISK_UNITS; dnr++) {
+        diskunit_context_t *unit = diskunit_context[dnr];
+        DBG(("driverom_load reset filesize: %d dnr:%u unit->type:%u type:%u", filesize, dnr, unit->type, type));
+        if (unit->type == type) {
+            DBG(("driverom_load prepare drive rom and reset"));
+            machine_drive_rom_setup_image(dnr);
+            driverom_initialize_traps(diskunit_context[dnr]);
+            drive_cpu_trigger_reset(dnr);
+        }
+    }
+    return 0;
+
+exiterror:
+    /* disable the drives that used the ROM which could not be loaded */
+    for (dnr = 0; dnr < NUM_DISK_UNITS; dnr++) {
+        diskunit_context_t *unit = diskunit_context[dnr];
+        if (unit->type == type) {
+            unit->type = DRIVE_TYPE_NONE;
+            drive_disable(diskunit_context[dnr]);
+            machine_bus_status_drivetype_set(dnr + 8, 0);
+        }
+    }
+    return -1;
+}
 
 int driverom_load_images(void)
 {
     drive_rom_load_ok = 1;
 
-    machine_drive_rom_load();
+    machine_drive_rom_probe();
 
     if (machine_drive_rom_check_loaded(DRIVE_TYPE_ANY) < 0) {
         log_error(driverom_log,
@@ -79,261 +235,342 @@ int driverom_load_images(void)
     return 0;
 }
 
-static void driverom_fix_checksum(drive_t *drive)
+void driverom_initialize_traps(diskunit_context_t *unit)
 {
-    int i, j;
-    DWORD sum32;
-    WORD sum16;
-    BYTE m, m2;
+    DBG(("driverom_initialize_traps unit:%p trap_rom:%p", (void*)unit, unit->trap_rom));
+    memcpy(unit->trap_rom, unit->rom, DRIVE_ROM_SIZE);
 
-    switch (drive->type) {
-    case DRIVE_TYPE_1541:
-    case DRIVE_TYPE_1541II:
-        sum32 = (DWORD)-0xc0;
-        drive->rom[0x4001] = 0xff;
-        for (i = 0; i < 0x2000; i++) {
-            sum32 += drive->rom[i ^ 0x5f00];
-        }
-        drive->rom[0x4001] = (BYTE)(~(sum32 % 255));
+    unit->trap = -1;
+    unit->trapcont = -1;
 
-        sum32 = (DWORD)-0xe0;
-        drive->rom[0x7ee6] = 0xff;
-        for (i = 0; i < 0x2000; i++) {
-            sum32 += drive->rom[i ^ 0x7f00];
-        }
-        drive->rom[0x7ee6] = (BYTE)(~(sum32 % 255));
-        break;
-    case DRIVE_TYPE_1551:
-        sum32 = 0xfe;
-        drive->rom[0x4000] = 0xff;
-        for (i = 0x0; i < 0x4000; i++) {
-            sum32 += drive->rom[i ^ 0x7f00];
-        }
-        drive->rom[0x4000] = (BYTE)(~(sum32 % 255));
-        break;
-    case DRIVE_TYPE_1570:
-        sum32 = 0xff;
-        drive->rom[0x4000] = 0xff;
-        for (i = 0x102; i < 0x8000; i++) {
-            sum32 += drive->rom[i];
-        }
-        drive->rom[0x4000] = (BYTE)(~(sum32 % 255));
-        break;
-    case DRIVE_TYPE_1571:
-    case DRIVE_TYPE_1571CR:
-        sum32 = 0xfe;
-        drive->rom[0x4000] = 0xff;
-        for (i = 2; i < 0x8000; i++) {
-            sum32 += drive->rom[i];
-        }
-        drive->rom[0x4000] = (BYTE)(~(sum32 % 255));
-        break;
-    case DRIVE_TYPE_1581:
-        sum32 = 0xff;
-        drive->rom[2] = 0xff;
-        for (i = 2; i < 0x8000; i++) {
-            sum32 += drive->rom[i];
-        }
-        drive->rom[2] = (BYTE)(~(sum32 % 255));
-        break;
-    case DRIVE_TYPE_2000:
-    case DRIVE_TYPE_4000:
-        sum16 = 0;
-        for (i = 4; i < 0x8000; i++) {
-            sum16 += drive->rom[i];
-        }
-        drive->rom[2] = (BYTE)(sum16 & 0xff);
-        drive->rom[3] = sum16 >> 8;
-        break;
-    case DRIVE_TYPE_2031:
-        sum32 = (DWORD)-0xc0;
-        drive->rom[0x4000] = 0xff;
-        for (i = 0; i < 0x2000; i++) {
-            sum32 += drive->rom[i ^ 0x5f00];
-        }
-        drive->rom[0x4000] = (BYTE)(~(sum32 % 255));
+    DBG(("driverom_initialize_traps type: %u trap idle: %s", unit->type,
+           unit->idling_method == DRIVE_IDLE_TRAP_IDLE ? "enabled" : "disabled"));
 
-        sum32 = (DWORD)-0xe0;
-        drive->rom[0x7f35] = 0xff;
-        for (i = 0; i < 0x2000; i++) {
-            sum32 += drive->rom[i ^ 0x7f00];
-        }
-        drive->rom[0x7f35] = (BYTE)(~(sum32 % 255));
-        break;
-    case DRIVE_TYPE_2040:
-        sum32 = 0;
-        drive->rom[0x603f] = 0xff;
-        for (i = 0; i < 0x1000; i++) {
-            sum32 += drive->rom[i ^ 0x6f00];
-        }
-        drive->rom[0x603f] = 256-(sum32 % 255); /* The - here is not a typo */
-        break;
-    case DRIVE_TYPE_3040:
-    case DRIVE_TYPE_4040:
-        sum32 = (DWORD)-0xd0;
-        drive->rom[0x52a0] = 0xff;
-        for (i = 0; i < 0x1000; i++) {
-            sum32 += drive->rom[i ^ 0x5f00];
-        }
-        drive->rom[0x52a0] = (BYTE)(~(sum32 % 255));
-
-        if (drive->rom[0x67a6] == 0x60
-            && drive->rom[0x67a8] == 0xad) {
-            sum32 = (DWORD)-0xe0;
-            drive->rom[0x67a7] = 0xff;
-            for (i = 0; i < 0x1000; i++) {
-                sum32 += drive->rom[i ^ 0x6f00];
-            }
-            drive->rom[0x67a7] = (BYTE)(~(sum32 % 255));
-        } else if (drive->rom[0x67ad] == 0x60
-            && drive->rom[0x67af] == 0xad) {
-            sum32 = (DWORD)-0xe0;
-            drive->rom[0x67ae] = 0xff;
-            for (i = 0; i < 0x1000; i++) {
-                sum32 += drive->rom[i ^ 0x6f00];
-            }
-            drive->rom[0x67ae] = (BYTE)(~(sum32 % 255));
-        }
-
-        sum32 = (DWORD)-0xf0;
-        drive->rom[0x7fe9] = 0xff;
-        for (i = 0; i < 0x1000; i++) {
-            sum32 += drive->rom[i ^ 0x7f00];
-        }
-        drive->rom[0x7fe9] = (BYTE)(~(sum32 % 255));
-        break;
+    if (unit->idling_method != DRIVE_IDLE_TRAP_IDLE) {
+        DBG(("driverom_initialize_traps error (not DRIVE_IDLE_TRAP_IDLE)"));
+        return;
     }
 
-    switch (drive->type) {
-    case DRIVE_TYPE_1570:
-    case DRIVE_TYPE_1571:
-    case DRIVE_TYPE_1571CR:
-        sum16 = 0;
-        for (i = 6; i < 0x8003; i++) {
-            switch (i) {
-            case 0x8000:
-                m = (BYTE)(sum16 & 0xff);
-                break;
-            case 0x8001:
-                m = sum16 >> 8;
-                break;
-            case 0x8002:
-                break;
-            default:
-                m = drive->rom[i];
-            }
-            for (j = 0; j < 8; j++) {
-                m2 = m ^ (sum16 >> 8) ^ (sum16 >> 11) ^ (sum16 >> 15) ^ (sum16 >> 6);
-                m = (m >> 1) | ((sum16 >> 8) & 0x80);
-                sum16 = (sum16 << 1) | (m2 & 1);
-            }
-        }
-        drive->rom[0] = (BYTE)(sum16 & 0xff);
-        drive->rom[1] = sum16 >> 8;
-        break;
-    case DRIVE_TYPE_1581:
-        sum16 = 0xffff;
-        for (i = 2; i < 0x8000; i ++) {
-            sum16 ^= drive->rom[i] << 8;
-            for (j = 0; j < 8; j++) {
-                if (sum16 & 0x8000) {
-                    sum16 <<= 1;
-                    sum16 ^= 0x1021;
-                } else {
-                    sum16 <<= 1;
-                }
-            }
-        }
-        drive->rom[0] = (BYTE)(sum16 & 0xff);
-        drive->rom[1] = sum16 >> 8;
-        break;
+    switch (unit->type) {
+        case DRIVE_TYPE_1540:
+        case DRIVE_TYPE_1541:
+        case DRIVE_TYPE_1541II:
+        case DRIVE_TYPE_1570:
+        case DRIVE_TYPE_1571:
+        case DRIVE_TYPE_1571CR:
+            unit->trap = 0xec9b;
+            unit->trapcont = 0xebff;
+            break;
+        case DRIVE_TYPE_1551:
+            unit->trap = 0xead9;
+            unit->trapcont = 0xeabd;
+            break;
+        case DRIVE_TYPE_1581:
+            unit->trap = 0xb158;
+            unit->trapcont = 0xb105;
+            break;
+        case DRIVE_TYPE_2000:
+            unit->trap = 0xf3c0;
+            unit->trapcont = 0xf368;
+            break;
+        case DRIVE_TYPE_4000:
+            unit->trap = 0xf3ec;
+            unit->trapcont = 0xf394;
+            break;
+        case DRIVE_TYPE_2031:
+            unit->trap = 0xece9;
+            unit->trapcont = 0xec4d;
+            break;
+        case DRIVE_TYPE_2040:
+            unit->trap = 0xe2d3;
+            unit->trapcont = 0xe27e;
+            break;
+        case DRIVE_TYPE_3040:
+            unit->trap = 0xd508;
+            unit->trapcont = 0xd4b8;
+            break;
+        case DRIVE_TYPE_4040:
+            unit->trap = 0xd507;
+            unit->trapcont = 0xd4b7;
+            break;
+        default:
+            log_error(driverom_log, "trap is not defined for this drive");
+            unit->trap = -1;
+            unit->trapcont = -1;
+            return;
     }
+    if ((unit->trap >= 0) &&
+        (unit->trap_rom[unit->trap - 0x8000] == 0x4c) &&
+        (unit->trap_rom[(unit->trap + 1) - 0x8000] == (unit->trapcont & 0xff)) &&
+        (unit->trap_rom[(unit->trap + 2) - 0x8000] == (unit->trapcont >> 8))) {
+        unit->trap_rom[unit->trap - 0x8000] = TRAP_OPCODE;
+        /* to fix the checksum, patch up the next byte as well */
+        unit->trap_rom[unit->trap - 0x8001] += (0x4c - TRAP_OPCODE);
+        /* FIXME: what does this do? */
+        if (unit->type == DRIVE_TYPE_1551) {
+            unit->trap_rom[0xeabf - 0x8000] = 0xea;
+            unit->trap_rom[0xeac0 - 0x8000] = 0xea;
+            unit->trap_rom[0xead0 - 0x8000] = 0x08;
+        }
+        DBG(("driverom_initialize_traps ok"));
+        return;
+    }
+    DBG(("driverom_initialize_traps error (patch not found)"));
+    unit->trap = -1;
+    unit->trapcont = -1;
 }
 
-void driverom_initialize_traps(drive_t *drive, int save)
+/* reload the ROM for all drives of given type */
+int driverom_reload(int type)
 {
-    if (save && drive->type == DRIVE_TYPE_1551) {
-        drive->rom_idle_trap[0] = drive->rom[0xeabf - 0x8000];
-        drive->rom_idle_trap[1] = drive->rom[0xeac0 - 0x8000];
-        drive->rom_idle_trap[2] = drive->rom[0xead0 - 0x8000];
-    }
-    switch (drive->type) {
-    case DRIVE_TYPE_1541:
-    case DRIVE_TYPE_1541II:
-    case DRIVE_TYPE_1570:
-    case DRIVE_TYPE_1571:
-    case DRIVE_TYPE_1571CR:
-        drive->trap = 0xec9b;
-        drive->trapcont = 0xebff;
-        break;
-    case DRIVE_TYPE_1551:
-        drive->trap = 0xead9;
-        drive->trapcont = 0xeabd;
-        if (drive->idling_method == DRIVE_IDLE_TRAP_IDLE) {
-            drive->rom[0xeabf - 0x8000] = 0xea;
-            drive->rom[0xeac0 - 0x8000] = 0xea;
-            drive->rom[0xead0 - 0x8000] = 0x08;
-        } else {
-            drive->rom[0xeabf - 0x8000] = drive->rom_idle_trap[0];
-            drive->rom[0xeac0 - 0x8000] = drive->rom_idle_trap[1];
-            drive->rom[0xead0 - 0x8000] = drive->rom_idle_trap[2];
+    int dnr;
+    int oldtype = 0;
+    DBG(("driverom_reload type: %d\n", type));
+    for (dnr = 0; dnr < NUM_DISK_UNITS; dnr++) {
+        diskunit_context_t *unit = diskunit_context[dnr];
+        DBG(("driverom_reload unit->type:%u\n", unit->type));
+        if (unit->type == type) {
+            resources_get_int_sprintf("Drive%dType", &oldtype, dnr + 8);
+            DBG(("driverom_reload oldtype:%d\n", oldtype));
+            resources_set_int_sprintf("Drive%dType", 0, dnr + 8);
+            unit->rom_type = 0; /* force reload */
+            resources_set_int_sprintf("Drive%dType", oldtype, dnr + 8);
         }
-        break;
-    case DRIVE_TYPE_1581:
-        drive->trap = 0xb158;
-        drive->trapcont = 0xb105;
-        break;
-    case DRIVE_TYPE_2000:
-        drive->trap = 0xf3c0;
-        drive->trapcont = 0xf368;
-        break;
-    case DRIVE_TYPE_4000:
-        drive->trap = 0xf3ec;
-        drive->trapcont = 0xf394;
-        break;
-    case DRIVE_TYPE_2031:
-        drive->trap = 0xece9;
-        drive->trapcont = 0xec4d;
-        break;
-    case DRIVE_TYPE_2040:
-        drive->trap = 0xe2d3;
-        drive->trapcont = 0xe27e;
-        break;
-    case DRIVE_TYPE_3040:
-        drive->trap = 0xd508;
-        drive->trapcont = 0xd4b8;
-        break;
-    case DRIVE_TYPE_4040:
-        drive->trap = 0xd507;
-        drive->trapcont = 0xd4b7;
-        break;
-    default:
-        drive->trap = -1;
-        drive->trapcont = -1;
     }
-    if (drive->trap >=0
-        && drive->rom[drive->trap - 0x8000 + 1] == (drive->trapcont & 0xff)
-        && drive->rom[drive->trap - 0x8000 + 2] == (drive->trapcont >> 8)) {
+    return 0; /* no error */
+}
 
-        if (drive->idling_method == DRIVE_IDLE_TRAP_IDLE
-            && drive->rom[drive->trap - 0x8000] == 0x4c) {
-            drive->rom[drive->trap - 0x8000] = TRAP_OPCODE;
-        }
-        if (drive->idling_method != DRIVE_IDLE_TRAP_IDLE
-            && drive->rom[drive->trap - 0x8000] == TRAP_OPCODE) {
-            drive->rom[drive->trap - 0x8000] = 0x4c;
-            drive->trap = -1;
-            drive->trapcont = -1;
-        }
-    } else {
-        drive->trap = -1;
-        drive->trapcont = -1;
+/* -------------------------------------------------------------------- */
+
+/*
+    DRIVEROM 1.0 snapshot module format:
+
+   Type       | Name                        | Description
+   ------------------------------------------------------
+   ARRAY      | drive ROM                   | size depends on drive
+
+*/
+
+#define ROM_SNAP_MAJOR 1
+#define ROM_SNAP_MINOR 0
+
+/* TODO: pass diskunit_context_t as parameter instead */
+int driverom_snapshot_write(snapshot_t *s, const drive_t *drive)
+{
+    char snap_module_name[10];
+    snapshot_module_t *m;
+    diskunit_context_t *unit = drive->diskunit;
+    const uint8_t *base;
+    int len;
+
+    sprintf(snap_module_name, "DRIVEROM%u", drive->diskunit->mynumber);
+
+    m = snapshot_module_create(s, snap_module_name, ROM_SNAP_MAJOR, ROM_SNAP_MINOR);
+
+    if (m == NULL) {
+        return -1;
     }
-    driverom_fix_checksum(drive);
+
+    switch (unit->type) {
+        case DRIVE_TYPE_1540:
+            base = &(unit->rom[0x4000]);
+            len = DRIVE_ROM1540_SIZE;
+            break;
+        case DRIVE_TYPE_1541:
+            base = &(unit->rom[0x4000]);
+            len = DRIVE_ROM1541_SIZE;
+            break;
+        case DRIVE_TYPE_1541II:
+            base = &(unit->rom[0x4000]);
+            len = DRIVE_ROM1541II_SIZE;
+            break;
+        case DRIVE_TYPE_1551:
+            base = unit->rom;
+            len = DRIVE_ROM1551_SIZE;
+            break;
+        case DRIVE_TYPE_1570:
+            base = unit->rom;
+            len = DRIVE_ROM1570_SIZE;
+            break;
+        case DRIVE_TYPE_1571:
+            base = unit->rom;
+            len = DRIVE_ROM1571_SIZE;
+            break;
+        case DRIVE_TYPE_1571CR:
+            base = unit->rom;
+            len = DRIVE_ROM1571CR_SIZE;
+            break;
+        case DRIVE_TYPE_1581:
+            base = unit->rom;
+            len = DRIVE_ROM1581_SIZE;
+            break;
+        case DRIVE_TYPE_2000:
+            base = unit->rom;
+            len = DRIVE_ROM2000_SIZE;
+            break;
+        case DRIVE_TYPE_4000:
+            base = unit->rom;
+            len = DRIVE_ROM4000_SIZE;
+            break;
+        case DRIVE_TYPE_CMDHD:
+            base = &(unit->rom[0x4000]);
+            len = DRIVE_ROMCMDHD_SIZE;
+            break;
+        case DRIVE_TYPE_2031:
+            base = &(unit->rom[0x4000]);
+            len = DRIVE_ROM2031_SIZE;
+            break;
+        case DRIVE_TYPE_2040:
+            base = &(unit->rom[DRIVE_ROM_SIZE - DRIVE_ROM2040_SIZE]);
+            len = DRIVE_ROM2040_SIZE;
+            break;
+        case DRIVE_TYPE_3040:
+            base = &(unit->rom[DRIVE_ROM_SIZE - DRIVE_ROM3040_SIZE]);
+            len = DRIVE_ROM3040_SIZE;
+            break;
+        case DRIVE_TYPE_4040:
+            base = &(unit->rom[DRIVE_ROM_SIZE - DRIVE_ROM4040_SIZE]);
+            len = DRIVE_ROM4040_SIZE;
+            break;
+        case DRIVE_TYPE_1001:
+        case DRIVE_TYPE_8050:
+        case DRIVE_TYPE_8250:
+            base = &(unit->rom[0x4000]);
+            len = DRIVE_ROM1001_SIZE;
+            break;
+        case DRIVE_TYPE_9000:
+            base = &(unit->rom[0x4000]);
+            len = DRIVE_ROM9000_SIZE;
+            break;
+        default:
+            return -1;
+    }
+
+    if (SMW_BA(m, base, len) < 0) {
+        if (m != NULL) {
+            snapshot_module_close(m);
+        }
+        return -1;
+    }
+
+    return snapshot_module_close(m);
+}
+
+int driverom_snapshot_read(snapshot_t *s, drive_t *drive)
+{
+    uint8_t major_version, minor_version;
+    snapshot_module_t *m;
+    diskunit_context_t *unit = drive->diskunit;
+    char snap_module_name[10];
+    uint8_t *base;
+    int len;
+
+    sprintf(snap_module_name, "DRIVEROM%u", drive->diskunit->mynumber);
+
+    m = snapshot_module_open(s, snap_module_name, &major_version, &minor_version);
+    if (m == NULL) {
+        return 0;
+    }
+
+    /* Do not accept versions higher than current */
+    if (snapshot_version_is_bigger(major_version, minor_version, ROM_SNAP_MAJOR, ROM_SNAP_MINOR)) {
+        snapshot_set_error(SNAPSHOT_MODULE_HIGHER_VERSION);
+        log_error(driverom_log,
+                  "Snapshot module version (%d.%d) newer than %d.%d.",
+                  major_version, minor_version,
+                  ROM_SNAP_MAJOR, ROM_SNAP_MINOR);
+        snapshot_module_close(m);
+        return -1;
+    }
+
+    switch (unit->type) {
+        case DRIVE_TYPE_1540:
+            base = &(unit->rom[0x4000]);
+            len = DRIVE_ROM1540_SIZE;
+            break;
+        case DRIVE_TYPE_1541:
+            base = &(unit->rom[0x4000]);
+            len = DRIVE_ROM1541_SIZE;
+            break;
+        case DRIVE_TYPE_1541II:
+            base = &(unit->rom[0x4000]);
+            len = DRIVE_ROM1541II_SIZE;
+            break;
+        case DRIVE_TYPE_1551:
+            base = unit->rom;
+            len = DRIVE_ROM1551_SIZE;
+            break;
+        case DRIVE_TYPE_1570:
+            base = unit->rom;
+            len = DRIVE_ROM1570_SIZE;
+            break;
+        case DRIVE_TYPE_1571:
+            base = unit->rom;
+            len = DRIVE_ROM1571_SIZE;
+            break;
+        case DRIVE_TYPE_1571CR:
+            base = unit->rom;
+            len = DRIVE_ROM1571CR_SIZE;
+            break;
+        case DRIVE_TYPE_1581:
+            base = unit->rom;
+            len = DRIVE_ROM1581_SIZE;
+            break;
+        case DRIVE_TYPE_2000:
+            base = unit->rom;
+            len = DRIVE_ROM2000_SIZE;
+            break;
+        case DRIVE_TYPE_4000:
+            base = unit->rom;
+            len = DRIVE_ROM4000_SIZE;
+            break;
+        case DRIVE_TYPE_CMDHD:
+            base = &(unit->rom[0x4000]);
+            len = DRIVE_ROMCMDHD_SIZE;
+            break;
+        case DRIVE_TYPE_2031:
+            base = &(unit->rom[0x4000]);
+            len = DRIVE_ROM2031_SIZE;
+            break;
+        case DRIVE_TYPE_2040:
+            base = &(unit->rom[DRIVE_ROM_SIZE - DRIVE_ROM2040_SIZE]);
+            len = DRIVE_ROM2040_SIZE;
+            break;
+        case DRIVE_TYPE_3040:
+            base = &(unit->rom[DRIVE_ROM_SIZE - DRIVE_ROM3040_SIZE]);
+            len = DRIVE_ROM3040_SIZE;
+            break;
+        case DRIVE_TYPE_4040:
+            base = &(unit->rom[DRIVE_ROM_SIZE - DRIVE_ROM4040_SIZE]);
+            len = DRIVE_ROM4040_SIZE;
+            break;
+        case DRIVE_TYPE_1001:
+        case DRIVE_TYPE_8050:
+        case DRIVE_TYPE_8250:
+            base = &(unit->rom[0x4000]);
+            len = DRIVE_ROM1001_SIZE;
+            break;
+        case DRIVE_TYPE_9000:
+            base = &(unit->rom[0x4000]);
+            len = DRIVE_ROM9000_SIZE;
+            break;
+        default:
+            return -1;
+    }
+
+    if (SMR_BA(m, base, len) < 0) {
+        if (m != NULL) {
+            snapshot_module_close(m);
+        }
+        return -1;
+    }
+
+    machine_drive_rom_do_checksum(drive->diskunit->mynumber);
+
+    return snapshot_module_close(m);
 }
 
 void driverom_init(void)
 {
-    driverom_log = log_open("DriveROM"); 
+    driverom_log = log_open("DriveROM");
 }
-

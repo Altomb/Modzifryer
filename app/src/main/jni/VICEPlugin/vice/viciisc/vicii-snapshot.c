@@ -38,6 +38,7 @@
 #include "mem.h"
 #include "snapshot.h"
 #include "types.h"
+#include "raster-snapshot.h"
 #include "vicii-draw-cycle.h"
 #include "vicii-resources.h"
 #include "vicii-snapshot.h"
@@ -51,24 +52,67 @@ void vicii_snapshot_prepare(void)
 
 
 /*
+   VIC-IISC 1.4 snapshot module format:
 
-   This is the format of the VIC-II snapshot module.
+   Type     | Name                          | Description
+   ------------------------------------------------------
+   ARRAY    | regs                          | 0x40 BYTES state from vicii_s, in the same order
+   DWORD    | raster_cycle                  |
+   DWORD    | cycle_flags                   |
+   DWORD    | raster_line                   |
+   BYTE     | start_of_frame                |
+   BYTE     | irq_status                    |
+   DWORD    | raster_irq_line               |
+   BYTE     | raster_irq_triggered          |
+   ARRAY    | vbuf                          | VICII_SCREEN_TEXTCOLS
+   ARRAY    | cbuf                          | VICII_SCREEN_TEXTCOLS
+   BYTE     | gbuf                          |
+   DWORD    | dbuf_offset                   |
+   ARRAY    | dbuf                          | VICII_DRAW_BUFFER_SIZE
+   DWORD    | ysmooth                       |
+   BYTE     | allow_bad_lines               |
+   BYTE     | sprite_sprite_collisions      |
+   BYTE     | sprite_background_collisions  |
+   BYTE     | clear_collisions              |
+   DWORD    | idle_state                    |
+   DWORD    | vcbase                        |
+   DWORD    | vc                            |
+   DWORD    | rc                            |
+   DWORD    | vmli                          |
+   DWORD    | bad_line                      |
+   BYTE     | light_pen.state               |
+   BYTE     | light_pen.triggered           |
+   DWORD    | light_pen.x                   |
+   DWORD    | light_pen.y                   |
+   DWORD    | light_pen.x_extra_bits        |
+   CLOCK    | light_pen.trigger_cycle       |
+   BYTE     | reg11_delay                   |
+   DWORD    | prefetch_cycles               |
+   DWORD    | sprite_display_bits           |
+   BYTE     | sprite_dma                    |
+   BYTE     | last_color_reg                |
+   BYTE     | last_color_value              |
+   BYTE     | last_read_phi1                |
+   BYTE     | last_bus_phi2                 |
+   BYTE     | vborder                       |
+   BYTE     | set_vborder                   |
+   BYTE     | main_border                   |
+   BYTE     | refresh_counter               |
+   ARRAY    | color_ram                     | 0x400
 
-   Name               Type   Size   Description
+   NOTE: renamed from "VIC-II" to "VIC-IISC" in 1.4
 
-   (FIXME)
+ */
 
-*/
-
-static char snap_module_name[] = "VIC-II";
+static const char snap_module_name[] = "VIC-IISC";
 #define SNAP_MAJOR 1
-#define SNAP_MINOR 1
+#define SNAP_MINOR 4
 
 int vicii_snapshot_write_module(snapshot_t *s)
 {
     int i;
     snapshot_module_t *m;
-    BYTE color_ram[0x400];
+    uint8_t color_ram[0x400];
 
     m = snapshot_module_create(s, snap_module_name, SNAP_MAJOR, SNAP_MINOR);
     if (m == NULL) {
@@ -79,44 +123,44 @@ int vicii_snapshot_write_module(snapshot_t *s)
 
     if (0
         /* VICII model (for sanity checks) */
-        || SMW_B(m, (BYTE)vicii_resources.model) < 0
+        || SMW_B(m, (uint8_t)vicii_resources.model) < 0
         /* state from vicii_s, in the same order */
         || SMW_BA(m, vicii.regs, 0x40) < 0
-        || SMW_DW(m, (DWORD)vicii.raster_cycle) < 0
-        || SMW_DW(m, (DWORD)vicii.cycle_flags) < 0
-        || SMW_DW(m, (DWORD)vicii.raster_line) < 0
-        || SMW_B(m, (BYTE)vicii.start_of_frame) < 0
-        || SMW_B(m, (BYTE)vicii.irq_status) < 0
-        || SMW_DW(m, (DWORD)vicii.raster_irq_line) < 0
-        || SMW_B(m, (BYTE)vicii.raster_irq_triggered) < 0
+        || SMW_DW(m, (uint32_t)vicii.raster_cycle) < 0
+        || SMW_DW(m, (uint32_t)vicii.cycle_flags) < 0
+        || SMW_DW(m, (uint32_t)vicii.raster_line) < 0
+        || SMW_B(m, (uint8_t)vicii.start_of_frame) < 0
+        || SMW_B(m, (uint8_t)vicii.irq_status) < 0
+        || SMW_DW(m, (uint32_t)vicii.raster_irq_line) < 0
+        || SMW_B(m, (uint8_t)vicii.raster_irq_triggered) < 0
         /* ram_base_phi[12] and vaddr_* updated from elsewhere */
         || SMW_BA(m, vicii.vbuf, VICII_SCREEN_TEXTCOLS) < 0
         || SMW_BA(m, vicii.cbuf, VICII_SCREEN_TEXTCOLS) < 0
         || SMW_B(m, vicii.gbuf) < 0
-        || SMW_DW(m, (DWORD)vicii.dbuf_offset) < 0
+        || SMW_DW(m, (uint32_t)vicii.dbuf_offset) < 0
         || SMW_BA(m, vicii.dbuf, VICII_DRAW_BUFFER_SIZE) < 0
-        || SMW_DW(m, (DWORD)vicii.ysmooth) < 0
-        || SMW_B(m, (BYTE)vicii.allow_bad_lines) < 0
+        || SMW_DW(m, (uint32_t)vicii.ysmooth) < 0
+        || SMW_B(m, (uint8_t)vicii.allow_bad_lines) < 0
         || SMW_B(m, vicii.sprite_sprite_collisions) < 0
         || SMW_B(m, vicii.sprite_background_collisions) < 0
         || SMW_B(m, vicii.clear_collisions) < 0
-        || SMW_DW(m, (DWORD)vicii.idle_state) < 0
-        || SMW_DW(m, (DWORD)vicii.vcbase) < 0
-        || SMW_DW(m, (DWORD)vicii.vc) < 0
-        || SMW_DW(m, (DWORD)vicii.rc) < 0
-        || SMW_DW(m, (DWORD)vicii.vmli) < 0
-        || SMW_DW(m, (DWORD)vicii.bad_line) < 0
-        || SMW_B(m, (BYTE)vicii.light_pen.state) < 0
-        || SMW_B(m, (BYTE)vicii.light_pen.triggered) < 0
-        || SMW_DW(m, (DWORD)vicii.light_pen.x) < 0
-        || SMW_DW(m, (DWORD)vicii.light_pen.y) < 0
-        || SMW_DW(m, (DWORD)vicii.light_pen.x_extra_bits) < 0
-        || SMW_DW(m, (DWORD)vicii.light_pen.trigger_cycle) < 0
+        || SMW_DW(m, (uint32_t)vicii.idle_state) < 0
+        || SMW_DW(m, (uint32_t)vicii.vcbase) < 0
+        || SMW_DW(m, (uint32_t)vicii.vc) < 0
+        || SMW_DW(m, (uint32_t)vicii.rc) < 0
+        || SMW_DW(m, (uint32_t)vicii.vmli) < 0
+        || SMW_DW(m, (uint32_t)vicii.bad_line) < 0
+        || SMW_B(m, (uint8_t)vicii.light_pen.state) < 0
+        || SMW_B(m, (uint8_t)vicii.light_pen.triggered) < 0
+        || SMW_DW(m, (uint32_t)vicii.light_pen.x) < 0
+        || SMW_DW(m, (uint32_t)vicii.light_pen.y) < 0
+        || SMW_DW(m, (uint32_t)vicii.light_pen.x_extra_bits) < 0
+        || SMW_CLOCK(m, vicii.light_pen.trigger_cycle) < 0
         /* vbank_phi[12] updated from elsewhere */
         /* log is initialized at startup */
         || SMW_B(m, vicii.reg11_delay) < 0
-        || SMW_DW(m, (DWORD)vicii.prefetch_cycles) < 0
-        || SMW_DW(m, (DWORD)vicii.sprite_display_bits) < 0
+        || SMW_DW(m, (uint32_t)vicii.prefetch_cycles) < 0
+        || SMW_DW(m, (uint32_t)vicii.sprite_display_bits) < 0
         || SMW_B(m, vicii.sprite_dma) < 0
         /* sprite[] handled below */
         /* geometry, parameters and cycle_table set from elsewhere */
@@ -124,9 +168,9 @@ int vicii_snapshot_write_module(snapshot_t *s)
         || SMW_B(m, vicii.last_color_value) < 0
         || SMW_B(m, vicii.last_read_phi1) < 0
         || SMW_B(m, vicii.last_bus_phi2) < 0
-        || SMW_B(m, (BYTE)vicii.vborder) < 0
-        || SMW_B(m, (BYTE)vicii.set_vborder) < 0
-        || SMW_B(m, (BYTE)vicii.main_border) < 0
+        || SMW_B(m, (uint8_t)vicii.vborder) < 0
+        || SMW_B(m, (uint8_t)vicii.set_vborder) < 0
+        || SMW_B(m, (uint8_t)vicii.main_border) < 0
         || SMW_B(m, vicii.refresh_counter) < 0
         /* ColorRam */
         || SMW_BA(m, color_ram, 0x400) < 0) {
@@ -139,13 +183,17 @@ int vicii_snapshot_write_module(snapshot_t *s)
             || SMW_B(m, vicii.sprite[i].mc) < 0
             || SMW_B(m, vicii.sprite[i].mcbase) < 0
             || SMW_B(m, vicii.sprite[i].pointer) < 0
-            || SMW_B(m, (BYTE)vicii.sprite[i].exp_flop) < 0
-            || SMW_DW(m, (DWORD)vicii.sprite[i].x) < 0) {
+            || SMW_B(m, (uint8_t)vicii.sprite[i].exp_flop) < 0
+            || SMW_DW(m, (uint32_t)vicii.sprite[i].x) < 0) {
             goto fail;
         }
     }
 
     if (vicii_draw_cycle_snapshot_write(m) < 0) {
+        goto fail;
+    }
+
+    if (raster_snapshot_write(m, &vicii.raster)) {
         goto fail;
     }
 
@@ -160,10 +208,10 @@ fail:
 
 int vicii_snapshot_read_module(snapshot_t *s)
 {
-    BYTE major_version, minor_version;
+    uint8_t major_version, minor_version;
     int i;
     snapshot_module_t *m;
-    BYTE color_ram[0x400];
+    uint8_t color_ram[0x400];
 
     m = snapshot_module_open(s, snap_module_name,
                              &major_version, &minor_version);
@@ -171,11 +219,12 @@ int vicii_snapshot_read_module(snapshot_t *s)
         return -1;
     }
 
-    if (major_version > SNAP_MAJOR || minor_version > SNAP_MINOR) {
+    if (snapshot_version_is_bigger(major_version, minor_version, SNAP_MAJOR, SNAP_MINOR)) {
         log_error(vicii.log,
                   "Snapshot module version (%d.%d) newer than %d.%d.",
                   major_version, minor_version,
                   SNAP_MAJOR, SNAP_MINOR);
+        snapshot_set_error(SNAPSHOT_MODULE_HIGHER_VERSION);
         goto fail;
     }
 
@@ -189,6 +238,7 @@ int vicii_snapshot_read_module(snapshot_t *s)
         log_error(vicii.log,
                   "Snapshot was made with model %i while the current model is %i.",
                   i, vicii_resources.model);
+        snapshot_set_error(SNAPSHOT_VICII_MODEL_MISMATCH);
         goto fail;
     }
 
@@ -224,7 +274,7 @@ int vicii_snapshot_read_module(snapshot_t *s)
         || SMR_DW_INT(m, &vicii.light_pen.x) < 0
         || SMR_DW_INT(m, &vicii.light_pen.y) < 0
         || SMR_DW_INT(m, &vicii.light_pen.x_extra_bits) < 0
-        || SMR_DW(m, &vicii.light_pen.trigger_cycle) < 0
+        || SMR_CLOCK(m, &vicii.light_pen.trigger_cycle) < 0
         /* vbank_phi[12] updated from elsewhere */
         /* log is initialized at startup */
         || SMR_B(m, &vicii.reg11_delay) < 0
@@ -276,6 +326,10 @@ int vicii_snapshot_read_module(snapshot_t *s)
         interrupt_restore_irq(maincpu_int_status, vicii.int_num, 1);
     }
 
+    if (raster_snapshot_read(m, &vicii.raster)) {
+        goto fail;
+    }
+
     raster_force_repaint(&vicii.raster);
     snapshot_module_close(m);
     return 0;
@@ -287,4 +341,3 @@ fail:
 
     return -1;
 }
-

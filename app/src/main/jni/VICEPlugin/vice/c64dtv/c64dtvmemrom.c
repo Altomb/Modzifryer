@@ -35,47 +35,45 @@
 #include "c64dtvflash.h"
 
 /* These are read directly from flash in the DTV emulation and not used. */
-#ifdef USE_EMBEDDED
-#include "c64basic.h"
-#include "c64kernal.h"
-#else
-BYTE c64memrom_basic64_rom[C64_BASIC_ROM_SIZE];
-BYTE c64memrom_kernal64_rom[C64_KERNAL_ROM_SIZE];
-#endif
+uint8_t c64memrom_basic64_rom[C64_BASIC_ROM_SIZE];
+uint8_t c64memrom_kernal64_rom[C64_KERNAL_ROM_SIZE];
 
-BYTE c64memrom_kernal64_trap_rom[C64_KERNAL_ROM_SIZE];
+uint8_t c64memrom_kernal64_trap_rom[C64_KERNAL_ROM_SIZE];
 
-BYTE c64memrom_kernal64_read(WORD addr)
+uint8_t c64memrom_kernal64_read(uint16_t addr)
 {
     int mapping = c64dtvmem_memmapper[0];
     int paddr = ((mapping & 0x1f) << 16) + addr;
-    if ((mapping >> 6)==0)
+    if ((mapping >> 6) == 0) {
         return c64dtvflash_read(paddr);
-    else
+    } else {
         return mem_ram[paddr];
+    }
 }
 
-static void c64memrom_kernal64_store(WORD addr, BYTE value)
+static void c64memrom_kernal64_store(uint16_t addr, uint8_t value)
 {
     int mapping = c64dtvmem_memmapper[0];
     int paddr = ((mapping & 0x1f) << 16) + addr;
-    if ((mapping >> 6)==0)
+    if ((mapping >> 6) == 0) {
         c64dtvflash_store_direct(paddr, value);
-    else
+    } else {
         mem_ram[paddr] = value;
+    }
 }
 
-BYTE c64memrom_basic64_read(WORD addr)
+uint8_t c64memrom_basic64_read(uint16_t addr)
 {
     int mapping = c64dtvmem_memmapper[1];
     int paddr = ((mapping & 0x1f) << 16) + addr;
-    if ((mapping >> 6)==0)
+    if ((mapping >> 6) == 0) {
         return c64dtvflash_read(paddr);
-    else
+    } else {
         return mem_ram[paddr];
+    }
 }
 
-/* static void c64memrom_basic64_store(WORD addr, BYTE value)
+/* static void c64memrom_basic64_store(uint16_t addr, uint8_t value)
 {
 }
 */
@@ -83,55 +81,42 @@ BYTE c64memrom_basic64_read(WORD addr)
 /* We don't use trap_rom in the DTV emulation. Traps are installed in */
 /* flash/RAM directly and temporarily removed when accessing $d10x. */
 
-BYTE c64memrom_trap_read(WORD addr)
+uint8_t c64memrom_trap_read(uint16_t addr)
 {
     switch (addr & 0xf000) {
-      case 0xe000:
-      case 0xf000:
-        return c64memrom_kernal64_read(addr);
-        break;
+        case 0xe000:
+        case 0xf000:
+            return c64memrom_kernal64_read(addr);
+            break;
     }
     return 0;
 }
 
-void c64memrom_trap_store(WORD addr, BYTE value)
+void c64memrom_trap_store(uint16_t addr, uint8_t value)
 {
     switch (addr & 0xf000) {
-      case 0xe000:
-      case 0xf000:
-        c64memrom_kernal64_store(addr, value);
-        break;
+        case 0xe000:
+        case 0xf000:
+            c64memrom_kernal64_store(addr, value);
+            break;
     }
 }
 
-BYTE c64memrom_rom64_read(WORD addr)
+uint8_t c64memrom_rom64_read(uint16_t addr)
 {
     switch (addr & 0xf000) {
-      case 0xa000:
-      case 0xb000:
-        return c64dtvflash_read(addr);
-      case 0xd000:
-        return chargen_read(addr);
-      case 0xe000:
-      case 0xf000:
-        return c64dtvflash_read(addr);
+        case 0xa000:
+        case 0xb000:
+        case 0xd000:
+        case 0xe000:
+        case 0xf000:
+            return c64dtvflash_read(addr);
     }
 
     return 0;
 }
 
-void c64memrom_rom64_store(WORD addr, BYTE value)
+void c64memrom_rom64_store(uint16_t addr, uint8_t value)
 {
-    switch (addr & 0xf000) {
-      case 0xa000:
-      case 0xb000:
-        break;
-      case 0xd000:
-        chargen_store(addr, value);
-        break;
-      case 0xe000:
-      case 0xf000:
-        break;
-    }
+    return;
 }
-

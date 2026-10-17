@@ -28,6 +28,8 @@
 
 #include <stdio.h>
 
+#include "drive.h"
+#include "driverom.h"
 #include "lib.h"
 #include "resources.h"
 #include "tcbm-resources.h"
@@ -38,32 +40,31 @@ static char *dos_rom_name_1551 = NULL;
 
 static int set_dos_rom_name_1551(const char *val, void *param)
 {
-    if (util_string_set(&dos_rom_name_1551, val))
-        return 0;
+    int reload = ((val != NULL) && (dos_rom_name_1551 != NULL));
 
-    return tcbmrom_load_1551();
+    if (util_string_set(&dos_rom_name_1551, val)) {
+        return 0;
+    }
+
+    if (reload) {
+        return driverom_reload(DRIVE_TYPE_1551);
+    }
+
+    return tcbmrom_probe_1551();
 }
 
 static const resource_string_t resources_string[] = {
-    { "DosName1551", "dos1551", RES_EVENT_NO, NULL,
+    { "DosName1551", DRIVE_ROM1551_NAME, RES_EVENT_NO, NULL,
       &dos_rom_name_1551, set_dos_rom_name_1551, NULL },
-    { NULL }
-};
-
-static const resource_int_t resources_int[] = {
-    { NULL }
+    RESOURCE_STRING_LIST_END
 };
 
 int tcbm_resources_init(void)
 {
-    if (resources_register_string(resources_string) < 0)
-        return -1;
-
-    return resources_register_int(resources_int);
+    return resources_register_string(resources_string);
 }
 
 void tcbm_resources_shutdown(void)
 {
     lib_free(dos_rom_name_1551);
 }
-

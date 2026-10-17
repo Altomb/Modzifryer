@@ -4,7 +4,7 @@
  * Written by
  *  Andreas Boose <viceteam@t-online.de>
  *  Ettore Perazzoli <ettore@comm2000.it>
- *  André Fachat <fachat@physik.tu-chemnitz.de>
+ *  Andre Fachat <fachat@physik.tu-chemnitz.de>
  *
  * This file is part of VICE, the Versatile Commodore Emulator.
  * See README for copyright notice.
@@ -29,7 +29,7 @@
 /* #define DEBUG_CRTC */
 
 #ifdef DEBUG_CRTC
-#define DBG(_x_)        log_debug _x_
+#define DBG(_x_) log_printf  _x_
 #else
 #define DBG(_x_)
 #endif
@@ -60,25 +60,26 @@ void crtc_update_renderer(void)
         /* 80 columns */
         crtc.video_chip_cap->single_mode.sizex = 1;
         crtc.video_chip_cap->single_mode.sizey = 2;
-        crtc.video_chip_cap->single_mode.rmode = VIDEO_RENDER_CRT_1X2;
+        crtc.video_chip_cap->single_mode.rmode = VIDEO_RENDER_CRT_MONO_1X2;
         crtc.video_chip_cap->double_mode.sizex = 2;
         crtc.video_chip_cap->double_mode.sizey = 4;
-        crtc.video_chip_cap->double_mode.rmode = VIDEO_RENDER_CRT_2X4;
+        crtc.video_chip_cap->double_mode.rmode = VIDEO_RENDER_CRT_MONO_2X4;
     } else {
         /* 40 columns */
         crtc.video_chip_cap->single_mode.sizex = 1;
         crtc.video_chip_cap->single_mode.sizey = 1;
-        crtc.video_chip_cap->single_mode.rmode = VIDEO_RENDER_CRT_1X1;
+        crtc.video_chip_cap->single_mode.rmode = VIDEO_RENDER_CRT_MONO_1X1;
         crtc.video_chip_cap->double_mode.sizex = 2;
         crtc.video_chip_cap->double_mode.sizey = 2;
-        crtc.video_chip_cap->double_mode.rmode = VIDEO_RENDER_CRT_2X2;
+        crtc.video_chip_cap->double_mode.rmode = VIDEO_RENDER_CRT_MONO_2X2;
     }
+    crtc.video_chip_cap->video_has_palntsc = 0;
 }
 
 static int set_stretch(int val, void *param)
 {
     DBG(("set_stretch"));
-    crtc_stretchy = val;
+    crtc_stretchy = val ? 1 : 0;
     crtc_update_renderer();
     resources_touch("CrtcDoubleSize");
     return 0;
@@ -88,8 +89,7 @@ static const resource_int_t resources_int[] =
 {
     { "CrtcStretchVertical", 1, RES_EVENT_SAME, NULL,
       &crtc_stretchy, set_stretch, NULL },
-    { NULL, 0, 0, NULL,
-      NULL, NULL, NULL }
+    RESOURCE_INT_LIST_END
 };
 
 int crtc_resources_init(void)
@@ -99,30 +99,7 @@ int crtc_resources_init(void)
     video_chip_cap.dsize_limit_width = 800; /* 2 times the 80cols screen */
     video_chip_cap.dsize_limit_height = 700; /* 4 times the 80cols screen */
     video_chip_cap.dscan_allowed = ARCHDEP_CRTC_DSCAN;
-    video_chip_cap.hwscale_allowed = ARCHDEP_CRTC_HWSCALE;
-    video_chip_cap.scale2x_allowed = ARCHDEP_CRTC_DSIZE;
-    video_chip_cap.internal_palette_allowed = 1;
     video_chip_cap.external_palette_name = "green";
-    video_chip_cap.palemulation_allowed = 1;
-    video_chip_cap.double_buffering_allowed = ARCHDEP_CRTC_DBUF;
-#if 0
-    video_chip_cap.single_mode.sizex = 1;
-    video_chip_cap.single_mode.sizey = 1;
-    video_chip_cap.single_mode.rmode = VIDEO_RENDER_CRT_1X1;
-    /* FIXME: both are equally wrong. some mechanism is needed to
-              dynamically handle 40 vs 80 colums crtc */
-#if 0
-    /* 40 columns */
-    video_chip_cap.double_mode.sizex = 2;
-    video_chip_cap.double_mode.sizey = 2;
-    video_chip_cap.double_mode.rmode = VIDEO_RENDER_CRT_2X2;
-#else
-    /* 80 columns */
-    video_chip_cap.double_mode.sizex = 1;
-    video_chip_cap.double_mode.sizey = 2;
-    video_chip_cap.double_mode.rmode = VIDEO_RENDER_CRT_1X2;
-#endif
-#endif
     fullscreen_capability(&(video_chip_cap.fullscreen));
 
     if (raster_resources_chip_init("Crtc", &crtc.raster, &video_chip_cap) < 0) {
@@ -133,4 +110,3 @@ int crtc_resources_init(void)
 
     return resources_register_int(resources_int);
 }
-

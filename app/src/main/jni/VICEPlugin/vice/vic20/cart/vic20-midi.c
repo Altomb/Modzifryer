@@ -32,6 +32,7 @@
 #include "cartio.h"
 #include "cartridge.h"
 #include "cmdline.h"
+#include "export.h"
 #include "machine.h"
 #include "resources.h"
 #include "snapshot.h"
@@ -40,17 +41,17 @@
 midi_interface_t midi_interface[] = {
     /* Electronics - Maplin magazine */
     { "Maplin", 0x9c00, 0, 0, 1, 1, 0xff, 2, 0, CARTRIDGE_MIDI_MAPLIN },
-    { NULL }
+    MIDI_INFERFACE_LIST_END
 };
 
 /* ---------------------------------------------------------------------*/
 
-static BYTE vic20midi_read(WORD address)
+static uint8_t vic20midi_read(uint16_t address)
 {
     return midi_read(address);
 }
 
-static BYTE vic20midi_peek(WORD address)
+static uint8_t vic20midi_peek(uint16_t address)
 {
     return midi_peek(address);
 }
@@ -58,30 +59,42 @@ static BYTE vic20midi_peek(WORD address)
 /* ---------------------------------------------------------------------*/
 
 static io_source_t midi_device = {
-    "MIDI",
-    IO_DETACH_RESOURCE,
-    "MIDIEnable",
-    0x9c00, 0x9fff, 0x3ff,
-    1, /* read is always valid */
-    midi_store,
-    vic20midi_read,
-    vic20midi_peek,
-    NULL, /* TODO: dump */
-    CARTRIDGE_MIDI_MAPLIN,
-    0,
-    0
+    CARTRIDGE_VIC20_NAME_MIDI, /* name of the device */
+    IO_DETACH_RESOURCE,        /* use resource to detach the device when involved in a read-collision */
+    "MIDIEnable",              /* resource to set to '0' */
+    0x9c00, 0x9fff, 0x3ff,     /* range for the device, regs:$9c00-$9c01, mirrors:$9c02-$9fff */
+    1,                         /* read is always valid */
+    midi_store,                /* store function */
+    NULL,                      /* NO poke function */
+    vic20midi_read,            /* read function */
+    vic20midi_peek,            /* peek function */
+    NULL,                      /* TODO: device state information dump function */
+    CARTRIDGE_MIDI_MAPLIN,     /* cartridge ID */
+    IO_PRIO_NORMAL,            /* normal priority, device read needs to be checked for collisions */
+    0,                         /* insertion order, gets filled in by the registration function */
+    IO_MIRROR_NONE             /* NO mirroring */
 };
 
 static io_source_list_t *midi_list_item = NULL;
 
+static const export_resource_t export_res = {
+    CARTRIDGE_VIC20_NAME_MIDI, 0, 0, NULL, &midi_device, CARTRIDGE_MIDI_MAPLIN
+};
+
 /* ---------------------------------------------------------------------*/
 
-static int set_midi_enabled(int val, void *param)
+static int set_midi_enabled(int value, void *param)
 {
+    int val = value ? 1 : 0;
+
     if (!midi_enabled && val) {
+        if (export_add(&export_res) < 0) {
+            return -1;
+        }
         midi_list_item = io_source_register(&midi_device);
         midi_enabled = 1;
     } else if (midi_enabled && !val) {
+        export_remove(&export_res);
         io_source_unregister(midi_list_item);
         midi_list_item = NULL;
         midi_enabled = 0;
@@ -93,9 +106,12 @@ static int set_midi_enabled(int val, void *param)
 static const resource_int_t resources_int[] = {
     { "MIDIEnable", 0, RES_EVENT_STRICT, (resource_value_t)0,
       &midi_enabled, set_midi_enabled, NULL },
+#if 0
+    /* currently only 1 mode is supported, so this resource is unneeded */
     { "MIDIMode", MIDI_MODE_MAPLIN, RES_EVENT_NO, NULL,
       &midi_mode, midi_set_mode, NULL },
-    { NULL }
+#endif
+    RESOURCE_INT_LIST_END
 };
 
 int vic20_midi_resources_init(void)
@@ -103,6 +119,11 @@ int vic20_midi_resources_init(void)
     if (resources_register_int(resources_int) < 0) {
         return -1;
     }
+
+#if 1
+    /* currently only 1 mode is supported */
+    midi_set_mode(MIDI_MODE_MAPLIN, NULL);
+#endif
 
     return midi_resources_init();
 }
@@ -115,58 +136,78 @@ int vic20_midi_cmdline_options_init(void)
 /* ---------------------------------------------------------------------*/
 /*    snapshot support functions                                             */
 
-#define CART_DUMP_VER_MAJOR   0
-#define CART_DUMP_VER_MINOR   0
-#define SNAP_MODULE_NAME  "CARTMIDI"
+/* CARTMIDI snapshot module format:
 
-/* FIXME: implement snapshot support */
+   type  | name | description
+   --------------------------
+   BYTE  | mode | midi mode
+ */
+
+static char snap_module_name[] = "CARTMIDI";
+#define SNAP_MAJOR   0
+#define SNAP_MINOR   0
+
 int vic20_midi_snapshot_write_module(snapshot_t *s)
 {
-    return -1;
-#if 0
     snapshot_module_t *m;
 
-    m = snapshot_module_create(s, SNAP_MODULE_NAME,
-                          CART_DUMP_VER_MAJOR, CART_DUMP_VER_MINOR);
+    m = snapshot_module_create(s, snap_module_name, SNAP_MAJOR, SNAP_MINOR);
+
     if (m == NULL) {
         return -1;
     }
 
-    if (0) {
+    if (SMW_B(m, (uint8_t)midi_mode) < 0) {
         snapshot_module_close(m);
         return -1;
     }
 
     snapshot_module_close(m);
-    return 0;
-#endif
+
+    return midi_snapshot_write_module(s);
 }
 
 int vic20_midi_snapshot_read_module(snapshot_t *s)
 {
-    return -1;
-#if 0
-    BYTE vmajor, vminor;
+    uint8_t vmajor, vminor;
     snapshot_module_t *m;
+    int tmp_midi_mode;
 
-    m = snapshot_module_open(s, SNAP_MODULE_NAME, &vmajor, &vminor);
+    m = snapshot_module_open(s, snap_module_name, &vmajor, &vminor);
+
     if (m == NULL) {
         return -1;
     }
 
-    if ((vmajor != CART_DUMP_VER_MAJOR) || (vminor != CART_DUMP_VER_MINOR)) {
-        snapshot_module_close(m);
-        return -1;
+    /* Do not allow versions higher than current */
+    if (snapshot_version_is_bigger(vmajor, vminor, SNAP_MAJOR, SNAP_MINOR)) {
+        snapshot_set_error(SNAPSHOT_MODULE_HIGHER_VERSION);
+        goto fail;
     }
 
-    if (0) {
-        snapshot_module_close(m);
-        return -1;
+    if (SMR_B_INT(m, &tmp_midi_mode) < 0) {
+        goto fail;
     }
 
     snapshot_module_close(m);
-    return 0;
+
+    /* enable midi */
+#if 0
+    midi_set_vic20mode(tmp_midi_mode, NULL);
 #endif
+    set_midi_enabled(1, NULL);
+
+    return midi_snapshot_read_module(s);
+
+fail:
+    snapshot_module_close(m);
+    return -1;
 }
 
+/* ---------------------------------------------------------------------*/
+
+void vic20_midi_detach(void)
+{
+    set_midi_enabled(0, NULL);
+}
 #endif

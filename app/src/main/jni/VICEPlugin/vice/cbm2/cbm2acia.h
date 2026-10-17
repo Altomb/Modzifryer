@@ -2,7 +2,7 @@
  * cbm2acia.h  - Template file for ACIA 6551 emulation.
  *
  * Written by
- *  André Fachat <fachat@physik.tu-chemnitz.de>
+ *  Andre Fachat <fachat@physik.tu-chemnitz.de>
  *
  * This file is part of VICE, the Versatile Commodore Emulator.
  * See README for copyright notice.
@@ -34,17 +34,18 @@
 
 struct snapshot_s;
 
-extern void acia1_init(void);
-extern BYTE acia1_read(WORD a);
-extern BYTE acia1_peek(WORD a);
-extern void acia1_store(WORD a, BYTE b);
-extern void acia1_reset(void);
+void acia1_init(void);
+uint8_t acia1_read(uint16_t a);
+uint8_t acia1_peek(uint16_t a);
+void acia1_store(uint16_t a, uint8_t b);
+void acia1_reset(void);
 
-extern int acia1_cmdline_options_init(void);
-extern int acia1_resources_init(void);
+int acia1_cmdline_options_init(void);
+int acia1_resources_init(void);
 
-extern int acia1_snapshot_write_module(struct snapshot_s *p);
-extern int acia1_snapshot_read_module(struct snapshot_s *p);
+int acia1_snapshot_write_module(struct snapshot_s *p);
+int acia1_snapshot_read_module(struct snapshot_s *p);
+
+int acia1_dump(void);
 
 #endif
-

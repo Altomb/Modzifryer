@@ -28,6 +28,8 @@
 
 #include <stdio.h>
 
+#include "drive.h"
+#include "driverom.h"
 #include "iec128dcr-resources.h"
 #include "iec128dcrrom.h"
 #include "lib.h"
@@ -38,28 +40,28 @@ static char *dos_rom_name_1571cr = NULL;
 
 static int set_dos_rom_name_1571cr(const char *val, void *param)
 {
-    if (util_string_set(&dos_rom_name_1571cr, val))
-        return 0;
+    int reload = ((val != NULL) && (dos_rom_name_1571cr != NULL));
 
-    return iec128dcrrom_load_1571cr();
+    if (util_string_set(&dos_rom_name_1571cr, val)) {
+        return 0;
+    }
+
+    if (reload) {
+        return driverom_reload(DRIVE_TYPE_1571CR);
+    }
+
+    return iec128dcrrom_probe_1571cr();
 }
 
 static const resource_string_t resources_string[] = {
-    { "DosName1571cr", "d1571cr", RES_EVENT_NO, NULL,
+    { "DosName1571cr", DRIVE_ROM1571CR_NAME, RES_EVENT_NO, NULL,
       &dos_rom_name_1571cr, set_dos_rom_name_1571cr, NULL },
-    { NULL }
-};
-
-static const resource_int_t resources_int[] = {
-    { NULL }
+    RESOURCE_STRING_LIST_END
 };
 
 int iec128dcr_resources_init(void)
 {
-    if (resources_register_string(resources_string) < 0)
-        return -1;
-
-    return resources_register_int(resources_int);
+    return resources_register_string(resources_string);
 }
 
 void iec128dcr_resources_shutdown(void)

@@ -34,69 +34,62 @@
 #include "types.h"
 
 
-static BYTE drive_read_ram(drive_context_t *drv, WORD address)
+static uint8_t drive_read_rom(diskunit_context_t *drv, uint16_t address)
 {
-    /* FIXME: This breaks the 1541 RAM mirror!  */
-    return drv->cpud->drive_ram[address & 0x1fff];
+    return drv->cpu->cpu_last_data = drv->rom[address & 0x7fff];
 }
 
-static void drive_store_ram(drive_context_t *drv, WORD address,
-                                     BYTE value)
+static uint8_t drive_read_1551ram(diskunit_context_t *drv, uint16_t address)
 {
-    /* FIXME: This breaks the 1541 RAM mirror!  */
-    drv->cpud->drive_ram[address & 0x1fff] = value;
+    return drv->cpu->cpu_last_data = drv->drive_ram[address & 0x7ff];
 }
 
-static BYTE drive_read_zero(drive_context_t *drv, WORD address)
+static void drive_store_1551ram(diskunit_context_t *drv, uint16_t address, uint8_t value)
 {
-    switch (address & 0xff) {
-      case 0:
-        return glue1551_port0_read(drv);
-      case 1:
-        return glue1551_port1_read(drv);
-    }
-
-    return drv->cpud->drive_ram[address & 0xff];
+    drv->cpu->cpu_last_data = value;
+    drv->drive_ram[address & 0x7ff] = value;
 }
 
-static void drive_store_zero(drive_context_t *drv, WORD address,
-                                      BYTE value)
+static uint8_t drive_read_zero(diskunit_context_t *drv, uint16_t address)
 {
     switch (address & 0xff) {
-      case 0:
-        glue1551_port0_store(drv, value);
-        return;
-      case 1:
-        glue1551_port1_store(drv, value);
-        return;
+        case 0:
+            return drv->cpu->cpu_last_data = glue1551_port0_read(drv);
+        case 1:
+            return drv->cpu->cpu_last_data = glue1551_port1_read(drv);
     }
 
-    drv->cpud->drive_ram[address & 0xff] = value;
+    return drv->cpu->cpu_last_data = drv->drive_ram[(uint32_t)(address & 0xff)];
 }
 
-void mem1551_init(struct drive_context_s *drv, unsigned int type)
+static void drive_store_zero(diskunit_context_t *drv, uint16_t address, uint8_t value)
 {
-    unsigned int i;
-
-    if (type == DRIVE_TYPE_1551) {
-        drv->cpu->pageone = drv->cpud->drive_ram + 0x100;
-
-        /* Setup drive RAM.  */
-        for (i = 0x01; i < 0x08; i++) {
-            drv->cpud->read_func_nowatch[i] = drive_read_ram;
-            drv->cpud->store_func_nowatch[i] = drive_store_ram;
-        }
-        for (i = 0xc0; i < 0x100; i++)
-            drv->cpud->read_func_nowatch[i] = drive_read_rom;
-
-        drv->cpud->read_func_nowatch[0] = drive_read_zero;
-        drv->cpud->store_func_nowatch[0] = drive_store_zero;
-
-        /* Setup 1551 TPI.  */
-        for (i = 0x40; i < 0x7f; i++) {
-            drv->cpud->read_func_nowatch[i] = tpid_read;
-            drv->cpud->store_func_nowatch[i] = tpid_store;
-        }
+    drv->cpu->cpu_last_data = value;
+    switch (address & 0xff) {
+        case 0:
+            glue1551_port0_store(drv, value);
+            return;
+        case 1:
+            glue1551_port1_store(drv, value);
+            return;
     }
+
+    drv->drive_ram[(uint32_t)(address & 0xff)] = value;
 }
 
+void mem1551_init(struct diskunit_context_s *drv, unsigned int type)
+{
+    drivecpud_context_t *cpud = drv->cpud;
+
+    switch (type) {
+    case DRIVE_TYPE_1551:
+        drv->cpu->pageone = drv->drive_ram + 0x100;
+        drivemem_set_func(cpud, 0x00, 0x01, drive_read_zero, drive_store_zero, NULL, drv->drive_ram, 0x000207fd);
+        drivemem_set_func(cpud, 0x01, 0x08, drive_read_1551ram, drive_store_1551ram, NULL, &drv->drive_ram[0x0100], 0x000207fd);
+        drivemem_set_func(cpud, 0x40, 0x80, tpid_read, tpid_store, tpid_peek, NULL, 0);
+        drivemem_set_func(cpud, 0xc0, 0x100, drive_read_rom, NULL, NULL, &drv->trap_rom[0x4000], 0xc000fffd);
+        break;
+    default:
+        break;
+    }
+}

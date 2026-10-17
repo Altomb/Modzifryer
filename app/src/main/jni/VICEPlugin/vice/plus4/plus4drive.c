@@ -1,5 +1,5 @@
 /*
- * plusdrive.c
+ * plus4drive.c
  *
  * Written by
  *  Andreas Boose <viceteam@t-online.de>
@@ -39,9 +39,11 @@
 
 int machine_drive_resources_init(void)
 {
-    return drive_resources_type_init(DRIVE_TYPE_1551)
-        | iec_drive_resources_init() | iec_plus4exp_resources_init()
-        | tcbm_drive_resources_init();
+    /* init drive type resource last, so the ROMs are loaded when it initializes */
+    return iec_drive_resources_init() |
+           iec_plus4exp_resources_init() |
+           tcbm_drive_resources_init() |
+           drive_resources_type_init(DRIVE_TYPE_1551);
 }
 
 void machine_drive_resources_shutdown(void)
@@ -54,11 +56,11 @@ void machine_drive_resources_shutdown(void)
 int machine_drive_cmdline_options_init(void)
 {
     return iec_drive_cmdline_options_init()
-        | iec_plus4exp_cmdline_options_init()
-        | tcbm_drive_cmdline_options_init();
+           | iec_plus4exp_cmdline_options_init()
+           | tcbm_drive_cmdline_options_init();
 }
 
-void machine_drive_init(struct drive_context_s *drv)
+void machine_drive_init(struct diskunit_context_s *drv)
 {
     iec_drive_init(drv);
     iecieee_drive_init(drv);
@@ -66,14 +68,14 @@ void machine_drive_init(struct drive_context_s *drv)
     tcbm_drive_init(drv);
 }
 
-void machine_drive_shutdown(struct drive_context_s *drv)
+void machine_drive_shutdown(struct diskunit_context_s *drv)
 {
     iec_drive_shutdown(drv);
     iecieee_drive_shutdown(drv);
     tcbm_drive_shutdown(drv);
 }
 
-void machine_drive_reset(struct drive_context_s *drv)
+void machine_drive_reset(struct diskunit_context_s *drv)
 {
     iec_drive_reset(drv);
     iecieee_drive_reset(drv);
@@ -81,14 +83,14 @@ void machine_drive_reset(struct drive_context_s *drv)
     tcbm_drive_reset(drv);
 }
 
-void machine_drive_mem_init(struct drive_context_s *drv, unsigned int type)
+void machine_drive_mem_init(struct diskunit_context_s *drv, unsigned int type)
 {
     iec_drive_mem_init(drv, type);
     iec_plus4exp_mem_init(drv, type);
     tcbm_drive_mem_init(drv, type);
 }
 
-void machine_drive_setup_context(struct drive_context_s *drv)
+void machine_drive_setup_context(struct diskunit_context_s *drv)
 {
     iec_drive_setup_context(drv);
     iecieee_drive_setup_context(drv);
@@ -100,10 +102,10 @@ void machine_drive_idling_method(unsigned int dnr)
     iec_drive_idling_method(dnr);
 }
 
-void machine_drive_rom_load(void)
+void machine_drive_rom_probe(void)
 {
-    iec_drive_rom_load();
-    tcbm_drive_rom_load();
+    iec_drive_rom_probe();
+    tcbm_drive_rom_probe();
 }
 
 void machine_drive_rom_setup_image(unsigned int dnr)
@@ -112,22 +114,14 @@ void machine_drive_rom_setup_image(unsigned int dnr)
     tcbm_drive_rom_setup_image(dnr);
 }
 
-int machine_drive_rom_read(unsigned int type, WORD addr, BYTE *data)
-{
-    if (iec_drive_rom_read(type, addr, data) == 0)
-        return 0;
-    if (tcbm_drive_rom_read(type, addr, data) == 0)
-        return 0;
-
-    return -1;
-}
-
 int machine_drive_rom_check_loaded(unsigned int type)
 {
-    if (iec_drive_rom_check_loaded(type) == 0)
+    if (iec_drive_rom_check_loaded(type) == 0) {
         return 0;
-    if (tcbm_drive_rom_check_loaded(type) == 0)
+    }
+    if (tcbm_drive_rom_check_loaded(type) == 0) {
         return 0;
+    }
 
     return -1;
 }
@@ -138,43 +132,49 @@ void machine_drive_rom_do_checksum(unsigned int dnr)
     tcbm_drive_rom_do_checksum(dnr);
 }
 
-int machine_drive_snapshot_read(struct drive_context_s *ctxptr,
+int machine_drive_snapshot_read(struct diskunit_context_s *ctxptr,
                                 struct snapshot_s *s)
 {
-    if (iec_drive_snapshot_read(ctxptr, s) < 0)
+    if (iec_drive_snapshot_read(ctxptr, s) < 0) {
         return -1;
-    if (iecieee_drive_snapshot_read(ctxptr, s) < 0)
+    }
+    if (iecieee_drive_snapshot_read(ctxptr, s) < 0) {
         return -1;
-    if (tcbm_drive_snapshot_read(ctxptr, s) < 0)
+    }
+    if (tcbm_drive_snapshot_read(ctxptr, s) < 0) {
         return -1;
+    }
 
     return 0;
 }
 
-int machine_drive_snapshot_write(struct drive_context_s *ctxptr,
+int machine_drive_snapshot_write(struct diskunit_context_s *ctxptr,
                                  struct snapshot_s *s)
 {
-    if (iec_drive_snapshot_write(ctxptr, s) < 0)
+    if (iec_drive_snapshot_write(ctxptr, s) < 0) {
         return -1;
-    if (iecieee_drive_snapshot_write(ctxptr, s) < 0)
+    }
+    if (iecieee_drive_snapshot_write(ctxptr, s) < 0) {
         return -1;
-    if (tcbm_drive_snapshot_write(ctxptr, s) < 0)
+    }
+    if (tcbm_drive_snapshot_write(ctxptr, s) < 0) {
         return -1;
+    }
 
     return 0;
 }
 
-int machine_drive_image_attach(struct disk_image_s *image, unsigned int unit)
+int machine_drive_image_attach(struct disk_image_s *image, unsigned int unit, unsigned int drive)
 {
-    return iec_drive_image_attach(image, unit);
+    return iec_drive_image_attach(image, unit, drive);
 }
 
-int machine_drive_image_detach(struct disk_image_s *image, unsigned int unit)
+int machine_drive_image_detach(struct disk_image_s *image, unsigned int unit, unsigned int drive)
 {
-    return iec_drive_image_detach(image, unit);
+    return iec_drive_image_detach(image, unit, drive);
 }
 
-void machine_drive_port_default(struct drive_context_s *drv)
+void machine_drive_port_default(struct diskunit_context_s *drv)
 {
     iec_drive_port_default(drv);
 }
@@ -186,6 +186,39 @@ void machine_drive_flush(void)
 
 void machine_drive_stub(void)
 {
-
 }
 
+/** \brief  List of drive type names and ID's supported by Plus/4
+ *
+ * Convenience function for UI's. This list should be updated whenever drive
+ * types are added or removed.
+ */
+static drive_type_info_t drive_type_info_list[] = {
+    { DRIVE_NAME_NONE, DRIVE_TYPE_NONE },
+    { DRIVE_NAME_1540, DRIVE_TYPE_1540 },
+    { DRIVE_NAME_1541, DRIVE_TYPE_1541 },
+    { DRIVE_NAME_1541II, DRIVE_TYPE_1541II },
+    { DRIVE_NAME_1551, DRIVE_TYPE_1551 },
+    { DRIVE_NAME_1570, DRIVE_TYPE_1570 },
+    { DRIVE_NAME_1571, DRIVE_TYPE_1571 },
+    { DRIVE_NAME_1581, DRIVE_TYPE_1581 },
+    { DRIVE_NAME_2000, DRIVE_TYPE_2000 },
+    { DRIVE_NAME_4000, DRIVE_TYPE_4000 },
+    { DRIVE_NAME_CMDHD, DRIVE_TYPE_CMDHD },
+    { NULL, -1 }
+};
+
+/** \brief  Get a list of (name, id) tuples for the drives handles by Plus/4
+ *
+ * Usefull for UI's, get a list of currently supported drive types with a name
+ * to display and and ID to use in callbacks.
+ *
+ * \return  list of drive types, NULL terminated
+ *
+ * \note    'supported' in this context means the drives Plus/4 can support,
+ *          not what actually is supported due to ROMs and other settings
+ */
+drive_type_info_t *machine_drive_get_type_info_list(void)
+{
+    return drive_type_info_list;
+}

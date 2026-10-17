@@ -41,8 +41,7 @@
 
 /* Here comes the part that actually repaints each raster line.  This table is
    used to speed up the drawing. */
-static WORD drawing_table[256][256][8]; /* [byte][color][position] */
-
+static uint16_t drawing_table[256][256][8]; /* [byte][color][position] */
 
 static void init_drawing_tables(void)
 {
@@ -54,12 +53,11 @@ static void init_drawing_tables(void)
                 for (pos = 0; pos < 8; pos += 2) {
                     drawing_table[byte][color][pos]
                         = drawing_table[byte][color][pos + 1]
-                        = (byte >> (6 - pos)) & 0x3;
+                              = (byte >> (6 - pos)) & 0x3;
                 }
             } else {                   /* Standard mode. */
                 for (pos = 0; pos < 8; pos++) {
-                    drawing_table[byte][color][pos]
-                        = ((byte >> (7 - pos)) & 0x1) * 2;
+                    drawing_table[byte][color][pos] = ((byte >> (7 - pos)) & 0x1) * 2;
                 }
             }
         }
@@ -88,14 +86,12 @@ static int fill_cache(raster_cache_t *cache, unsigned int *xs,
     r = raster_cache_data_fill(cache->foreground_data,
                                vic.gbuf,
                                vic.text_cols,
-                               1,
                                xs, xe,
                                rr);
 
     r |= raster_cache_data_fill(cache->color_data_1,
                                 vic.cbuf,
                                 vic.text_cols,
-                                1,
                                 xs, xe,
                                 rr);
 
@@ -107,18 +103,18 @@ static int fill_cache(raster_cache_t *cache, unsigned int *xs,
     return r;
 }
 
-#define PUT_PIXEL(p, d, c, b, x, t) \
-    if (!t || drawing_table[(d)][(b)][(x)]) { \
-        *((VIC_PIXEL *)(p) + (x)) = (c)[drawing_table[(d)][(b)][(x)]];  \
+#define PUT_PIXEL(p, d, c, b, x, t)                                    \
+    if (!t || drawing_table[(d)][(b)][(x)]) {                          \
+        *((VIC_PIXEL *)(p) + (x)) = (c)[drawing_table[(d)][(b)][(x)]]; \
     }
 
-inline static void draw(BYTE *p, unsigned int xs, unsigned int xe,
-                        int transparent, BYTE *cbuf, BYTE *gbuf)
+inline static void draw(uint8_t *p, unsigned int xs, unsigned int xe,
+                        int transparent, uint8_t *cbuf, uint8_t *gbuf)
 /* transparent>0: don't overwrite background */
 {
     VIC_PIXEL c[4];
     unsigned int i, x;
-    BYTE b, d, dr;
+    uint8_t b, d, dr;
 
     /* Last character may exceed border, so we have some extra work */
     /* bordercheck asumes p pointing to display_xstart */
@@ -131,7 +127,6 @@ inline static void draw(BYTE *p, unsigned int xs, unsigned int xe,
     if (vic.mc_border_color != vic.old_mc_border_color ||
         vic.auxiliary_color != vic.old_auxiliary_color ||
         vic.reverse != vic.old_reverse) {
-
         b = cbuf[xs];
         d = gbuf[xs];
 
@@ -198,21 +193,18 @@ inline static void draw(BYTE *p, unsigned int xs, unsigned int xe,
 
 static void draw_line(void)
 {
-    BYTE *p;
+    uint8_t *p;
 
-    p = (vic.raster.draw_buffer_ptr
-        + vic.raster.display_xstart);
+    p = (vic.raster.draw_buffer_ptr + vic.raster.display_xstart);
 
     draw(p, 0, vic.text_cols - 1, 0, vic.cbuf, vic.gbuf);
 }
 
-static void draw_line_cached(raster_cache_t *cache, unsigned int xs,
-                             unsigned int xe)
+static void draw_line_cached(raster_cache_t *cache, unsigned int xs, unsigned int xe)
 {
-    BYTE *p;
+    uint8_t *p;
 
-    p = (vic.raster.draw_buffer_ptr
-        + vic.raster.display_xstart);
+    p = (vic.raster.draw_buffer_ptr + vic.raster.display_xstart);
 
     /* Scale back xs and xe from 8 pixel units to text_cols.  */
     draw(p, xs >> VIC_PIXEL_WIDTH_SHIFT,
@@ -220,21 +212,18 @@ static void draw_line_cached(raster_cache_t *cache, unsigned int xs,
          cache->color_data_1, cache->foreground_data);
 }
 
-static void draw_std_background(unsigned int start_pixel,
-                                unsigned int end_pixel)
+static void draw_std_background(unsigned int start_pixel, unsigned int end_pixel)
 {
     memset(vic.raster.draw_buffer_ptr + start_pixel,
            vic.raster.background_color,
            (end_pixel - start_pixel + 1));
 }
 
-static void draw_std_foreground(unsigned int start_char,
-                                unsigned int end_char)
+static void draw_std_foreground(unsigned int start_char, unsigned int end_char)
 {
-    BYTE *p;
+    uint8_t *p;
 
-    p = (vic.raster.draw_buffer_ptr
-        + vic.raster.display_xstart);
+    p = (vic.raster.draw_buffer_ptr + vic.raster.display_xstart);
 
     draw(p, start_char, end_char, 1, vic.cbuf, vic.gbuf);
 }
@@ -255,4 +244,3 @@ void vic_draw_init(void)
 
     setup_modes();
 }
-

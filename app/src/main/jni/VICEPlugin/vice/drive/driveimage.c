@@ -39,339 +39,248 @@
 #include "types.h"
 
 
-#define GCR_OFFSET(half_track) ((half_track - 2) * drive->gcr->max_track_size)
-#define SECTOR_GCR_SIZE_WITH_HEADER 354
-
 /* Logging goes here.  */
 static log_t driveimage_log = LOG_DEFAULT;
 
-/* Number of bytes per track size.  */
-static const unsigned int raw_track_size[4] = { 6250, 6666, 7142, 7692 };
-static const unsigned int gaps_between_sectors[4] = { 9, 12, 17, 8 };
-
-inline static unsigned int sector_offset(unsigned int track,
-                                         unsigned int sector,
-                                         unsigned int max_sector,
-                                         drive_t *drive)
+int drive_image_type_to_drive_type(unsigned int type)
 {
-    unsigned int speed;
-    if (drive->image->type == DISK_IMAGE_TYPE_D71) {
-        speed = disk_image_speed_map_1571(track - 1);
-    } else {
-        speed = disk_image_speed_map_1541(track - 1);
+    switch (type) {
+        case DISK_IMAGE_TYPE_G64:
+        case DISK_IMAGE_TYPE_P64:
+        case DISK_IMAGE_TYPE_D64:
+            return DRIVE_TYPE_1541II;
+        case DISK_IMAGE_TYPE_G71:
+        case DISK_IMAGE_TYPE_D71:
+            return DRIVE_TYPE_1571;
+        case DISK_IMAGE_TYPE_D81:
+            return DRIVE_TYPE_1581;
+        case DISK_IMAGE_TYPE_D1M:
+        case DISK_IMAGE_TYPE_D2M:
+            return DRIVE_TYPE_2000;
+        case DISK_IMAGE_TYPE_D4M:
+            return DRIVE_TYPE_4000;
+        case DISK_IMAGE_TYPE_D67:
+            return DRIVE_TYPE_2040;
+        case DISK_IMAGE_TYPE_D80:
+            return DRIVE_TYPE_8050;
+        case DISK_IMAGE_TYPE_D82:
+            return DRIVE_TYPE_8250;
+        case DISK_IMAGE_TYPE_D90:
+            return DRIVE_TYPE_9000;
+        case DISK_IMAGE_TYPE_DHD:
+            return DRIVE_TYPE_CMDHD;
     }
-
-    return GCR_OFFSET(track * 2)
-        + (SECTOR_GCR_SIZE_WITH_HEADER + gaps_between_sectors[speed]) * sector;
+    return DRIVE_TYPE_NONE;
 }
 
-void drive_image_init_track_size_d64(drive_t *drive)
+int drive_check_image_format(unsigned int format, unsigned int dnr)
 {
-    unsigned int track;
-
-    for (track = 0; track < MAX_TRACKS_1541; track++) {
-        drive->gcr->track_size[track * 2] =
-            raw_track_size[disk_image_speed_map_1541(track)];
-        drive->gcr->track_size[(track * 2) + 1] =
-            raw_track_size[disk_image_speed_map_1541(track)];
-        memset(drive->gcr->speed_zone, disk_image_speed_map_1541(track),
-               NUM_MAX_BYTES_TRACK);
-    }
-		drive->gcr->max_track_size = NUM_MAX_BYTES_TRACK;
-}
-
-static void drive_image_init_track_size_d71(drive_t *drive)
-{
-    unsigned int track;
-
-    for (track = 0; track < MAX_TRACKS_1571; track++) {
-        drive->gcr->track_size[track * 2] =
-            raw_track_size[disk_image_speed_map_1571(track)];
-        drive->gcr->track_size[(track * 2) + 1] =
-            raw_track_size[disk_image_speed_map_1571(track)];
-        memset(drive->gcr->speed_zone, disk_image_speed_map_1571(track),
-               NUM_MAX_BYTES_TRACK);
-    }
-		drive->gcr->max_track_size = NUM_MAX_BYTES_TRACK;
-}
-
-static void drive_image_read_d64_d71(drive_t *drive)
-{
-    BYTE buffer[260], chksum;
-    int i;
-    unsigned int track, sector;
-
-    if (!(drive->image))
-        return;
-
-    buffer[258] = buffer[259] = 0;
-
-    /* Since the D64/D71 format does not provide the actual track sizes or
-       speed zones, we set them to standard values.  */
-    if ((drive->image->type == DISK_IMAGE_TYPE_D64
-        || drive->image->type == DISK_IMAGE_TYPE_D67
-        || drive->image->type == DISK_IMAGE_TYPE_X64)
-        && (drive->type == DRIVE_TYPE_1541
-        || drive->type == DRIVE_TYPE_1541II
-        || drive->type == DRIVE_TYPE_1551
-        || drive->type == DRIVE_TYPE_1570
-        || drive->type == DRIVE_TYPE_2031)) {
-        drive_image_init_track_size_d64(drive);
-    }
-    if (drive->image->type == DISK_IMAGE_TYPE_D71
-        || drive->type == DRIVE_TYPE_1571
-        || drive->type == DRIVE_TYPE_1571CR
-        || drive->type == DRIVE_TYPE_2031) {
-        drive_image_init_track_size_d71(drive);
-    }
-
-    drive->gcr->max_track_size = NUM_MAX_BYTES_TRACK;
-
-    drive_set_half_track(drive->current_half_track, drive);
-
-    for (track = 1; track <= drive->image->tracks; track++) {
-        BYTE *ptr;
-        unsigned int max_sector = 0;
-
-        /* Clear odd track */
-        ptr = drive->gcr->data + GCR_OFFSET((track * 2) + 1);
-        memset(ptr, 0x00, NUM_MAX_BYTES_TRACK);
-
-        ptr = drive->gcr->data + GCR_OFFSET(track * 2);
-        max_sector = disk_image_sector_per_track(drive->image->type,
-                                                 track);
-        /* Clear track to avoid read errors.  */
-        memset(ptr, 0x55, NUM_MAX_BYTES_TRACK);
-
-        for (sector = 0; sector < max_sector; sector++) {
-            int rc;
-            ptr = drive->gcr->data + sector_offset(track, sector,
-                                                   max_sector, drive);
-
-            rc = disk_image_read_sector(drive->image, buffer + 1, track,
-                                        sector);
-            if (rc < 0) {
-                log_error(drive->log,
-                          "Cannot read T:%d S:%d from disk image.",
-                          track, sector);
-                          continue;
-            }
-
-            if (rc == 21) {
-                ptr = drive->gcr->data + GCR_OFFSET(track * 2);
-                memset(ptr, 0x00, NUM_MAX_BYTES_TRACK);
-                break;
-            }
-
-            buffer[0] = (rc == 22) ? 0xff : 0x07;
-
-            chksum = buffer[1];
-            for (i = 2; i < 257; i++)
-                chksum ^= buffer[i];
-            buffer[257] = (rc == 23) ? chksum ^ 0xff : chksum;
-            gcr_convert_sector_to_GCR(buffer, ptr, track, sector,
-                                      drive->diskID1, drive->diskID2,
-                                      (BYTE)(rc));
-        }
-    }
-}
-
-static int setID(unsigned int dnr)
-{
-    BYTE buffer[256];
-    int rc;
-    drive_t *drive;
-
-    drive = drive_context[dnr]->drive;
-
-    if (!(drive->image))
-        return -1;
-
-    rc = disk_image_read_sector(drive->image, buffer, 18, 0);
-    if (rc >= 0) {
-        drive->diskID1 = buffer[0xa2];
-        drive->diskID2 = buffer[0xa3];
-    }
-
-    return rc;
-}
-
-static int drive_check_image_format(unsigned int format, unsigned int dnr)
-{
-    drive_t *drive;
-
-    drive = drive_context[dnr]->drive;
+    diskunit_context_t *unit = diskunit_context[dnr];
 
     switch (format) {
-      case DISK_IMAGE_TYPE_D64:
-      case DISK_IMAGE_TYPE_G64:
-      case DISK_IMAGE_TYPE_P64:
-      case DISK_IMAGE_TYPE_X64:
-        if (drive->type != DRIVE_TYPE_1541
-            && drive->type != DRIVE_TYPE_1541II
-            && drive->type != DRIVE_TYPE_1551
-            && drive->type != DRIVE_TYPE_1570
-            && drive->type != DRIVE_TYPE_1571
-            && drive->type != DRIVE_TYPE_1571CR
-            && drive->type != DRIVE_TYPE_2031
-            && drive->type != DRIVE_TYPE_2040 /* FIXME: only read compat */
-            && drive->type != DRIVE_TYPE_3040
-            && drive->type != DRIVE_TYPE_4040)
+        case DISK_IMAGE_TYPE_D64:
+        case DISK_IMAGE_TYPE_G64:
+        case DISK_IMAGE_TYPE_P64:
+#ifdef HAVE_X64_IMAGE
+        case DISK_IMAGE_TYPE_X64:
+#endif
+            if (unit->type != DRIVE_TYPE_1540
+                && unit->type != DRIVE_TYPE_1541
+                && unit->type != DRIVE_TYPE_1541II
+                && unit->type != DRIVE_TYPE_1551
+                && unit->type != DRIVE_TYPE_1570
+                && unit->type != DRIVE_TYPE_1571
+                && unit->type != DRIVE_TYPE_1571CR
+                && unit->type != DRIVE_TYPE_2031
+                && unit->type != DRIVE_TYPE_2040 /* FIXME: only read compat */
+                && unit->type != DRIVE_TYPE_3040
+                && unit->type != DRIVE_TYPE_4040) {
+                return -1;
+            }
+            break;
+        case DISK_IMAGE_TYPE_G71:
+            if ((unit->type != DRIVE_TYPE_1571)
+                && (unit->type != DRIVE_TYPE_1571CR)) {
+                return -1;
+            }
+            break;
+        case DISK_IMAGE_TYPE_D67:
+            /* New drives and 2031, 3040 and 4040 are only read compatible.  */
+            if (unit->type != DRIVE_TYPE_1540
+                && unit->type != DRIVE_TYPE_1541
+                && unit->type != DRIVE_TYPE_1541II
+                && unit->type != DRIVE_TYPE_1551
+                && unit->type != DRIVE_TYPE_1570
+                && unit->type != DRIVE_TYPE_1571
+                && unit->type != DRIVE_TYPE_1571CR
+                && unit->type != DRIVE_TYPE_2031
+                && unit->type != DRIVE_TYPE_2040
+                && unit->type != DRIVE_TYPE_3040
+                && unit->type != DRIVE_TYPE_4040) {
+                return -1;
+            }
+            break;
+        case DISK_IMAGE_TYPE_D71:
+            if (unit->type != DRIVE_TYPE_1571
+                && unit->type != DRIVE_TYPE_1571CR) {
+                return -1;
+            }
+            break;
+        case DISK_IMAGE_TYPE_D81:
+            if (unit->type != DRIVE_TYPE_1581
+                && unit->type != DRIVE_TYPE_2000
+                && unit->type != DRIVE_TYPE_4000) {
+                return -1;
+            }
+            break;
+        case DISK_IMAGE_TYPE_D80:
+        case DISK_IMAGE_TYPE_D82:
+            if ((unit->type != DRIVE_TYPE_1001)
+                && (unit->type != DRIVE_TYPE_8050)
+                && (unit->type != DRIVE_TYPE_8250)) {
+                return -1;
+            }
+            break;
+        case DISK_IMAGE_TYPE_D90:
+            if (unit->type != DRIVE_TYPE_9000) {
+                return -1;
+            }
+            break;
+        case DISK_IMAGE_TYPE_D1M:
+        case DISK_IMAGE_TYPE_D2M:
+        case DISK_IMAGE_TYPE_D4M:
+            if (unit->type != DRIVE_TYPE_2000
+                && unit->type != DRIVE_TYPE_4000) {
+                return -1;
+            }
+            break;
+        case DISK_IMAGE_TYPE_DHD:
+            if (unit->type != DRIVE_TYPE_CMDHD) {
+                return -1;
+            }
+            break;
+        default:
             return -1;
-        break;
-      case DISK_IMAGE_TYPE_D67:
-        /* New drives and 2031, 3040 and 4040 are only read compatible.  */
-        if (drive->type != DRIVE_TYPE_1541
-            && drive->type != DRIVE_TYPE_1541II
-            && drive->type != DRIVE_TYPE_1551
-            && drive->type != DRIVE_TYPE_1570
-            && drive->type != DRIVE_TYPE_1571
-            && drive->type != DRIVE_TYPE_1571CR
-            && drive->type != DRIVE_TYPE_2031
-            && drive->type != DRIVE_TYPE_2040
-            && drive->type != DRIVE_TYPE_3040
-            && drive->type != DRIVE_TYPE_4040)
-            return -1;
-        break;
-      case DISK_IMAGE_TYPE_D71:
-        if (drive->type != DRIVE_TYPE_1571
-            && drive->type != DRIVE_TYPE_1571CR)
-            return -1;
-        break;
-      case DISK_IMAGE_TYPE_D81:
-        if (drive->type != DRIVE_TYPE_1581
-            && drive->type != DRIVE_TYPE_2000
-            && drive->type != DRIVE_TYPE_4000)
-            return -1;
-        break;
-      case DISK_IMAGE_TYPE_D80:
-      case DISK_IMAGE_TYPE_D82:
-        if ((drive->type != DRIVE_TYPE_1001)
-            && (drive->type != DRIVE_TYPE_8050)
-            && (drive->type != DRIVE_TYPE_8250))
-            return -1;
-        break;
-      case DISK_IMAGE_TYPE_D1M:
-      case DISK_IMAGE_TYPE_D2M:
-      case DISK_IMAGE_TYPE_D4M:
-        if (drive->type != DRIVE_TYPE_2000
-            && drive->type != DRIVE_TYPE_4000)
-            return -1;
-        break;
-      default:
-        return -1;
     }
     return 0;
 }
 
 /* Attach a disk image to the true drive emulation. */
-int drive_image_attach(disk_image_t *image, unsigned int unit)
+int drive_image_attach(disk_image_t *image, unsigned int unit, unsigned int drv)
 {
     unsigned int dnr;
     drive_t *drive;
 
-    if (unit < 8 || unit >= 8 + DRIVE_NUM)
+    if (unit < 8 || unit >= 8 + NUM_DISK_UNITS) {
         return -1;
+    }
 
     dnr = unit - 8;
-    drive = drive_context[dnr]->drive;
+    drive = diskunit_context[dnr]->drives[drv];
 
-    if (drive_check_image_format(image->type, dnr) < 0)
+    if (drive_check_image_format(image->type, dnr) < 0) {
         return -1;
+    }
 
     drive->read_only = image->read_only;
-    drive->attach_clk = drive_clk[dnr];
-    if (drive->detach_clk > (CLOCK)0)
-        drive->attach_detach_clk = drive_clk[dnr];
-    drive->ask_extend_disk_image = 1;
+    drive->attach_clk = diskunit_clk[dnr];
+    if (drive->detach_clk > (CLOCK)0) {
+        drive->attach_detach_clk = diskunit_clk[dnr];
+    }
+    drive->ask_extend_disk_image = DRIVE_EXTEND_ASK;
 
-    switch(image->type) {
-      case DISK_IMAGE_TYPE_D64:
-      case DISK_IMAGE_TYPE_D67:
-      case DISK_IMAGE_TYPE_D71:
-      case DISK_IMAGE_TYPE_G64:
-      case DISK_IMAGE_TYPE_X64:
-      case DISK_IMAGE_TYPE_P64:
-        disk_image_attach_log(image, driveimage_log, unit);
-        break;
-      default:
-        return -1;
+    switch (image->type) {
+        case DISK_IMAGE_TYPE_D64:
+        case DISK_IMAGE_TYPE_D67:
+        case DISK_IMAGE_TYPE_D71:
+        case DISK_IMAGE_TYPE_G64:
+        case DISK_IMAGE_TYPE_G71:
+#ifdef HAVE_X64_IMAGE
+        case DISK_IMAGE_TYPE_X64:
+#endif
+        case DISK_IMAGE_TYPE_P64:
+            disk_image_attach_log(image, driveimage_log, unit, drv);
+            break;
+        default:
+            return -1;
     }
 
     drive->image = image;
     drive->image->gcr = drive->gcr;
     drive->image->p64 = (void*)drive->p64;
 
+    if (disk_image_read_image(drive->image) < 0) {
+        drive->image = NULL;
+        return -1;
+    }
     if (drive->image->type == DISK_IMAGE_TYPE_P64) {
-        if (disk_image_read_p64_image(drive->image) < 0) {
-            drive->image = NULL;
-            return -1;
-        }
         drive->P64_image_loaded = 1;
         drive->P64_dirty = 0;
-        return 0;
-    } else if (drive->image->type == DISK_IMAGE_TYPE_G64) {
-        if (disk_image_read_gcr_image(drive->image) < 0) {
-            drive->image = NULL;
-            return -1;
-        }
-        drive->GCR_image_loaded = 1;
-        return 0;
     } else {
-        if (setID(dnr) >= 0) {
-            drive_image_read_d64_d71(drive);
-            drive->GCR_image_loaded = 1;
-            return 0;
-        } else {
-            return -1;
-        }
+        drive->GCR_image_loaded = 1;
     }
-
+    drive->complicated_image_loaded = ((drive->image->type == DISK_IMAGE_TYPE_P64)
+                                       || (drive->image->type == DISK_IMAGE_TYPE_G64)
+                                       || (drive->image->type == DISK_IMAGE_TYPE_G71));
+    drive_set_half_track(drive->current_half_track, drive->side, drive);
+    return 0;
 }
 
 /* Detach a disk image from the true drive emulation. */
-int drive_image_detach(disk_image_t *image, unsigned int unit)
+int drive_image_detach(disk_image_t *image, unsigned int unit, unsigned int drv)
 {
-    unsigned int dnr;
+    unsigned int dnr, i;
+    diskunit_context_t *diskunit;
     drive_t *drive;
 
-    if (unit < 8 || unit >= 8 + DRIVE_NUM)
+    if (unit < 8 || unit >= 8 + NUM_DISK_UNITS) {
         return -1;
+    }
 
     dnr = unit - 8;
-    drive = drive_context[dnr]->drive;
+    diskunit = diskunit_context[dnr];
+    drive = diskunit->drives[drv];
 
     if (drive->image != NULL) {
-        switch(image->type) {
-          case DISK_IMAGE_TYPE_D64:
-          case DISK_IMAGE_TYPE_D67:
-          case DISK_IMAGE_TYPE_D71:
-          case DISK_IMAGE_TYPE_G64:
-          case DISK_IMAGE_TYPE_P64:
-          case DISK_IMAGE_TYPE_X64:
-            disk_image_detach_log(image, driveimage_log, unit);
-            break;
-          default:
-            return -1;
+        switch (image->type) {
+            case DISK_IMAGE_TYPE_D64:
+            case DISK_IMAGE_TYPE_D67:
+            case DISK_IMAGE_TYPE_D71:
+            case DISK_IMAGE_TYPE_G64:
+            case DISK_IMAGE_TYPE_G71:
+            case DISK_IMAGE_TYPE_P64:
+#ifdef HAVE_X64_IMAGE
+            case DISK_IMAGE_TYPE_X64:
+#endif
+                disk_image_detach_log(image, driveimage_log, unit, drv);
+                break;
+            default:
+                return -1;
         }
     }
 
-   if (drive->P64_image_loaded && drive->P64_dirty) {
+    if (drive->P64_image_loaded && drive->P64_dirty) {
         drive->P64_dirty = 0;
         if (disk_image_write_p64_image(drive->image) < 0) {
-                log_error(drive->log,
-                          "Cannot write disk image back.");
+            log_error(diskunit->log, "Cannot write disk image back.");
         }
     } else {
-	drive_gcr_data_writeback(drive);
+        drive_gcr_data_writeback(drive);
     }
 
-    memset(drive->gcr->data, 0x00, sizeof(drive->gcr->data));
-    drive->detach_clk = drive_clk[dnr];
+    for (i = 0; i < MAX_GCR_TRACKS; i++) {
+        if (drive->gcr->tracks[i].data) {
+            lib_free(drive->gcr->tracks[i].data);
+            drive->gcr->tracks[i].data = NULL;
+            drive->gcr->tracks[i].size = 0;
+        }
+    }
+    drive->detach_clk = diskunit_clk[dnr];
     drive->GCR_image_loaded = 0;
     drive->P64_image_loaded = 0;
     drive->read_only = 0;
     drive->image = NULL;
+    drive_set_half_track(drive->current_half_track, drive->side, drive);
 
     return 0;
 }
@@ -380,4 +289,3 @@ void drive_image_init(void)
 {
     driveimage_log = log_open("DriveImage");
 }
-

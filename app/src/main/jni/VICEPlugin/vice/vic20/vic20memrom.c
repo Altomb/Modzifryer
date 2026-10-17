@@ -28,87 +28,82 @@
 
 #include "vic20mem.h"
 #include "vic20memrom.h"
+#include "vic20rom.h"
 #include "types.h"
 
-#ifdef USE_EMBEDDED
-#include "vic20basic.h"
-#include "vic20kernal.h"
-#else
-BYTE vic20memrom_basic_rom[VIC20_BASIC_ROM_SIZE];
-BYTE vic20memrom_kernal_rom[VIC20_KERNAL_ROM_SIZE];
-#endif
+uint8_t vic20memrom_basic_rom[VIC20_BASIC_ROM_SIZE];
+uint8_t vic20memrom_kernal_rom[VIC20_KERNAL_ROM_SIZE];
 
-BYTE vic20memrom_kernal_trap_rom[VIC20_KERNAL_ROM_SIZE];
+uint8_t vic20memrom_kernal_trap_rom[VIC20_KERNAL_ROM_SIZE];
 
-BYTE vic20memrom_chargen_rom[VIC20_CHARGEN_ROM_SIZE];
+uint8_t vic20memrom_chargen_rom[VIC20_CHARGEN_ROM_SIZE];
 
 
-BYTE vic20memrom_kernal_read(WORD addr)
+uint8_t vic20memrom_kernal_read(uint16_t addr)
 {
     return vic20memrom_kernal_rom[addr & 0x1fff];
 }
 
-BYTE vic20memrom_basic_read(WORD addr)
+uint8_t vic20memrom_basic_read(uint16_t addr)
 {
     return vic20memrom_basic_rom[addr & 0x1fff];
 }
 
-BYTE vic20memrom_chargen_read(WORD addr)
+uint8_t vic20memrom_chargen_read(uint16_t addr)
 {
     return vic20memrom_chargen_rom[addr & 0xfff];
 }
 
-BYTE vic20memrom_trap_read(WORD addr)
+uint8_t vic20memrom_trap_read(uint16_t addr)
 {
     switch (addr & 0xf000) {
-      case 0xe000:
-      case 0xf000:
-        return vic20memrom_kernal_trap_rom[addr & 0x1fff];
+        case 0xe000:
+        case 0xf000:
+            return vic20memrom_kernal_trap_rom[addr & 0x1fff];
     }
 
     return 0;
 }
 
-void vic20memrom_trap_store(WORD addr, BYTE value)
+void vic20memrom_trap_store(uint16_t addr, uint8_t value)
 {
     switch (addr & 0xf000) {
-      case 0xe000:
-      case 0xf000:
-        vic20memrom_kernal_trap_rom[addr & 0x1fff] = value;
-        break;
+        case 0xe000:
+        case 0xf000:
+            vic20memrom_kernal_trap_rom[addr & 0x1fff] = value;
+            break;
     }
 }
 
-BYTE rom_read(WORD addr)
+uint8_t rom_read(uint16_t addr)
 {
     switch (addr & 0xf000) {
-      case 0x8000:
-        return vic20memrom_chargen_read(addr);
-      case 0xc000:
-      case 0xd000:
-        return vic20memrom_basic_read(addr);
-      case 0xe000:
-      case 0xf000:
-        return vic20memrom_kernal_read(addr);
+        case 0x8000:
+            return vic20memrom_chargen_read(addr);
+        case 0xc000:
+        case 0xd000:
+            return vic20memrom_basic_read(addr);
+        case 0xe000:
+        case 0xf000:
+            return vic20memrom_kernal_read(addr);
     }
 
     return 0;
 }
 
-void rom_store(WORD addr, BYTE value)
+void rom_store(uint16_t addr, uint8_t value)
 {
     switch (addr & 0xf000) {
-      case 0x8000:
-        vic20memrom_chargen_rom[addr & 0x0fff] = value;
-        break;
-      case 0xc000:
-      case 0xd000:
-        vic20memrom_basic_rom[addr & 0x1fff] = value;
-        break;
-      case 0xe000:
-      case 0xf000:
-        vic20memrom_kernal_rom[addr & 0x1fff] = value;
-        break;
+        case 0x8000:
+            vic20memrom_chargen_rom[addr & 0x0fff] = value;
+            break;
+        case 0xc000:
+        case 0xd000:
+            vic20memrom_basic_rom[addr & 0x1fff] = value;
+            break;
+        case 0xe000:
+        case 0xf000:
+            vic20memrom_kernal_rom[addr & 0x1fff] = value;
+            break;
     }
 }
-

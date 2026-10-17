@@ -6,6 +6,7 @@
  *
  * Written by
  *  Spiro Trikaliotis <spiro.trikaliotis@gmx.de>
+ *  Marco van den Heuvel <blackystardust68@yahoo.com>
  *
  * based on code from network.c written by
  *  Andreas Matthies <andreas.matthies@gmx.net>
@@ -39,18 +40,46 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* hopefully fixed in configure */
+#if 0
+/* get rid of the asserts when compiling in non debug mode. somehow
+   configure fails to define NDEBUG instead */
+#ifndef DEBUG
+#undef assert
+#define assert(x)
+#endif
+#endif
+
 #ifdef HAVE_STRINGS_H
 #include <strings.h>
+#endif
+
+#include "socketimpl.h"
+
+/* Fix Windows' definition of 'INVALID_SOCKET (SOCKET)(~0)', which breaks the
+ * code further down. Any 'normal' OS uses -1, but Microsft had to use an
+ * unsigned int with INVALID_SOCKET being the largest value for that unsigned
+ * int.
+ *
+ * Since Windows only works on two's complement systems, this will work.
+ */
+#ifdef WINDOWS_COMPILE
+# undef INVALID_SOCKET
+# define INVALID_SOCKET -1
 #endif
 
 #include "archdep.h"
 #include "lib.h"
 #include "log.h"
-#include "socketimpl.h"
 #include "vicesocket.h"
+#include "signals.h"
 
 #ifndef HAVE_SOCKLEN_T
 typedef size_t socklen_t;
+#endif
+
+#ifndef SOL_TCP
+#define SOL_TCP IPPROTO_TCP
 #endif
 
 /*! \brief determine the number of elements of an array
@@ -82,13 +111,13 @@ typedef size_t socklen_t;
  * However, in practice, this approach works.
  */
 union socket_addresses_u {
-    struct sockaddr     generic; /*!< the generic type needed for calling the socket API */
+    struct sockaddr generic;     /*!< the generic type needed for calling the socket API */
 
 #ifdef HAVE_UNIX_DOMAIN_SOCKETS
-    struct sockaddr_un  local;   /*!< an Unix Domain Socket (file system) socket address */
+    struct sockaddr_un local;    /*!< an Unix Domain Socket (file system) socket address */
 #endif
 
-    struct sockaddr_in  ipv4;    /*!< an IPv4 socket address */
+    struct sockaddr_in ipv4;     /*!< an IPv4 socket address */
 
 #ifdef HAVE_IPV6
     struct sockaddr_in6 ipv6;    /*!< an IPv6 socket address */
@@ -98,9 +127,8 @@ union socket_addresses_u {
 /*! \internal \brief opaque structure describing an address for use with socket functions
  *
  */
-struct vice_network_socket_address_s
-{
-    unsigned int used;      /*!< 1 if this entry is being used, 0 else. 
+struct vice_network_socket_address_s {
+    unsigned int used;      /*!< 1 if this entry is being used, 0 else.
                              * This is used for debugging the buffer
                              * allocation strategy.
                              */
@@ -118,7 +146,7 @@ struct vice_network_socket_address_s
 struct vice_network_socket_s {
     SOCKET sockfd;           /*!< the socket handle */
     vice_network_socket_address_t address; /*!< place for an address. It is updated on accept(). */
-    unsigned int used;      /*!< 1 if this entry is being used, 0 else. 
+    unsigned int used;      /*!< 1 if this entry is being used, 0 else.
                              * This is used for debugging the buffer
                              * allocation strategy.
                              */
@@ -133,7 +161,7 @@ struct vice_network_socket_s {
 
  \return
    The value in network order
-   
+
  \remark
    This implementation is only used if the architecture does
    not already provide it.
@@ -146,7 +174,7 @@ static unsigned int htonl(unsigned int ip)
 #  else /* !WORDS_BIGENDIAN */
     unsigned int ip2;
 
-    ip2=((ip>>24)&0xff)+(((ip>>16)&0xff)<<8)+(((ip>>8)&0xff)<<16)+((ip&0xff)<<24);
+    ip2 = ((ip >> 24) & 0xff) + (((ip >> 16) & 0xff) << 8) + (((ip >> 8) & 0xff) << 16) + ((ip & 0xff) << 24);
     return ip2;
 #  endif /* WORDS_BIGENDIAN */
 }
@@ -162,7 +190,7 @@ static unsigned int htonl(unsigned int ip)
 
  \return
    The value in network order
-   
+
  \remark
    This implementation is only used if the architecture does
    not already provide it.
@@ -175,7 +203,7 @@ static unsigned short htons(unsigned short ip)
 #  else /* !WORDS_BIGENDIAN */
     unsigned short ip2;
 
-    ip2=((ip>>8)&0xff)+((ip&0xff)<<8);
+    ip2 = ((ip >> 8) & 0xff) + ((ip & 0xff) << 8);
     return ip2;
 #  endif /* WORDS_BIGENDIAN */
 }
@@ -183,12 +211,12 @@ static unsigned short htons(unsigned short ip)
 #endif /* !HAVE_HTONS */
 
 /*! \internal \brief a memory pool for network addresses */
-static vice_network_socket_address_t address_pool[16] = { { 0 } };
+static vice_network_socket_address_t address_pool[16];
 /*! \internal \brief usage bit pattern for address_pool */
 static unsigned int address_pool_usage = 0;
 
 /*! \internal \brief a memory pool for sockets */
-static vice_network_socket_t socket_pool[16] = { { 0 } };
+static vice_network_socket_t socket_pool[16];
 /*! \internal \brief usage bit pattern for socket_pool */
 static unsigned int socket_pool_usage = 0;
 
@@ -212,21 +240,21 @@ static int get_new_pool_entry(unsigned int * PoolUsage)
 {
     int next_free = -1;
 
-    static int nextentry[] = { 0, 1, 0, 2, 0, 1, 0, 3,
-                               0, 1, 0, 2, 0, 1, 0, -1 };
+    static const int nextentry[] = {
+        0, 1, 0, 2, 0, 1, 0, 3,
+        0, 1, 0, 2, 0, 1, 0, -1
+    };
 
     next_free = nextentry[*PoolUsage & 0x0f];
     if (next_free < 0) {
         next_free = nextentry[(*PoolUsage >> 4) & 0x0f];
         if (next_free >= 0) {
             next_free += 4;
-        }
-        else {
+        } else {
             next_free = nextentry[(*PoolUsage >> 8) & 0x0f];
             if (next_free >= 0) {
                 next_free += 8;
-            }
-            else {
+            } else {
                 next_free = nextentry[(*PoolUsage >> 12) & 0x0f];
                 if (next_free >= 0) {
                     next_free += 12;
@@ -269,8 +297,8 @@ static vice_network_socket_t * vice_network_alloc_new_socket(SOCKET sockfd)
     if (i >= 0) {
         assert(socket_pool[i].used == 0);
 
-        return_address = & socket_pool[i];
-        memset(return_address, 0, sizeof * return_address);
+        return_address = &socket_pool[i];
+        memset(return_address, 0, sizeof *return_address);
         return_address->used = 1;
         return_address->sockfd = sockfd;
     }
@@ -290,15 +318,12 @@ static vice_network_socket_t * vice_network_alloc_new_socket(SOCKET sockfd)
  *   If this function returns with an error, it is
  *   likely that all subsequent networking functions
  *   will fail.
- *
- * \todo
- *   Currently, archdep_network_shutdown() is never called!
  */
 static int socket_init(void)
 {
     static int init_done = 0;
 
-    if ( init_done ) {
+    if (init_done) {
         return 0;
     }
 
@@ -324,7 +349,7 @@ static int socket_init(void)
  */
 static void initialize_socket_address(vice_network_socket_address_t * address)
 {
-    memset(address, 0, sizeof * address);
+    memset(address, 0, sizeof *address);
     address->used = 1;
     address->len = sizeof address->address;
 }
@@ -353,7 +378,7 @@ static vice_network_socket_address_t * vice_network_alloc_new_socket_address(voi
     if (i >= 0) {
         assert(address_pool[i].used == 0);
 
-        return_address = & address_pool[i];
+        return_address = &address_pool[i];
         initialize_socket_address(return_address);
     }
 
@@ -374,42 +399,78 @@ static vice_network_socket_address_t * vice_network_alloc_new_socket_address(voi
      socket to be used (IPv4, IPv6, Unix Domain Socket, ...)
      Thus, server_address must not be NULL.
 */
-vice_network_socket_t * vice_network_server(const vice_network_socket_address_t * server_address)
+vice_network_socket_t *vice_network_server(
+        const vice_network_socket_address_t * server_address)
 {
+#if defined(SO_REUSEADDR) || defined(TCP_NODELAY)
+    const int so_setting = 1;
+#endif
     int sockfd = INVALID_SOCKET;
     int error = 1;
+    int err;
 
     assert(server_address != NULL);
 
     do {
         if (socket_init() < 0) {
+            log_error(LOG_DEFAULT,
+                "vice_network_server(): socket_init() failed");
             break;
         }
 
         sockfd = (int)socket(server_address->domain, SOCK_STREAM, server_address->protocol);
-
-        if (SOCKET_IS_INVALID(sockfd)) {
-            sockfd = INVALID_SOCKET;
+        if (sockfd == INVALID_SOCKET) {
+            err = errno;
+            log_error(LOG_DEFAULT,
+                "vice_network_server(): socket() returned INVALID_SOCKET: %s",
+                strerror(err));
             break;
         }
 
-        if (bind(sockfd, & server_address->address.generic, server_address->len) < 0) {
+        /*
+            Fix the "Address In Use" error upon reconnecting to tcp socket monitor port
+            by setting SO_REUSEPORT/ADDR options on socket before bind()
+
+            Ignore setsockopt() failures - just continue - the socket is still valid.
+        */
+#ifdef HAVE_IPV6
+        if ((server_address->domain == PF_INET) || (server_address->domain == PF_INET6)) {
+#else
+        if ((server_address->domain == PF_INET)) {
+#endif
+#if defined(SO_REUSEADDR)
+            setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, (const void*)&so_setting, sizeof(so_setting));
+#endif
+#if defined(TCP_NODELAY)
+            setsockopt(sockfd, SOL_TCP, TCP_NODELAY, (const void*)&so_setting, sizeof(so_setting));
+#endif
+        }
+
+        if (bind(sockfd, &server_address->address.generic, server_address->len) < 0) {
+            err = errno;
+            log_error(LOG_DEFAULT,
+                "vice_network_server(): bind() failed: %s",
+                strerror(err));
             break;
         }
         if (listen(sockfd, 2) < 0) {
+            err = errno;
+            log_error(LOG_DEFAULT,
+                "vice_network_server(): listen() failed: %s",
+                strerror(err));
             break;
         }
         error = 0;
     } while (0);
 
     if (error) {
-        if ( ! SOCKET_IS_INVALID(sockfd) ) {
+        if (sockfd != INVALID_SOCKET) {
             closesocket(sockfd);
         }
         sockfd = INVALID_SOCKET;
     }
 
-    return SOCKET_IS_INVALID(sockfd) ? NULL : vice_network_alloc_new_socket(sockfd);
+    return sockfd == INVALID_SOCKET ? NULL : vice_network_alloc_new_socket(sockfd);
 }
 
 /*! \brief Open a socket and initialise it for client operation
@@ -439,25 +500,86 @@ vice_network_socket_t * vice_network_client(const vice_network_socket_address_t 
 
         sockfd = (int)socket(server_address->domain, SOCK_STREAM, server_address->protocol);
 
-        if (SOCKET_IS_INVALID(sockfd)) {
-            sockfd = INVALID_SOCKET;
+        if (sockfd == INVALID_SOCKET) {
             break;
         }
 
-        if (connect(sockfd, & server_address->address.generic, server_address->len) < 0) {
+#if defined(TCP_NODELAY)
+        setsockopt(sockfd, SOL_TCP, TCP_NODELAY, (const void*)&error, sizeof(error)); /* just an integer with 1, not really an error */
+#endif
+
+        if (connect(sockfd, &server_address->address.generic, server_address->len) < 0) {
             break;
         }
         error = 0;
     } while (0);
 
     if (error) {
-        if ( ! SOCKET_IS_INVALID(sockfd) ) {
+        if (sockfd != INVALID_SOCKET) {
             closesocket(sockfd);
         }
         sockfd = INVALID_SOCKET;
     }
 
-    return SOCKET_IS_INVALID(sockfd) ? NULL : vice_network_alloc_new_socket(sockfd);
+    return sockfd == INVALID_SOCKET ? NULL : vice_network_alloc_new_socket(sockfd);
+}
+
+/*! \brief Open a datagram (UDP) socket
+
+  \param bind_address
+     The local address to bind() the socket to, or NULL for an
+     unbound socket. Use vice_network_address_generate() with an
+     empty host part to bind to all interfaces on a given port.
+
+  \return
+     NULL on error;
+     else, a handle to the socket on success.
+
+  \remark
+     Datagrams are sent with vice_network_send_to() and received
+     with vice_network_receive_from(); use
+     vice_network_select_poll_one() to check for pending datagrams
+     without blocking.
+*/
+vice_network_socket_t * vice_network_udp_open(const vice_network_socket_address_t * bind_address)
+{
+    int sockfd = INVALID_SOCKET;
+    int error = 1;
+    int domain = bind_address != NULL ? bind_address->domain : PF_INET;
+
+    do {
+        if (socket_init() < 0) {
+            break;
+        }
+
+        sockfd = (int)socket(domain, SOCK_DGRAM, IPPROTO_UDP);
+
+        if (sockfd == INVALID_SOCKET) {
+            log_message(LOG_DEFAULT,
+                        "vice_network_udp_open(): socket() returned INVALID_SOCKET: %s",
+                        strerror(errno));
+            break;
+        }
+
+        if (bind_address != NULL) {
+            if (bind(sockfd, &bind_address->address.generic, bind_address->len) < 0) {
+                log_message(LOG_DEFAULT,
+                            "vice_network_udp_open(): bind() failed: %s",
+                            strerror(errno));
+                break;
+            }
+        }
+        error = 0;
+    } while (0);
+
+    if (error) {
+        if (sockfd != INVALID_SOCKET) {
+            closesocket(sockfd);
+        }
+        sockfd = INVALID_SOCKET;
+    }
+
+    return sockfd == INVALID_SOCKET ? NULL : vice_network_alloc_new_socket(sockfd);
 }
 
 /*! \internal \brief Generate an IPv4 socket address
@@ -486,12 +608,15 @@ vice_network_socket_t * vice_network_client(const vice_network_socket_address_t 
      or
      &lt;host&gt;:&lt;port&gt;
      with &lt;host&gt; being the name or the IPv4 address of the host,
-     and &lt;port&gt; being the port number. If the first form is used, 
+     and &lt;port&gt; being the port number. If the first form is used,
      the default port will be used.
 */
-static int vice_network_address_generate_ipv4(vice_network_socket_address_t * socket_address, const char * address_string, unsigned short port)
+static int vice_network_address_generate_ipv4(
+        vice_network_socket_address_t *socket_address,
+        const char *address_string,
+        unsigned short port)
 {
-    const char * address_part = address_string;
+    char * address_part = lib_strdup(address_string);
     int error = 1;
 
     do {
@@ -509,7 +634,7 @@ static int vice_network_address_generate_ipv4(vice_network_socket_address_t * so
             /* an address string was specified, try to use it */
             struct hostent * host_entry;
 
-            char * port_part = NULL;
+            const char * port_part = NULL;
 
             /* try to find out if a port has been specified */
             port_part = strchr(address_string, ':');
@@ -519,9 +644,10 @@ static int vice_network_address_generate_ipv4(vice_network_socket_address_t * so
                 unsigned long new_port;
 
                 /* yes, there is a port: Copy the part before, so we can modify it */
-                p = lib_stralloc(address_string);
+                p = lib_strdup(address_string);
 
                 p[port_part - address_string] = 0;
+                lib_free(address_part);
                 address_part = p;
 
                 ++port_part;
@@ -529,7 +655,6 @@ static int vice_network_address_generate_ipv4(vice_network_socket_address_t * so
                 new_port = strtoul(port_part, &p, 10);
 
                 if (*p == 0) {
-
                     socket_address->address.ipv4.sin_port = htons((unsigned short) new_port);
                 }
             }
@@ -539,21 +664,23 @@ static int vice_network_address_generate_ipv4(vice_network_socket_address_t * so
                 error = 0;
                 break;
             }
- 
+
             host_entry = gethostbyname(address_part);
 
             if (host_entry != NULL && host_entry->h_addrtype == AF_INET) {
-                if ( host_entry->h_length != sizeof socket_address->address.ipv4.sin_addr.s_addr ) {
+                if (host_entry->h_length != sizeof socket_address->address.ipv4.sin_addr.s_addr) {
                     /* something weird happened... SHOULD NOT HAPPEN! */
-                    log_message(LOG_DEFAULT, 
-                              "gethostbyname() returned an IPv4 address, "
-                              "but the length is wrong: %u", host_entry->h_length );
+                    log_message(LOG_DEFAULT,
+                                "gethostbyname() returned an IPv4 address, "
+                                "but the length is wrong: %d",
+                                host_entry->h_length );
                     break;
                 }
 
-                memcpy(&socket_address->address.ipv4.sin_addr.s_addr, host_entry->h_addr_list[0], host_entry->h_length);
-            }
-            else {
+                memcpy(&socket_address->address.ipv4.sin_addr.s_addr,
+                        host_entry->h_addr_list[0],
+                        host_entry->h_length);
+            } else {
                 /* Assume it is an IP address */
 
                 if (address_part[0] != 0) {
@@ -566,7 +693,8 @@ static int vice_network_address_generate_ipv4(vice_network_socket_address_t * so
                      * Unfortunately, not all ports have inet_aton(), so, we must
                      * provide both implementations.
                      */
-                    if (inet_aton(address_part, &socket_address->address.ipv4.sin_addr.s_addr) == 0) {
+                    if (inet_aton(address_part,
+                                &socket_address->address.ipv4.sin_addr.s_addr) == 0) {
                         /* no valid IP address */
                         break;
                     }
@@ -586,14 +714,7 @@ static int vice_network_address_generate_ipv4(vice_network_socket_address_t * so
         }
     } while (0);
 
-    /* if we allocated memory for the address part
-     * because a port was specified,
-     * free that memory now.
-     */
-    if (address_part != address_string) {
-        lib_free(address_part);
-    }
-
+    lib_free(address_part);
     return error;
 }
 
@@ -647,8 +768,7 @@ static int vice_network_address_generate_ipv6(vice_network_socket_address_t * so
 
     do {
         struct hostent * host_entry = NULL;
-#ifdef HAVE_GETHOSTBYNAME2
-#else
+#ifndef HAVE_GETHOSTBYNAME2
         int err6;
 #endif
 
@@ -662,7 +782,7 @@ static int vice_network_address_generate_ipv6(vice_network_socket_address_t * so
         socket_address->address.ipv6.sin6_port = htons(port);
         socket_address->address.ipv6.sin6_addr = in6addr_any;
 
-        if ( ! address_string || address_string[0] == 0) {
+        if (!address_string || address_string[0] == 0) {
             /* there was no address give, do not try to process it. */
             error = 0;
             break;
@@ -678,12 +798,10 @@ static int vice_network_address_generate_ipv6(vice_network_socket_address_t * so
 
         memcpy(&socket_address->address.ipv6.sin6_addr, host_entry->h_addr, host_entry->h_length);
 
-#ifdef HAVE_GETHOSTBYNAME2
-#else
+#ifndef HAVE_GETHOSTBYNAME2
         freehostent(host_entry);
 #endif
         error = 0;
-
     } while (0);
 
     return error;
@@ -693,6 +811,7 @@ static int vice_network_address_generate_ipv6(vice_network_socket_address_t * so
 #endif /* #ifdef HAVE_IPV6 */
 }
 
+#if 0
 /*! \internal \brief Generate a unix domain socket address
 
   Initialises a socket address with a unix domain socket address
@@ -733,10 +852,10 @@ static int vice_network_address_generate_local(vice_network_socket_address_t * s
         socket_address->len = sizeof socket_address->address.local;
         socket_address->address.local.sun_family = AF_UNIX;
 
-        if ( strlen(address_string) >= sizeof socket_address->address.local.sun_path ) {
+        if (strlen(address_string) >= sizeof socket_address->address.local.sun_path) {
             log_message(LOG_DEFAULT,
-                        "Unix domain socket name of '%s' is too long; only %u chars are allowed.",
-                        address_string, sizeof socket_address->address.local.sun_path);
+                        "Unix domain socket name of '%s' is too long; only %"PRI_SIZE_T" chars are allowed.",
+                        address_string, sizeof(socket_address->address.local.sun_path));
             break;
         }
         strcpy(socket_address->address.local.sun_path, address_string);
@@ -751,6 +870,7 @@ static int vice_network_address_generate_local(vice_network_socket_address_t * s
     return -1;
 #endif /* #ifdef HAVE_UNIX_DOMAIN_SOCKETS */
 }
+#endif
 
 /*! \brief Generate a socket address
 
@@ -793,37 +913,35 @@ vice_network_socket_address_t * vice_network_address_generate(const char * addre
         if (socket_address == NULL) {
             break;
         }
-
+#if 0 /* FIXME: "|" as first character indicates that we want to pipe through an external process - if we
+                want to support unix domain socket, this has to use another syntax! */
         if (address_string && address_string[0] == '|') {
             if (vice_network_address_generate_local(socket_address, &address_string[1])) {
                 break;
             }
-        }
-        else if (address_string && strncmp("ip6://", address_string, sizeof "ip6://" - 1) == 0) {
+        } else
+#endif
+        if (address_string && strncmp("ip6://", address_string, sizeof "ip6://" - 1) == 0) {
             if (vice_network_address_generate_ipv6(socket_address, &address_string[sizeof "ip6://" - 1], port)) {
                 break;
             }
-        }
-        else if (address_string && strncmp("ip4://", address_string, sizeof "ip4://" - 1) == 0) {
+        } else if (address_string && strncmp("ip4://", address_string, sizeof "ip4://" - 1) == 0) {
             if (vice_network_address_generate_ipv4(socket_address, &address_string[sizeof "ip4://" - 1], port)) {
                 break;
             }
-        }
-        else {
+        } else {
             /* the user did not specify the type of the address, try to guess it by trying IPv6, then IPv4 */
 #ifdef HAVE_IPV6
-            if ( vice_network_address_generate_ipv6(socket_address, address_string, port))
+            if (vice_network_address_generate_ipv6(socket_address, address_string, port))
 #endif /* #ifdef HAVE_IPV6 */
             {
-                if ( vice_network_address_generate_ipv4(socket_address, address_string, port)) {
+                if (vice_network_address_generate_ipv4(socket_address, address_string, port)) {
                     break;
                 }
             }
-
         }
 
         error = 0;
-
     } while (0);
 
     if (error && socket_address) {
@@ -847,13 +965,12 @@ vice_network_socket_address_t * vice_network_address_generate(const char * addre
 */
 void vice_network_address_close(vice_network_socket_address_t * address)
 {
-    if (address)
-    {
+    if (address) {
         assert(address->used == 1);
         assert(((address_pool_usage & (1u << (address - address_pool))) != 0));
 
         address->used = 0;
-        address_pool_usage &= ~ (1u << (address - address_pool));
+        address_pool_usage &= ~(1u << (address - address_pool));
     }
 }
 
@@ -872,11 +989,11 @@ vice_network_socket_t * vice_network_accept(vice_network_socket_t * sockfd)
 {
     SOCKET newsocket = INVALID_SOCKET;
 
-    initialize_socket_address( & sockfd->address );
+    initialize_socket_address( &sockfd->address );
 
-    newsocket = accept(sockfd->sockfd, & sockfd->address.address.generic, & sockfd->address.len);
+    newsocket = accept(sockfd->sockfd, &sockfd->address.address.generic, &sockfd->address.len);
 
-    return SOCKET_IS_INVALID(newsocket) ? NULL : vice_network_alloc_new_socket(newsocket);
+    return newsocket == INVALID_SOCKET ? NULL : vice_network_alloc_new_socket(newsocket);
 }
 
 /*! \brief Close a socket
@@ -895,7 +1012,7 @@ int vice_network_socket_close(vice_network_socket_t * sockfd)
 {
     SOCKET localsockfd = INVALID_SOCKET;
     int error = -1;
-    
+
     if (sockfd) {
         localsockfd = sockfd->sockfd;
 
@@ -903,7 +1020,7 @@ int vice_network_socket_close(vice_network_socket_t * sockfd)
         assert(((socket_pool_usage & (1u << (sockfd - socket_pool))) != 0));
 
         sockfd->used = 0;
-        socket_pool_usage &= ~ (1u << (sockfd - socket_pool));
+        socket_pool_usage &= ~(1u << (sockfd - socket_pool));
 
         error = closesocket(localsockfd);
     }
@@ -933,10 +1050,26 @@ int vice_network_socket_close(vice_network_socket_t * sockfd)
      the number of bytes send. For non-blocking sockets,
      this can be less than len. For blocking sockets (default),
      any return value different than len must be treated as an error.
+
+  \note Amazing there's docs on this, but send() returns size_t, not int, so
+        properly checking the return type could fail.
 */
-int vice_network_send(vice_network_socket_t * sockfd, const void * buffer, size_t buffer_length, int flags)
+ssize_t vice_network_send(vice_network_socket_t *sockfd,
+                          const void            *buffer,
+                          size_t                 buffer_length,
+                          int                    flags)
 {
-    return send(sockfd->sockfd, buffer, buffer_length, flags);
+    ssize_t ret;
+
+    signals_pipe_set();
+    ret = send(sockfd->sockfd, buffer, buffer_length, flags);
+    if (ret > buffer_length) {
+        log_error(LOG_DEFAULT, "vice_network_send: internal error (ret:%"PRI_SSIZE_T" buffer_length:%"PRI_SIZE_T" errno:%d - %s)",
+                  ret, buffer_length, errno, strerror(errno));
+        ret = -1; /* signal error */
+    }
+    signals_pipe_unset();
+    return ret;
 }
 
 /*! \brief Receive data from a connected socket
@@ -965,13 +1098,90 @@ int vice_network_send(vice_network_socket_t * sockfd, const void * buffer, size_
      When the return value is 0, either the other site has
      gracefully closed the socket (and all data has been
      received), or no data was received in the case
-     of a non-blocking socket. 
+     of a non-blocking socket.
 
      In case of an error, -1 is returned.
 */
-int vice_network_receive(vice_network_socket_t * sockfd, void * buffer, size_t buffer_length, int flags)
+ssize_t vice_network_receive(vice_network_socket_t * sockfd, void * buffer, size_t buffer_length, int flags)
 {
-    return recv(sockfd->sockfd, buffer, buffer_length, flags);
+    ssize_t ret;
+
+    signals_pipe_set();
+    ret = recv(sockfd->sockfd, buffer, buffer_length, flags);
+    signals_pipe_unset();
+
+    return ret;
+}
+
+/*! \brief Send a datagram to a specific address
+
+  \param sockfd
+     The connection handle of a socket opened with vice_network_udp_open().
+
+  \param buffer
+     Pointer to the datagram payload to send.
+
+  \param buffer_length
+     The length of the buffer pointed to by buffer.
+
+  \param flags
+     Flags for the socket. These flags are architecture dependent.
+
+  \param to
+     The destination address of the datagram.
+
+  \return
+     the number of bytes sent; a value < 0 indicates an error.
+*/
+ssize_t vice_network_send_to(vice_network_socket_t * sockfd,
+                             const void * buffer,
+                             size_t buffer_length,
+                             int flags,
+                             const vice_network_socket_address_t * to)
+{
+    ssize_t ret;
+
+    signals_pipe_set();
+    ret = sendto(sockfd->sockfd, buffer, buffer_length, flags,
+                 &to->address.generic, to->len);
+    signals_pipe_unset();
+
+    return ret;
+}
+
+/*! \brief Receive a datagram
+
+  \param sockfd
+     The connection handle of a socket opened with vice_network_udp_open().
+
+  \param buffer
+     Pointer to a buffer receiving the datagram payload.
+
+  \param buffer_length
+     The length of the buffer pointed to by buffer.
+
+  \param flags
+     Flags for the socket. These flags are architecture dependent.
+
+  \return
+     the number of bytes received; a value < 0 indicates an error.
+
+  \remark
+     The sender address is discarded. Check for a pending datagram
+     with vice_network_select_poll_one() first to avoid blocking.
+*/
+ssize_t vice_network_receive_from(vice_network_socket_t * sockfd,
+                                  void * buffer,
+                                  size_t buffer_length,
+                                  int flags)
+{
+    ssize_t ret;
+
+    signals_pipe_set();
+    ret = recvfrom(sockfd->sockfd, buffer, buffer_length, flags, NULL, NULL);
+    signals_pipe_unset();
+
+    return ret;
 }
 
 /*! \brief Check if a socket has incoming data to receive
@@ -989,7 +1199,7 @@ int vice_network_receive(vice_network_socket_t * sockfd, void * buffer, size_t b
 */
 int vice_network_select_poll_one(vice_network_socket_t * readsockfd)
 {
-    TIMEVAL timeout = { 0 };
+    TIMEVAL timeout = { 0, 0 };
 
     fd_set fdsockset;
 
@@ -997,6 +1207,40 @@ int vice_network_select_poll_one(vice_network_socket_t * readsockfd)
     FD_SET(readsockfd->sockfd, &fdsockset);
 
     return select( readsockfd->sockfd + 1, &fdsockset, NULL, NULL, &timeout);
+}
+
+/*! \brief Monitor multiple sockets
+
+  This function blocks for many different connections and returns when any
+  has data.
+
+  \param readsockfd
+     NULL terminated list of sockets to monitor
+
+  \return
+     1 if the specified socket has data; 0 if it does not contain
+     any data, and -1 in case of an error.
+*/
+int vice_network_select_multiple(vice_network_socket_t ** readsockfd)
+{
+    fd_set fdsockset;
+    SOCKET max_sockfd = INVALID_SOCKET;
+    TIMEVAL time = {0, 250000};
+
+    FD_ZERO(&fdsockset);
+    while(*readsockfd != NULL) {
+        FD_SET((*readsockfd)->sockfd, &fdsockset);
+        if((*readsockfd)->sockfd > max_sockfd) {
+            max_sockfd = (*readsockfd)->sockfd;
+        }
+        readsockfd++;
+    }
+
+    if(max_sockfd == INVALID_SOCKET) {
+        return -1;
+    }
+
+    return select(max_sockfd + 1, &fdsockset, NULL, NULL, &time);
 }
 
 /*! \brief Get the error of the last socket operation
@@ -1007,7 +1251,7 @@ int vice_network_select_poll_one(vice_network_socket_t * readsockfd)
   \return
      the error code
 
-´ \remark
+  \remark
       It does not distinguish between
       different sockets, thus, make sure to call it directly
       after an erroneous socket operation. Furthermore,
@@ -1016,15 +1260,11 @@ int vice_network_select_poll_one(vice_network_socket_t * readsockfd)
       operation did not produce an error.
 
    \todo
-       Generate a mapping between WIN32 and Unix style 
+       Generate a mapping between WIN32 and Unix style
        error numbers
 */
 int vice_network_get_errorcode(void)
 {
-#ifdef WIN32
-    return WSAGetLastError();
-#else
-    return errno;
-#endif
+    return ARCHDEP_SOCKET_ERROR;
 }
 #endif

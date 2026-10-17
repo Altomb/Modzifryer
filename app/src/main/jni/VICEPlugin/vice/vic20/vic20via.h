@@ -3,7 +3,7 @@
  *
  * Written by
  *  Andreas Boose <viceteam@t-online.de>
- *  Andre' Fachat <fachat@physik.tu-chemnitz.de>
+ *  Andre Fachat <fachat@physik.tu-chemnitz.de>
  *
  * This file is part of VICE, the Versatile Commodore Emulator.
  * See README for copyright notice.
@@ -33,20 +33,23 @@
 struct machine_context_s;
 struct via_context_s;
 
-extern void vic20via1_setup_context(struct machine_context_s *machine_context);
-extern void via1_init(struct via_context_s *via_context);
-extern void via1_store(WORD addr, BYTE byte);
-extern BYTE via1_read(WORD addr);
-extern BYTE via1_peek(WORD addr);
+void vic20via1_setup_context(struct machine_context_s *machine_context);
+void via1_init(struct via_context_s *via_context);
+void via1_store(uint16_t addr, uint8_t byte);
+uint8_t via1_read(uint16_t addr);
+uint8_t via1_peek(uint16_t addr);
 
-extern void vic20via2_setup_context(struct machine_context_s *machine_context);
-extern void via2_init(struct via_context_s *via_context);
-extern void via2_store(WORD addr, BYTE byte);
-extern BYTE via2_read(WORD addr);
-extern BYTE via2_peek(WORD addr);
+void vic20via2_setup_context(struct machine_context_s *machine_context);
+void via2_init(struct via_context_s *via_context);
+void via2_store(uint16_t addr, uint8_t byte);
+uint8_t via2_read(uint16_t addr);
+uint8_t via2_peek(uint16_t addr);
 
-extern void via2_set_tape_sense(int v);
-extern void via2_check_lightpen(void);
+void via1_set_tape_sense(int v);
+void via1_set_tape_write_in(int v);
+void via1_set_tape_motor_in(int v);
+void via1_check_lightpen(void);
+
+extern int vic20_vflihack_userport;
 
 #endif
-

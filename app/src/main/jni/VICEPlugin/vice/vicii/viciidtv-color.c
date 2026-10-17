@@ -29,6 +29,8 @@
 
 #include "vice.h"
 
+#include <stdlib.h>
+
 #include "viciitypes.h"
 #include "vicii-color.h"
 #include "vicii-resources.h"
@@ -47,11 +49,10 @@
 
 #define DTV_BLACK_LEVEL 0.318f
 #define DTV_TOP_LEVEL   0.911f
-#define DTV_LUMA_SCALE(a) ((a)-DTV_BLACK_LEVEL) * \
-                              (256.0f/(DTV_TOP_LEVEL-DTV_BLACK_LEVEL))
+#define DTV_LUMA_SCALE(a) ((a) - DTV_BLACK_LEVEL) * (256.0f / (DTV_TOP_LEVEL - DTV_BLACK_LEVEL))
 
 /* levels in Volts obtained from simulation of the fixed dac in spice */
-static float dtv_luminances[16]=
+static float dtv_luminances[16] =
 {
     DTV_LUMA_SCALE(0.318f),
     DTV_LUMA_SCALE(0.357f),
@@ -76,10 +77,9 @@ static float dtv_luminances[16]=
 /* levels in Volts obtained from simulation of the dac in spice */
 #define DTV_BLACK_LEVEL_OLD 0.362f
 #define DTV_TOP_LEVEL_OLD   0.854f
-#define DTV_LUMA_SCALE_OLD(a) ((a)-DTV_BLACK_LEVEL_OLD) * \
-                              (256.0f/(DTV_TOP_LEVEL_OLD-DTV_BLACK_LEVEL_OLD))
+#define DTV_LUMA_SCALE_OLD(a) ((a) - DTV_BLACK_LEVEL_OLD) * (256.0f / (DTV_TOP_LEVEL_OLD - DTV_BLACK_LEVEL_OLD))
 
-static float dtv_luminances_old[16]=
+static float dtv_luminances_old[16] =
 {
     DTV_LUMA_SCALE_OLD(0.362f),
     DTV_LUMA_SCALE_OLD(0.370f),
@@ -126,8 +126,9 @@ static video_cbm_palette_t dtv_palette =
 {
     VICIIDTV_NUM_COLORS,
     dtv_colors_with_lum,
-    VICII_SATURATION,
-    VICII_PHASE
+    NULL, NULL,
+    VICII_PHASE,
+    CBM_PALETTE_YUV
 };
 
 #define DTV_STARTING_PHASE  180.0f
@@ -139,27 +140,29 @@ int vicii_color_update_palette(struct video_canvas_s *canvas)
     float *lm;
     float an;
 
-    if (vicii_resources.new_luminances)
+    if (vicii_resources.new_luminances) {
         lm = dtv_luminances;
-    else
+    } else {
         lm = dtv_luminances_old;
+    }
 
     an = DTV_STARTING_PHASE;
     cl = 0;
     for (col = 0; col < 16; col++) {
         for (lum = 0; lum < 16; lum++) {
-	    dtv_colors_with_lum[cl].luminance = lm[lum];
-	    dtv_colors_with_lum[cl].angle     = an;
-	    dtv_colors_with_lum[cl].direction = (col==0)?0:1;
-	    dtv_colors_with_lum[cl].name      = dtv_color_names[col];
-	    cl++;
-	}
-        an-=DTV_PHASE_DECREMENT;
-	if (an < 0.0f)
-	  an+=360.0f;
+            dtv_colors_with_lum[cl].luminance = lm[lum];
+            dtv_colors_with_lum[cl].angle = an;
+            dtv_colors_with_lum[cl].saturation = VICII_SATURATION;  /* FIXME: remove */
+            dtv_colors_with_lum[cl].direction = (col == 0) ? 0 : 1;
+            dtv_colors_with_lum[cl].name = dtv_color_names[col];
+            cl++;
+        }
+        an -= DTV_PHASE_DECREMENT;
+        if (an < 0.0f) {
+            an += 360.0f;
+        }
     }
 
     video_color_palette_internal(canvas, &dtv_palette);
-    return video_color_update_palette(canvas);
+    return 0;
 }
-

@@ -33,9 +33,10 @@
 #define CARTRIDGE_INCLUDE_SLOTMAIN_API
 #include "c64cartsystem.h"
 #undef CARTRIDGE_INCLUDE_SLOTMAIN_API
-#include "c64export.h"
 #include "cartio.h"
 #include "cartridge.h"
+#include "export.h"
+#include "monitor.h"
 #include "rexutility.h"
 #include "snapshot.h"
 #include "types.h"
@@ -51,69 +52,84 @@
     - reading dfc0-dfff enables ROM (8k game config)
 */
 
-static BYTE rex_io2_read(WORD addr)
+static int rex_active = 0;
+
+static uint8_t rex_io2_read(uint16_t addr)
 {
     if ((addr & 0xff) < 0xc0) {
         /* disable cartridge rom */
         cart_config_changed_slotmain(2, 2, CMODE_READ);
+        rex_active = 0;
     } else {
         /* enable cartridge rom */
         cart_config_changed_slotmain(0, 0, CMODE_READ);
+        rex_active = 1;
     }
     return 0;
 }
 
-static BYTE rex_io2_peek(WORD addr)
+static uint8_t rex_io2_peek(uint16_t addr)
 {
+    return 0;
+}
+
+static int rex_dump(void)
+{
+    mon_out("$8000-$9FFF ROM: %s\n", (rex_active) ? "enabled" : "disabled");
+
     return 0;
 }
 
 /* ---------------------------------------------------------------------*/
 
 static io_source_t rex_device = {
-    CARTRIDGE_NAME_REX,
-    IO_DETACH_CART,
-    NULL,
-    0xdf00, 0xdfff, 0xff,
-    0, /* read is never valid */
-    NULL,
-    rex_io2_read,
-    rex_io2_peek,
-    NULL,
-    CARTRIDGE_REX,
-    0,
-    0
+    CARTRIDGE_NAME_REX,    /* name of the device */
+    IO_DETACH_CART,        /* use cartridge ID to detach the device when involved in a read-collision */
+    IO_DETACH_NO_RESOURCE, /* does not use a resource for detach */
+    0xdf00, 0xdfff, 0xff,  /* range for the device, regs:$df00-$dfff */
+    0,                     /* read is never valid */
+    NULL,                  /* NO store function */
+    NULL,                  /* NO poke function */
+    rex_io2_read,          /* read function */
+    rex_io2_peek,          /* peek function */
+    rex_dump,              /* device state information dump function */
+    CARTRIDGE_REX,         /* cartridge ID */
+    IO_PRIO_NORMAL,        /* normal priority, device read needs to be checked for collisions */
+    0,                     /* insertion order, gets filled in by the registration function */
+    IO_MIRROR_NONE         /* NO mirroring */
 };
 
 static io_source_list_t *rex_list_item = NULL;
 
-static const c64export_resource_t export_res_rex = {
-    CARTRIDGE_NAME_REX, 0, 0, NULL, &rex_device, CARTRIDGE_REX
+static const export_resource_t export_res_rex = {
+    CARTRIDGE_NAME_REX, 0, 1, NULL, &rex_device, CARTRIDGE_REX
 };
 
 /* ---------------------------------------------------------------------*/
 
 void rex_config_init(void)
 {
-    cart_config_changed_slotmain(0, 0, CMODE_READ);
+    cart_config_changed_slotmain(CMODE_8KGAME, CMODE_8KGAME, CMODE_READ);
+    rex_active = 1;
 }
 
-void rex_config_setup(BYTE *rawcart)
+void rex_config_setup(uint8_t *rawcart)
 {
     memcpy(roml_banks, rawcart, 0x2000);
-    cart_config_changed_slotmain(0, 0, CMODE_READ);
+    cart_config_changed_slotmain(CMODE_8KGAME, CMODE_8KGAME, CMODE_READ);
+    rex_active = 1;
 }
 
 static int rex_common_attach(void)
 {
-    if (c64export_add(&export_res_rex) < 0) {
+    if (export_add(&export_res_rex) < 0) {
         return -1;
     }
     rex_list_item = io_source_register(&rex_device);
     return 0;
 }
 
-int rex_bin_attach(const char *filename, BYTE *rawcart)
+int rex_bin_attach(const char *filename, uint8_t *rawcart)
 {
     if (util_file_load(filename, rawcart, 0x2000, UTIL_FILE_LOAD_SKIP_ADDRESS) < 0) {
         return -1;
@@ -121,7 +137,7 @@ int rex_bin_attach(const char *filename, BYTE *rawcart)
     return rex_common_attach();
 }
 
-int rex_crt_attach(FILE *fd, BYTE *rawcart)
+int rex_crt_attach(FILE *fd, uint8_t *rawcart)
 {
     crt_chip_header_t chip;
 
@@ -142,59 +158,80 @@ int rex_crt_attach(FILE *fd, BYTE *rawcart)
 
 void rex_detach(void)
 {
-    c64export_remove(&export_res_rex);
+    export_remove(&export_res_rex);
     io_source_unregister(rex_list_item);
     rex_list_item = NULL;
 }
 
 /* ---------------------------------------------------------------------*/
 
-#define CART_DUMP_VER_MAJOR   0
-#define CART_DUMP_VER_MINOR   0
-#define SNAP_MODULE_NAME  "CARTREXUTIL"
+/* CARTREXUTIL snapshot module format:
+
+   type  | name   | version | description
+   --------------------------------------
+   BYTE  | active |   0.1   | cartridge active flag
+   ARRAY | ROML   |   0.0+  | 524288 BYTES of ROML data
+ */
+
+static const char snap_module_name[] = "CARTREXUTIL";
+#define SNAP_MAJOR   0
+#define SNAP_MINOR   1
 
 int rex_snapshot_write_module(snapshot_t *s)
 {
     snapshot_module_t *m;
 
-    m = snapshot_module_create(s, SNAP_MODULE_NAME,
-                          CART_DUMP_VER_MAJOR, CART_DUMP_VER_MINOR);
+    m = snapshot_module_create(s, snap_module_name, SNAP_MAJOR, SNAP_MINOR);
+
     if (m == NULL) {
         return -1;
     }
 
     if (0
-        || (SMW_BA(m, roml_banks, 0x2000 * 64) < 0)) {
+        || SMW_B(m, (uint8_t)rex_active) < 0
+        || SMW_BA(m, roml_banks, 0x2000 * 64) < 0) {
         snapshot_module_close(m);
         return -1;
     }
 
-    snapshot_module_close(m);
-    return 0;
+    return snapshot_module_close(m);
 }
 
 int rex_snapshot_read_module(snapshot_t *s)
 {
-    BYTE vmajor, vminor;
+    uint8_t vmajor, vminor;
     snapshot_module_t *m;
 
-    m = snapshot_module_open(s, SNAP_MODULE_NAME, &vmajor, &vminor);
+    m = snapshot_module_open(s, snap_module_name, &vmajor, &vminor);
+
     if (m == NULL) {
         return -1;
     }
 
-    if ((vmajor != CART_DUMP_VER_MAJOR) || (vminor != CART_DUMP_VER_MINOR)) {
-        snapshot_module_close(m);
-        return -1;
+    /* Do not accept versions higher than current */
+    if (snapshot_version_is_bigger(vmajor, vminor, SNAP_MAJOR, SNAP_MINOR)) {
+        snapshot_set_error(SNAPSHOT_MODULE_HIGHER_VERSION);
+        goto fail;
     }
 
-    if (0
-        || (SMR_BA(m, roml_banks, 0x2000 * 64) < 0)) {
-        snapshot_module_close(m);
-        return -1;
+    /* new in 0.1 */
+    if (!snapshot_version_is_smaller(vmajor, vminor, 0, 1)) {
+        if (SMR_B_INT(m, &rex_active) < 0) {
+            goto fail;
+        }
+    } else {
+        rex_active = 0;
+    }
+
+    if (SMR_BA(m, roml_banks, 0x2000 * 64) < 0) {
+        goto fail;
     }
 
     snapshot_module_close(m);
 
     return rex_common_attach();
+
+fail:
+    snapshot_module_close(m);
+    return -1;
 }

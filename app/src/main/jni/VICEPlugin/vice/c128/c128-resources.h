@@ -3,6 +3,7 @@
  *
  * Written by
  *  Andreas Boose <viceteam@t-online.de>
+ *  Marco van den Heuvel <blackystardust68@yahoo.com>
  *
  * This file is part of VICE, the Versatile Commodore Emulator.
  * See README for copyright notice.
@@ -27,10 +28,10 @@
 #ifndef VICE_C128_RESOURCES_H
 #define VICE_C128_RESOURCES_H
 
-extern int c128_resources_init(void);
-extern void c128_resources_shutdown(void);
+int c128_resources_init(void);
+void c128_resources_shutdown(void);
 
-extern void c128_resources_update_cia_models(int model);
+void c128_resources_update_cia_models(int model);
 
 extern int ieee488_enabled;
 extern int reu_enabled;

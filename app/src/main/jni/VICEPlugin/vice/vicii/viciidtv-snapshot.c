@@ -38,6 +38,7 @@
 #include "interrupt.h"
 #include "log.h"
 #include "mem.h"
+#include "raster-snapshot.h"
 #include "raster-sprite-status.h"
 #include "raster-sprite.h"
 #include "snapshot.h"
@@ -66,52 +67,51 @@ void vicii_snapshot_prepare(void)
 
 
 /*
+   DTVVIC 1.3 snapshot module format:
 
-   This is the format of the VIC-II snapshot module.
-
-   Name               Type   Size   Description
-
-   AllowBadLines      BYTE   1      flag: if true, bad lines can happen
-   BadLine            BYTE   1      flag: this is a bad line
-   Blank              BYTE   1      flag: draw lines in border color
-   ColorBuf           BYTE   40     character memory buffer (loaded at bad line)
-   IdleState          BYTE   1      flag: idle state enabled
-   LPTrigger          BYTE   1      flag: light pen has been triggered
-   LPX                BYTE   1      light pen X
-   LPY                BYTE   1      light pen Y
-   MatrixBuf          BYTE   40     video matrix buffer (loaded at bad line)
-   NewSpriteDmaMask   BYTE   1      value for SpriteDmaMask after drawing
-                                    sprites
-   RamBase            DWORD  1      pointer to the start of RAM seen by the VIC
-   RasterCycle        BYTE   1      current vicii.raster cycle
-   RasterLine         WORD   1      current vicii.raster line
-   Registers          BYTE   80     VIC-II registers
-   DTVstuff           x      x      DTV stuff goes here
-   SbCollMask         BYTE   1      sprite-background collisions so far
-   SpriteDmaMask      BYTE   1      sprites having DMA turned on
-   SsCollMask         BYTE   1      sprite-sprite collisions so far
-   VBank              BYTE   1      location of memory bank
-   Vc                 WORD   1      internal VIC-II counter
-   VcAdd              BYTE   1      value to add to Vc at the end of this line
-                                    (vicii.mem_counter_inc)
-   VcBase             WORD   1      internal VIC-II memory pointer
-   VideoInt           BYTE   1      status of VIC-II IRQ (vicii.irq_status)
+   Type    | Name                   | Description
+   ----------------------------------------------
+   BYTE    | AllowBadLines          | flag: if true, bad lines can happen
+   BYTE    | BadLine                | flag: this is a bad line
+   BYTE    | Blank                  | flag: draw lines in border color
+   40*BYTE | ColorBuf               | character memory buffer (loaded at bad line)
+   BYTE    | IdleState              | flag: idle state enabled
+   BYTE    | LPTrigger              | flag: light pen has been triggered
+   BYTE    | LPX                    | light pen X
+   BYTE    | LPY                    | light pen Y
+   40*BYTE | MatrixBuf              | video matrix buffer (loaded at bad line)
+   BYTE    | NewSpriteDmaMask       | value for SpriteDmaMask after drawing sprites
+   DWORD   | RamBase                | pointer to the start of RAM seen by the VIC
+   BYTE    | RasterCycle            | current vicii.raster cycle
+   WORD    | RasterLine             | current vicii.raster line
+   80*BYTE | Registers              | VIC-II registers
+   x       | DTVstuff               | DTV stuff goes here
+   BYTE    | SbCollMask             | sprite-background collisions so far
+   BYTE    | SpriteDmaMask          | sprites having DMA turned on
+   BYTE    | SsCollMask             | sprite-sprite collisions so far
+   BYTE    | VBank                  | location of memory bank
+   WORD    | Vc                     | internal VIC-II counter
+   BYTE    | VcAdd                  | value to add to Vc at the end of this line (vicii.mem_counter_inc)
+   WORD    | VcBase                 | internal VIC-II memory pointer
+   BYTE    | VideoInt               | status of VIC-II IRQ (vicii.irq_status)
 
    [Sprite section: (repeat 8 times)]
 
-   SpriteXMemPtr      BYTE   1      sprite memory pointer
-   SpriteXMemPtrInc   BYTE   1      value to add to the MemPtr after fetch
-   SpriteXExpFlipFlop BYTE   1      sprite expansion flip-flop
+   BYTE    | SpriteXMemPtr          | sprite memory pointer
+   BYTE    | SpriteXMemPtrInc       | value to add to the MemPtr after fetch
+   BYTE    | SpriteXExpFlipFlop     | sprite expansion flip-flop
 
    [Alarm section]
-   FetchEventTick     DWORD  1      ticks for the next "fetch" (DMA) event
-   FetchEventType     BYTE   1      type of event (0: matrix, 1: sprite check, 2: sprite fetch)
+   DWORD   | FetchEventTick         | ticks for the next "fetch" (DMA) event
+   BYTE    | FetchEventType         | type of event (0: matrix, 1: sprite check, 2: sprite fetch)
+
+   NOTE: renamed from "VIC-II" to "DTVVIC" in 1.3
 
  */
 
-static char snap_module_name[] = "VIC-II";
+static char snap_module_name[] = "DTVVIC";
 #define SNAP_MAJOR 1
-#define SNAP_MINOR 1
+#define SNAP_MINOR 3
 
 int vicii_snapshot_write_module(snapshot_t *s)
 {
@@ -121,133 +121,144 @@ int vicii_snapshot_write_module(snapshot_t *s)
     /* FIXME: Dispatch all events?  */
 
     m = snapshot_module_create (s, snap_module_name, SNAP_MAJOR, SNAP_MINOR);
-    if (m == NULL)
+    if (m == NULL) {
         return -1;
+    }
 
     if (0
         /* AllowBadLines */
-        || SMW_B(m, (BYTE)vicii.allow_bad_lines) < 0
+        || SMW_B(m, (uint8_t)vicii.allow_bad_lines) < 0
         /* BadLine */
-        || SMW_B(m, (BYTE)vicii.bad_line) < 0
+        || SMW_B(m, (uint8_t)vicii.bad_line) < 0
         /* Blank */
-        || SMW_B(m, (BYTE)vicii.raster.blank_enabled) < 0
+        || SMW_B(m, (uint8_t)vicii.raster.blank_enabled) < 0
         /* ColorBuf */
         || SMW_BA(m, vicii.cbuf, 40) < 0
         /* IdleState */
-        || SMW_B(m, (BYTE)vicii.idle_state) < 0
+        || SMW_B(m, (uint8_t)vicii.idle_state) < 0
         /* LPTrigger */
-        || SMW_B(m, (BYTE)vicii.light_pen.triggered) < 0
+        || SMW_B(m, (uint8_t)vicii.light_pen.triggered) < 0
         /* LPX */
-        || SMW_B(m, (BYTE)vicii.light_pen.x) < 0
+        || SMW_B(m, (uint8_t)vicii.light_pen.x) < 0
         /* LPY */
-        || SMW_B(m, (BYTE)vicii.light_pen.y) < 0
+        || SMW_B(m, (uint8_t)vicii.light_pen.y) < 0
         /* MatrixBuf */
         || SMW_BA(m, vicii.vbuf, 40) < 0
         /* NewSpriteDmaMask */
         || SMW_B(m, vicii.raster.sprite_status->new_dma_msk) < 0
         /* RamBase */
-        || SMW_DW(m, (DWORD)(vicii.ram_base_phi1 - mem_ram)) < 0
+        || SMW_DW(m, (uint32_t)(vicii.ram_base_phi1 - mem_ram)) < 0
         /* RasterCycle */
-        || SMW_B(m, (BYTE)(VICII_RASTER_CYCLE(maincpu_clk))) < 0
+        || SMW_B(m, (uint8_t)(VICII_RASTER_CYCLE(maincpu_clk))) < 0
         /* RasterLine */
-        || SMW_W(m, (WORD)(VICII_RASTER_Y(maincpu_clk))) < 0)
+        || SMW_W(m, (uint16_t)(VICII_RASTER_Y(maincpu_clk))) < 0) {
         goto fail;
+    }
 
-    for (i = 0; i < 0x50; i++)
+    for (i = 0; i < 0x50; i++) {
         /* Registers */
-        if (SMW_B(m, vicii.regs[i]) < 0)
+        if (SMW_B(m, vicii.regs[i]) < 0) {
             goto fail;
+        }
+    }
 
     if (0
         /* DTV stuff */
-        || SMW_DW(m, (DWORD)vicii.counta) < 0
-        || SMW_DW(m, (DWORD)vicii.counta_mod) < 0
-        || SMW_DW(m, (DWORD)vicii.counta_step) < 0
-        || SMW_DW(m, (DWORD)vicii.countb) < 0
-        || SMW_DW(m, (DWORD)vicii.countb_mod) < 0
-        || SMW_DW(m, (DWORD)vicii.countb_step) < 0
-        || SMW_DW(m, (DWORD)vicii.extended_enable) < 0
-        || SMW_DW(m, (DWORD)vicii.extended_lockout) < 0
-        || SMW_DW(m, (DWORD)vicii.badline_disable) < 0
-        || SMW_DW(m, (DWORD)vicii.colorfetch_disable) < 0
-        || SMW_DW(m, (DWORD)vicii.overscan) < 0
-        || SMW_DW(m, (DWORD)vicii.high_color) < 0
-        || SMW_DW(m, (DWORD)vicii.border_off) < 0
-        || SMW_DW(m, (DWORD)vicii.raster_irq_offset) < 0
-        || SMW_DW(m, (DWORD)vicii.raster_irq_prevent) < 0
+        || SMW_DW(m, (uint32_t)vicii.counta) < 0
+        || SMW_DW(m, (uint32_t)vicii.counta_mod) < 0
+        || SMW_DW(m, (uint32_t)vicii.counta_step) < 0
+        || SMW_DW(m, (uint32_t)vicii.countb) < 0
+        || SMW_DW(m, (uint32_t)vicii.countb_mod) < 0
+        || SMW_DW(m, (uint32_t)vicii.countb_step) < 0
+        || SMW_DW(m, (uint32_t)vicii.extended_enable) < 0
+        || SMW_DW(m, (uint32_t)vicii.extended_lockout) < 0
+        || SMW_DW(m, (uint32_t)vicii.badline_disable) < 0
+        || SMW_DW(m, (uint32_t)vicii.colorfetch_disable) < 0
+        || SMW_DW(m, (uint32_t)vicii.overscan) < 0
+        || SMW_DW(m, (uint32_t)vicii.high_color) < 0
+        || SMW_DW(m, (uint32_t)vicii.border_off) < 0
+        || SMW_DW(m, (uint32_t)vicii.raster_irq_offset) < 0
+        || SMW_DW(m, (uint32_t)vicii.raster_irq_prevent) < 0
         || SMW_BA(m, vicii.dtvpalette, 256) < 0
         /* SbCollMask */
-        || SMW_B(m, (BYTE)vicii.sprite_background_collisions) < 0
+        || SMW_B(m, (uint8_t)vicii.sprite_background_collisions) < 0
         /* SpriteDmaMask */
-        || SMW_B(m, (BYTE)vicii.raster.sprite_status->dma_msk) < 0
+        || SMW_B(m, (uint8_t)vicii.raster.sprite_status->dma_msk) < 0
         /* SsCollMask */
-        || SMW_B(m, (BYTE)vicii.sprite_sprite_collisions) < 0
+        || SMW_B(m, (uint8_t)vicii.sprite_sprite_collisions) < 0
         /* VBank */
-        || SMW_W(m, (WORD)vicii.vbank_phi1) < 0
+        || SMW_W(m, (uint16_t)vicii.vbank_phi1) < 0
         /* Vc */
-        || SMW_W(m, (WORD)vicii.mem_counter) < 0
+        || SMW_W(m, (uint16_t)vicii.mem_counter) < 0
         /* VcInc */
-        || SMW_B(m, (BYTE)vicii.mem_counter_inc) < 0
+        || SMW_B(m, (uint8_t)vicii.mem_counter_inc) < 0
         /* VcBase */
-        || SMW_W(m, (WORD)vicii.memptr) < 0
+        || SMW_W(m, (uint16_t)vicii.memptr) < 0
         /* VideoInt */
-        || SMW_B(m, (BYTE)vicii.irq_status) < 0)
+        || SMW_B(m, (uint8_t)vicii.irq_status) < 0) {
         goto fail;
+    }
 
     for (i = 0; i < 8; i++) {
         if (0
             /* SpriteXMemPtr */
-            || SMW_B(m,
-                (BYTE)vicii.raster.sprite_status->sprites[i].memptr) < 0
+            || SMW_B(m, (uint8_t)vicii.raster.sprite_status->sprites[i].memptr) < 0
             /* SpriteXMemPtrInc */
-            || SMW_B(m,
-                (BYTE)vicii.raster.sprite_status->sprites[i].memptr_inc) < 0
+            || SMW_B(m, (uint8_t)vicii.raster.sprite_status->sprites[i].memptr_inc) < 0
             /* SpriteXExpFlipFlop */
-            || SMW_B(m,
-                (BYTE)vicii.raster.sprite_status->sprites[i].exp_flag) < 0)
+            || SMW_B(m, (uint8_t)vicii.raster.sprite_status->sprites[i].exp_flag) < 0) {
             goto fail;
+        }
     }
 
     if (0
         /* FetchEventTick */
-        || SMW_DW(m, vicii.fetch_clk - maincpu_clk) < 0
+        || SMW_CLOCK(m, vicii.fetch_clk - maincpu_clk) < 0
         /* FetchEventType */
-        || SMW_B(m, (BYTE)vicii.fetch_idx) < 0)
+        || SMW_B(m, (uint8_t)vicii.fetch_idx) < 0) {
         goto fail;
+    }
 
-  /* Added in version 1.1 of the snapshot module */
-  /* using "ram_base-ram" is F***ing bullshit - what when external memory
-     is not mapped anywhere in ram[]? We should rather use some more generic
-     configuration info. But as we use it above in V1.0... :-(
-     AF 16jan2001 */
+    /* Added in version 1.1 of the snapshot module */
+    /* using "ram_base-ram" is F***ing bullshit - what when external memory
+       is not mapped anywhere in ram[]? We should rather use some more generic
+       configuration info. But as we use it above in V1.0... :-(
+       AF 16jan2001 */
     if (0
         /* RamBase */
-        || SMW_DW(m, (DWORD)(vicii.ram_base_phi2 - mem_ram)) < 0
+        || SMW_DW(m, (uint32_t)(vicii.ram_base_phi2 - mem_ram)) < 0
         /* VBank */
-        || SMW_W(m, (WORD)vicii.vbank_phi2) < 0)
+        || SMW_W(m, (uint16_t)vicii.vbank_phi2) < 0) {
         goto fail;
+    }
+
+    if (raster_snapshot_write(m, &vicii.raster)) {
+        goto fail;
+    }
 
     return snapshot_module_close(m);
 
 fail:
-    if (m != NULL)
+    if (m != NULL) {
         snapshot_module_close(m);
+    }
 
     return -1;
 }
 
 int vicii_snapshot_read_module(snapshot_t *s)
 {
-    BYTE major_version, minor_version;
+    uint8_t major_version, minor_version;
     int i;
     snapshot_module_t *m;
 
     m = snapshot_module_open(s, snap_module_name,
                              &major_version, &minor_version);
-    if (m == NULL)
+    if (m == NULL) {
         return -1;
+    }
 
-    if (major_version > SNAP_MAJOR || minor_version > SNAP_MINOR) {
+    if (snapshot_version_is_bigger(major_version, minor_version, SNAP_MAJOR, SNAP_MINOR)) {
         log_error(vicii.log,
                   "Snapshot module version (%d.%d) newer than %d.%d.",
                   major_version, minor_version,
@@ -261,7 +272,7 @@ int vicii_snapshot_read_module(snapshot_t *s)
         /* AllowBadLines */
         || SMR_B_INT(m, &vicii.allow_bad_lines) < 0
         /* BadLine */
-        || SMR_B_INT(m, &vicii.bad_line) < 0 
+        || SMR_B_INT(m, &vicii.bad_line) < 0
         /* Blank */
         || SMR_B_INT(m, &vicii.raster.blank_enabled) < 0
         /* ColorBuf */
@@ -277,45 +288,50 @@ int vicii_snapshot_read_module(snapshot_t *s)
         /* MatrixBuf */
         || SMR_BA(m, vicii.vbuf, 40) < 0
         /* NewSpriteDmaMask */
-        || SMR_B(m, &vicii.raster.sprite_status->new_dma_msk) < 0)
+        || SMR_B(m, &vicii.raster.sprite_status->new_dma_msk) < 0) {
         goto fail;
+    }
 
     {
-        DWORD RamBase;
+        uint32_t RamBase;
 
-        if (SMR_DW(m, &RamBase) < 0)
+        if (SMR_DW(m, &RamBase) < 0) {
             goto fail;
+        }
         vicii.ram_base_phi1 = mem_ram + RamBase;
     }
 
     /* Read the current raster line and the current raster cycle.  As they
        are a function of `clk', this is just a sanity check.  */
     {
-        WORD RasterLine;
-        BYTE RasterCycle;
+        uint16_t RasterLine;
+        uint8_t RasterCycle;
 
         if (SMR_B(m, &RasterCycle) < 0
-            || SMR_W(m, &RasterLine) < 0)
+            || SMR_W(m, &RasterLine) < 0) {
             goto fail;
+        }
 
-        if (RasterCycle != (BYTE)VICII_RASTER_CYCLE(maincpu_clk)) {
+        if (RasterCycle != (uint8_t)VICII_RASTER_CYCLE(maincpu_clk)) {
             log_error(vicii.log,
-                      "Not matching raster cycle (%d) in snapshot; should be %d.",
+                      "Not matching raster cycle (%d) in snapshot; should be %u.",
                       RasterCycle, VICII_RASTER_CYCLE(maincpu_clk));
             goto fail;
         }
 
-        if (RasterLine != (WORD)VICII_RASTER_Y(maincpu_clk)) {
+        if (RasterLine != (uint16_t)VICII_RASTER_Y(maincpu_clk)) {
             log_error(vicii.log,
-                      "VIC-II: Not matching raster line (%d) in snapshot; should be %d.",
+                      "VIC-II: Not matching raster line (%d) in snapshot; should be %u.",
                       RasterLine, VICII_RASTER_Y(maincpu_clk));
             goto fail;
         }
     }
 
-    for (i = 0; i < 0x50; i++)
-        if (SMR_B(m, &vicii.regs[i]) < 0 /* Registers */ )
+    for (i = 0; i < 0x50; i++) {
+        if (SMR_B(m, &vicii.regs[i]) < 0 /* Registers */) {
             goto fail;
+        }
+    }
 
     if (0
         /* DTV stuff */
@@ -350,22 +366,21 @@ int vicii_snapshot_read_module(snapshot_t *s)
         /* VcBase */
         || SMR_W_INT(m, &vicii.memptr) < 0
         /* VideoInt */
-        || SMR_B_INT(m, &vicii.irq_status) < 0)
+        || SMR_B_INT(m, &vicii.irq_status) < 0) {
         goto fail;
+    }
 
     for (i = 0; i < 8; i++) {
         if (0
             /* SpriteXMemPtr */
-            || SMR_B_INT(m,
-                &vicii.raster.sprite_status->sprites[i].memptr) < 0
+            || SMR_B_INT(m, &vicii.raster.sprite_status->sprites[i].memptr) < 0
             /* SpriteXMemPtrInc */
-            || SMR_B_INT(m,
-                &vicii.raster.sprite_status->sprites[i].memptr_inc) < 0
+            || SMR_B_INT(m, &vicii.raster.sprite_status->sprites[i].memptr_inc) < 0
             /* SpriteXExpFlipFlop */
-            || SMR_B_INT(m,
-                &vicii.raster.sprite_status->sprites[i].exp_flag) < 0
-            )
+            || SMR_B_INT(m, &vicii.raster.sprite_status->sprites[i].exp_flag) < 0
+            ) {
             goto fail;
+        }
     }
 
     /* FIXME: Recalculate alarms and derived values.  */
@@ -373,9 +388,8 @@ int vicii_snapshot_read_module(snapshot_t *s)
     if (vicii.raster_irq_prevent) {
         vicii.raster_irq_clk = CLOCK_MAX;
         alarm_unset(vicii.raster_irq_alarm);
-    } else
-    {
-        /* 
+    } else {
+        /*
             We cannot use vicii_irq_set_raster_line as this would delay
             an alarm on line 0 for one frame
         */
@@ -387,8 +401,9 @@ int vicii_snapshot_read_module(snapshot_t *s)
                                     + (vicii.cycles_per_line * line));
             vicii.raster_irq_clk += vicii.raster_irq_offset;
             /* Raster interrupts on line 0 are delayed by 1 cycle.  */
-            if (line == 0)
+            if (line == 0) {
                 vicii.raster_irq_clk++;
+            }
 
             alarm_set(vicii.raster_irq_alarm, vicii.raster_irq_clk);
         } else {
@@ -412,7 +427,7 @@ int vicii_snapshot_read_module(snapshot_t *s)
     /* Update sprite parameters.  We had better do this manually, or the
        VIC-II emulation could be quite upset.  */
     {
-        BYTE msk;
+        uint8_t msk;
 
         for (i = 0, msk = 0x1; i < 8; i++, msk <<= 1) {
             raster_sprite_t *sprite;
@@ -432,8 +447,7 @@ int vicii_snapshot_read_module(snapshot_t *s)
             sprite->multicolor = (int)(vicii.regs[0x1c] & msk);
             sprite->in_background = (int)(vicii.regs[0x1b] & msk);
             sprite->color = (int) vicii.dtvpalette[vicii.regs[0x27 + i] & 0xf];
-            sprite->dma_flag = (int)(vicii.raster.sprite_status->new_dma_msk
-                               & msk);
+            sprite->dma_flag = (int)(vicii.raster.sprite_status->new_dma_msk & msk);
         }
     }
 
@@ -448,8 +462,7 @@ int vicii_snapshot_read_module(snapshot_t *s)
 
         sf = vicii_sprites_fetch_table[vicii.sprite_fetch_msk];
         i = 0;
-        while (sf[i].cycle >= 0 
-            && sf[i].cycle + vicii.sprite_fetch_cycle <= vicii.cycles_per_line)
+        while (sf[i].cycle >= 0 && sf[i].cycle + vicii.sprite_fetch_cycle <= vicii.cycles_per_line)
         {
             i++;
         }
@@ -511,53 +524,58 @@ int vicii_snapshot_read_module(snapshot_t *s)
 
     vicii_update_video_mode(VICII_RASTER_CYCLE(maincpu_clk));
 
-    vicii_store(0x3c, (BYTE)vicii.regs[0x3c]);
+    vicii_store(0x3c, (uint8_t)vicii.regs[0x3c]);
 
-    vicii.draw_clk = maincpu_clk + (vicii.draw_cycle
-                     - VICII_RASTER_CYCLE(maincpu_clk));
+    vicii.draw_clk = maincpu_clk + (vicii.draw_cycle - VICII_RASTER_CYCLE(maincpu_clk));
     vicii.last_emulate_line_clk = vicii.draw_clk - vicii.cycles_per_line;
     alarm_set(vicii.raster_draw_alarm, vicii.draw_clk);
 
     {
-        DWORD dw;
-        BYTE b;
+        CLOCK qw;
+        uint8_t b;
 
         if (0
-            || SMR_DW(m, &dw) < 0  /* FetchEventTick */
+            || SMR_CLOCK(m, &qw) < 0  /* FetchEventTick */
             || SMR_B(m, &b) < 0    /* FetchEventType */
-            )
+            ) {
             goto fail;
+        }
 
-        vicii.fetch_clk = maincpu_clk + dw;
+        vicii.fetch_clk = maincpu_clk + qw;
         vicii.fetch_idx = b;
 
         alarm_set(vicii.raster_fetch_alarm, vicii.fetch_clk);
     }
 
-    if (vicii.irq_status & 0x80)
+    if (vicii.irq_status & 0x80) {
         interrupt_restore_irq(maincpu_int_status, vicii.int_num, 1);
+    }
 
     /* added in version 1.1 of snapshot format */
     if (minor_version > 0) {
-        DWORD RamBase;
+        uint32_t RamBase;
 
         if (0
             || SMR_DW(m, &RamBase) < 0
             || SMR_W_INT(m, &vicii.vbank_phi2) < 0 /* VBank */
-            )
+            ) {
             goto fail;
+        }
         vicii.ram_base_phi2 = mem_ram + RamBase;
 
         vicii_update_memory_ptrs(VICII_RASTER_CYCLE(maincpu_clk));
     }
 
-    raster_force_repaint(&vicii.raster);
+    if (raster_snapshot_read(m, &vicii.raster)) {
+        goto fail;
+    }
+
     snapshot_module_close(m);
     return 0;
 
 fail:
-    if (m != NULL)
+    if (m != NULL) {
         snapshot_module_close(m);
+    }
     return -1;
 }
-

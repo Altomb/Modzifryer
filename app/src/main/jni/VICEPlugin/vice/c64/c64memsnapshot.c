@@ -39,6 +39,7 @@
 #include "c64rom.h"
 #include "cartridge.h"
 #include "log.h"
+#include "maincpu.h"
 #include "mem.h"
 #include "resources.h"
 #include "reu.h"
@@ -47,114 +48,158 @@
 #include "types.h"
 #include "uiapi.h"
 
-#ifdef HAVE_RS232
+#if defined(HAVE_RS232DEV) || defined(HAVE_RS232NET)
 #include "c64acia.h"
 #endif
 
+/* ---------------------------------------------------------------------*/
+
+/* C64ROM 0.0 snapshot module format:
+
+   type  | name    | description
+   -----------------------------
+   ARRAY | KERNAL  | 8192 BYTES of KERNAL ROM data
+   ARRAY | BASIC   | 8192 BYTES of BASIC ROM data
+   ARRAY | CHARGEN | 4096 BYTES of CHARGEN ROM data
+ */
+
+static const char snap_rom_module_name[] = "C64ROM";
 #define SNAP_ROM_MAJOR 0
 #define SNAP_ROM_MINOR 0
 
-static log_t c64_snapshot_log = LOG_ERR;
-
-static const char snap_rom_module_name[] = "C64ROM";
+/* static log_t c64_snapshot_log = LOG_DEFAULT; */
 
 static int c64_snapshot_write_rom_module(snapshot_t *s)
 {
     snapshot_module_t *m;
-    int trapfl;
 
     /* Main memory module.  */
 
     m = snapshot_module_create(s, snap_rom_module_name, SNAP_ROM_MAJOR, SNAP_ROM_MINOR);
+
     if (m == NULL) {
         return -1;
     }
 
-    /* disable traps before saving the ROM */
-    resources_get_int("VirtualDevices", &trapfl);
-    resources_set_int("VirtualDevices", 0);
-
-    if (SMW_BA(m, c64memrom_kernal64_rom, C64_KERNAL_ROM_SIZE) < 0
+    if (0
+        || SMW_BA(m, c64memrom_kernal64_rom, C64_KERNAL_ROM_SIZE) < 0
         || SMW_BA(m, c64memrom_basic64_rom, C64_BASIC_ROM_SIZE) < 0
         || SMW_BA(m, mem_chargen_rom, C64_CHARGEN_ROM_SIZE) < 0) {
-        goto fail;
-    }
-
-    ui_update_menus();
-
-    if (snapshot_module_close(m) < 0) {
-        goto fail;
-    }
-
-    resources_set_int("VirtualDevices", trapfl);
-
-    return 0;
-
-fail:
-    if (m != NULL) {
         snapshot_module_close(m);
+        return -1;
     }
 
-    resources_set_int("VirtualDevices", trapfl);
+    return snapshot_module_close(m);
+}
 
-    return -1;
+#define NUM_TRAP_DEVICES 9  /* FIXME: is there a better constant ? */
+static int trapfl[NUM_TRAP_DEVICES];
+static int trapdevices[NUM_TRAP_DEVICES + 1] = { 1, 4, 5, 6, 7, 8, 9, 10, 11, -1 };
+
+static void get_trapflags(void)
+{
+    int i;
+    for(i = 0; trapdevices[i] != -1; i++) {
+        resources_get_int_sprintf("TrapDevice%d", &trapfl[i], trapdevices[i]);
+    }
+}
+
+static void clear_trapflags(void)
+{
+    int i;
+    for(i = 0; trapdevices[i] != -1; i++) {
+        resources_set_int_sprintf("TrapDevice%d", 0, trapdevices[i]);
+    }
+}
+
+static void restore_trapflags(void)
+{
+    int i;
+    for(i = 0; trapdevices[i] != -1; i++) {
+        resources_set_int_sprintf("TrapDevice%d", trapfl[i], trapdevices[i]);
+    }
 }
 
 static int c64_snapshot_read_rom_module(snapshot_t *s)
 {
-    BYTE major_version, minor_version;
+    uint8_t major_version, minor_version;
     snapshot_module_t *m;
-    int trapfl;
 
     /* Main memory module.  */
 
     m = snapshot_module_open(s, snap_rom_module_name, &major_version, &minor_version);
+
     if (m == NULL) {
         /* this module is optional */
         /* FIXME: reset all cartridge stuff to standard C64 behaviour */
         return 0;
     }
 
-    if (major_version > SNAP_ROM_MAJOR || minor_version > SNAP_ROM_MINOR) {
-        log_error(c64_snapshot_log, "Snapshot module version (%d.%d) newer than %d.%d.", major_version, minor_version, SNAP_ROM_MAJOR, SNAP_ROM_MINOR);
-        snapshot_module_close(m);
-        return -1;
+    /* get old value */
+    get_trapflags();
+
+    /* Do not accept versions higher than current */
+    if (snapshot_version_is_bigger(major_version, minor_version, SNAP_ROM_MAJOR, SNAP_ROM_MINOR)) {
+        snapshot_set_error(SNAPSHOT_MODULE_HIGHER_VERSION);
+        goto fail;
     }
 
     /* disable traps before loading the ROM */
-    resources_get_int("VirtualDevices", &trapfl);
-    resources_set_int("VirtualDevices", 0);
+    clear_trapflags();
 
-    if (SMR_BA(m, c64memrom_kernal64_rom, C64_KERNAL_ROM_SIZE) < 0
+    if (0
+        || SMR_BA(m, c64memrom_kernal64_rom, C64_KERNAL_ROM_SIZE) < 0
         || SMR_BA(m, c64memrom_basic64_rom, C64_BASIC_ROM_SIZE) < 0
         || SMR_BA(m, mem_chargen_rom, C64_CHARGEN_ROM_SIZE) < 0) {
         goto fail;
     }
 
     if (snapshot_module_close(m) < 0) {
-        goto fail;
+        restore_trapflags();
+        return -1;
     }
 
     memcpy(c64memrom_kernal64_trap_rom, c64memrom_kernal64_rom, C64_KERNAL_ROM_SIZE);
-    c64rom_get_kernal_checksum();
-    c64rom_get_basic_checksum();
+    c64rom_print_kernal_info();
+    c64rom_print_basic_info();
 
     /* enable traps again when necessary */
-    resources_set_int("VirtualDevices", trapfl);
+    restore_trapflags();
 
     return 0;
 
 fail:
-    if (m != NULL) {
-        snapshot_module_close(m);
-    }
-    resources_set_int("VirtualDevices", trapfl);
+    snapshot_module_close(m);
+    /* restore old value */
+    restore_trapflags();
     return -1;
 }
 
-#define SNAP_MAJOR 0
-#define SNAP_MINOR 0
+/* ---------------------------------------------------------------------*/
+
+/* C64MEM 0.1 snapshot module format:
+
+   type  | name                | version | description
+   ---------------------------------------------------
+   BYTE  | pport data          |   0.0+  | CPU port data register
+   BYTE  | pport dir           |   0.0+  | CPU port direction register
+   BYTE  | EXROM               |   0.0+  | EXROM line state
+   BYTE  | GAME                |   0.0+  | GAME line state
+   ARRAY | RAM                 |   0.0+  | 65536 BYTES of RAM data
+   BYTE  | pport data out      |   0.0+  | CPU port data out lines state
+   BYTE  | pport data read     |   0.0+  | CPU port data in lines state
+   BYTE  | pport dir read      |   0.0+  | CPU port direction in lines state
+   DWORD | pport bit6 clock    |   0.1   | CPU port bit 6 falloff clock
+   DWORD | pport bit7 clock    |   0.1   | CPU port bit 7 falloff clock
+   BYTE  | pport bit 6         |   0.1   | CPU port bit 6 state
+   BYTE  | pport bit 7         |   0.1   | CPU port bit 7 state
+   BYTE  | pport bit 6 falloff |   0.1   | CPU port bit 6 discharge flag
+   BYTE  | pport bit 7 falloff |   0.1   | CPU port bit 7 discharge flag
+ */
+
 static const char snap_mem_module_name[] = "C64MEM";
+#define SNAP_MAJOR 0
+#define SNAP_MINOR 1
 
 int c64_snapshot_write_module(snapshot_t *s, int save_roms)
 {
@@ -163,95 +208,112 @@ int c64_snapshot_write_module(snapshot_t *s, int save_roms)
     /* Main memory module.  */
 
     m = snapshot_module_create(s, snap_mem_module_name, SNAP_MAJOR, SNAP_MINOR);
+
     if (m == NULL) {
         return -1;
     }
 
-    if (SMW_B(m, pport.data) < 0
+    if (0
+        || SMW_B(m, pport.data) < 0
         || SMW_B(m, pport.dir) < 0
         || SMW_B(m, export.exrom) < 0
         || SMW_B(m, export.game) < 0
         || SMW_BA(m, mem_ram, C64_RAM_SIZE) < 0
         || SMW_B(m, pport.data_out) < 0
         || SMW_B(m, pport.data_read) < 0
-        || SMW_B(m, pport.dir_read) < 0) {
-        goto fail;
+        || SMW_B(m, pport.dir_read) < 0
+        || SMW_DW(m, (uint32_t)pport.data_set_clk_bit6) < 0
+        || SMW_DW(m, (uint32_t)pport.data_set_clk_bit7) < 0
+        || SMW_B(m, pport.data_set_bit6) < 0
+        || SMW_B(m, pport.data_set_bit7) < 0
+        || SMW_B(m, pport.data_falloff_bit6) < 0
+        || SMW_B(m, pport.data_falloff_bit7) < 0) {
+        snapshot_module_close(m);
+        return -1;
     }
 
     if (snapshot_module_close(m) < 0) {
-        goto fail;
+        return -1;
     }
-    m = NULL;
 
     if (save_roms && c64_snapshot_write_rom_module(s) < 0) {
-        goto fail;
+        return -1;
     }
 
-    if (cartridge_snapshot_write_modules(s) < 0) {
-        goto fail;
-    }
-
-    return 0;
-
-fail:
-    if (m != NULL) {
-        snapshot_module_close(m);
-    }
-    return -1;
+    return cartridge_snapshot_write_modules(s);
 }
 
 int c64_snapshot_read_module(snapshot_t *s)
 {
-    BYTE major_version, minor_version;
+    uint8_t major_version, minor_version;
     snapshot_module_t *m;
+    int tmp_bit6, tmp_bit7;
 
     /* Main memory module.  */
 
     m = snapshot_module_open(s, snap_mem_module_name, &major_version, &minor_version);
+
     if (m == NULL) {
         return -1;
     }
 
-    if (major_version > SNAP_MAJOR || minor_version > SNAP_MINOR) {
-        log_error(c64_snapshot_log, "Snapshot module version (%d.%d) newer than %d.%d.", major_version, minor_version, SNAP_MAJOR, SNAP_MINOR);
+    /* Do not accept versions higher than current */
+    if (snapshot_version_is_bigger(major_version, minor_version, SNAP_MAJOR, SNAP_MINOR)) {
+        snapshot_set_error(SNAPSHOT_MODULE_HIGHER_VERSION);
         goto fail;
     }
 
-    if (SMR_B(m, &pport.data) < 0
+    if (0
+        || SMR_B(m, &pport.data) < 0
         || SMR_B(m, &pport.dir) < 0
         || SMR_B(m, &export.exrom) < 0
         || SMR_B(m, &export.game) < 0
-        || SMR_BA(m, mem_ram, C64_RAM_SIZE) < 0) {
+        || SMR_BA(m, mem_ram, C64_RAM_SIZE) < 0
+        || SMR_B(m, &pport.data_out) < 0
+        || SMR_B(m, &pport.data_read) < 0
+        || SMR_B(m, &pport.dir_read) < 0) {
         goto fail;
     }
-    
-    /* new since 1.15.x */
-    SMR_B(m, &pport.data_out);
-    SMR_B(m, &pport.data_read);
-    SMR_B(m, &pport.dir_read);
+
+    /* new since 0.1 */
+    if (!snapshot_version_is_smaller(major_version, minor_version, 0, 1)) {
+        if (0
+            || SMR_DW_INT(m, &tmp_bit6) < 0
+            || SMR_DW_INT(m, &tmp_bit7) < 0
+            || SMR_B(m, &pport.data_set_bit6) < 0
+            || SMR_B(m, &pport.data_set_bit7) < 0
+            || SMR_B(m, &pport.data_falloff_bit6) < 0
+            || SMR_B(m, &pport.data_falloff_bit7) < 0) {
+            goto fail;
+        }
+        pport.data_set_clk_bit6 = (CLOCK)tmp_bit6;
+        pport.data_set_clk_bit7 = (CLOCK)tmp_bit7;
+    } else {
+        pport.data_set_bit6 = 0;
+        pport.data_set_bit7 = 0;
+        pport.data_falloff_bit6 = 0;
+        pport.data_falloff_bit7 = 0;
+        pport.data_set_clk_bit6 = 0;
+        pport.data_set_clk_bit7 = 0;
+    }
 
     mem_pla_config_changed();
 
     if (snapshot_module_close(m) < 0) {
-        goto fail;
+        return -1;
     }
-    m = NULL;
 
     if (c64_snapshot_read_rom_module(s) < 0) {
-        goto fail;
+        return -1;
     }
 
     if (cartridge_snapshot_read_modules(s) < 0) {
-        goto fail;
+        return -1;
     }
-
-    ui_update_menus();
 
     return 0;
 
 fail:
-    if (m != NULL) {
-        snapshot_module_close(m);
-    }
+    snapshot_module_close(m);
     return -1;
 }

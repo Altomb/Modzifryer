@@ -27,7 +27,7 @@
 
 #include "vice.h"
 
-#ifdef HAVE_TFE
+#ifdef HAVE_RAWNET
 
 #include <assert.h>
 #include <stddef.h>
@@ -35,6 +35,20 @@
 
 #include "rawnet.h"
 #include "rawnetarch.h"
+
+int rawnet_resources_init(void)
+{
+    return rawnet_arch_resources_init();
+}
+
+int rawnet_cmdline_options_init(void)
+{
+    return rawnet_arch_cmdline_options_init();
+}
+
+void rawnet_resources_shutdown(void) {
+    rawnet_arch_resources_shutdown();
+}
 
 static int (*should_accept)(unsigned char *, int, int *, int *, int *, int *, int *) = NULL;
 
@@ -71,4 +85,31 @@ int rawnet_enumadapter_close(void)
     return rawnet_arch_enumadapter_close();
 }
 
-#endif /* #ifdef HAVE_TFE */
+char *rawnet_get_standard_interface(void)
+{
+    return rawnet_arch_get_standard_interface();
+}
+
+int rawnet_enumdriver_open(void)
+{
+    if (!rawnet_arch_enumdriver_open()) {
+        return 0;
+    }
+    return 1;
+}
+
+int rawnet_enumdriver(char **ppname, char **ppdescription)
+{
+    return rawnet_arch_enumdriver(ppname, ppdescription);
+}
+
+int rawnet_enumdriver_close(void)
+{
+    return rawnet_arch_enumdriver_close();
+}
+
+char *rawnet_get_standard_driver(void)
+{
+    return rawnet_arch_get_standard_driver();
+}
+#endif /* #ifdef HAVE_RAWNET */

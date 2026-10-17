@@ -28,14 +28,19 @@
 #include "vice.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 
 #include "6510core.h"
 #include "alarm.h"
-#include "clkguard.h"
+#include "archdep.h"
+#include "autostart.h"
 #include "debug.h"
+#include "drive.h"
 #include "interrupt.h"
+#include "log.h"
 #include "machine.h"
 #include "maincpu.h"
+#include "mainlock.h"
 #include "mem.h"
 #include "monitor.h"
 #ifdef C64DTV
@@ -45,9 +50,16 @@
 #endif
 #include "h6809regs.h"
 #include "snapshot.h"
+#include "resources.h"
+#include "cmdline.h"
 #include "traps.h"
 #include "types.h"
 
+#ifndef EXIT_FAILURE
+#define EXIT_FAILURE 1
+#endif
+
+log_t maincpu_log = LOG_DEFAULT;
 
 /* MACHINE_STUFF should define/undef
 
@@ -69,67 +81,24 @@
 /* ------------------------------------------------------------------------- */
 
 /* Implement the hack to make opcode fetches faster.  */
-#define JUMP(addr)                            \
-    do {                                      \
-        reg_pc = (unsigned int)(addr);        \
-        bank_base = mem_read_base(reg_pc);    \
-        bank_limit = mem_read_limit(reg_pc);  \
-        mem_old_reg_pc = reg_pc;              \
+#define JUMP(addr)                                                                         \
+    do {                                                                                   \
+        reg_pc = (unsigned int)(addr);                                                     \
+        if (reg_pc >= (unsigned int)bank_limit || reg_pc < (unsigned int)bank_start) {     \
+            mem_mmu_translate((unsigned int)(addr), &bank_base, &bank_start, &bank_limit); \
+        }                                                                                  \
     } while (0)
 
 /* ------------------------------------------------------------------------- */
 
-#ifndef STORE_ZERO
-#define STORE_ZERO(addr, value) \
-    (*_mem_write_tab_ptr[0])((WORD)(addr), (BYTE)(value))
-#endif
-
-#ifndef LOAD_ZERO
-#define LOAD_ZERO(addr) \
-    (*_mem_read_tab_ptr[0])((WORD)(addr))
-#endif
-
 #ifdef FEATURE_CPUMEMHISTORY
-#ifndef C64DTV
+#ifndef C64DTV /* FIXME: fix DTV and remove this */
 
-/* HACK this is C64 specific */
+/* NOTE: the functions called here are in src/plus4/plus4cpu.c, src/c128/c128cpu.c,
+ * src/cbm2/cbm2cpu.c, src/c64/vsidcpu.c, src/c64/c64cpu.c, src/pet/petcpu.c,
+ * src/c64dtv/c64dtvcpu.c */
 
-void memmap_mem_store(unsigned int addr, unsigned int value)
-{
-    if ((addr >= 0xd000)&&(addr <= 0xdfff)) {
-        monitor_memmap_store(addr, MEMMAP_I_O_W);
-    } else {
-        monitor_memmap_store(addr, MEMMAP_RAM_W);
-    }
-    (*_mem_write_tab_ptr[(addr) >> 8])((WORD)(addr), (BYTE)(value));
-}
-
-BYTE memmap_mem_read(unsigned int addr)
-{
-    switch(addr >> 12) {
-        case 0xa:
-        case 0xb:
-        case 0xe:
-        case 0xf:
-            memmap_state |= MEMMAP_STATE_IGNORE;
-            if (LOAD_ZERO(1) & (1 << ((addr>>14) & 1))) {
-                monitor_memmap_store(addr, (memmap_state&MEMMAP_STATE_OPCODE)?MEMMAP_ROM_X:(memmap_state&MEMMAP_STATE_INSTR)?0:MEMMAP_ROM_R);
-            } else {
-                monitor_memmap_store(addr, (memmap_state&MEMMAP_STATE_OPCODE)?MEMMAP_RAM_X:(memmap_state&MEMMAP_STATE_INSTR)?0:MEMMAP_RAM_R);
-            }
-            memmap_state &= ~(MEMMAP_STATE_IGNORE);
-            break;
-        case 0xd:
-            monitor_memmap_store(addr, MEMMAP_I_O_R);
-            break;
-        default:
-            monitor_memmap_store(addr, (memmap_state&MEMMAP_STATE_OPCODE)?MEMMAP_RAM_X:(memmap_state&MEMMAP_STATE_INSTR)?0:MEMMAP_RAM_R);
-            break;
-    }
-    memmap_state &= ~(MEMMAP_STATE_OPCODE);
-    return (*_mem_read_tab_ptr[(addr) >> 8])((WORD)(addr));
-}
-
+/* map access functions to memmap hooks */
 #ifndef STORE
 #define STORE(addr, value) \
     memmap_mem_store(addr, value)
@@ -140,39 +109,90 @@ BYTE memmap_mem_read(unsigned int addr)
     memmap_mem_read(addr)
 #endif
 
+#ifndef STORE_ZERO
+#define STORE_ZERO(addr, value) \
+    memmap_mem_store((addr) & 0xff, value)
+#endif
+
+#ifndef LOAD_ZERO
+#define LOAD_ZERO(addr) \
+    memmap_mem_read((addr) & 0xff)
+#endif
+
+#ifndef STORE_DUMMY
+#define STORE_DUMMY(addr, value) \
+    memmap_mem_store_dummy(addr, value)
+#endif
+
+#ifndef LOAD_DUMMY
+#define LOAD_DUMMY(addr) \
+    memmap_mem_read_dummy(addr)
+#endif
+
+#ifndef STORE_ZERO_DUMMY
+#define STORE_ZERO_DUMMY(addr, value) \
+    memmap_mem_store_dummy((addr) & 0xff, value)
+#endif
+
+#ifndef LOAD_ZERO_DUMMY
+#define LOAD_ZERO_DUMMY(addr) \
+    memmap_mem_read_dummy((addr) & 0xff)
+#endif
+
 #endif /* C64DTV */
 #endif /* FEATURE_CPUMEMHISTORY */
 
 #ifndef STORE
 #define STORE(addr, value) \
-    (*_mem_write_tab_ptr[(addr) >> 8])((WORD)(addr), (BYTE)(value))
+    (*_mem_write_tab_ptr[(addr) >> 8])((uint16_t)(addr), (uint8_t)(value))
 #endif
 
 #ifndef LOAD
 #define LOAD(addr) \
-    (*_mem_read_tab_ptr[(addr) >> 8])((WORD)(addr))
+    (*_mem_read_tab_ptr[(addr) >> 8])((uint16_t)(addr))
+#endif
+
+#ifndef STORE_ZERO
+#define STORE_ZERO(addr, value) \
+    (*_mem_write_tab_ptr[0])((uint16_t)(addr), (uint8_t)(value))
+#endif
+
+#ifndef LOAD_ZERO
+#define LOAD_ZERO(addr) \
+    (*_mem_read_tab_ptr[0])((uint16_t)(addr))
 #endif
 
 #define LOAD_ADDR(addr) \
-    ((LOAD((addr) + 1) << 8) | LOAD(addr))
+    (LOAD(addr) | (LOAD((addr) + 1) << 8))
 
 #define LOAD_ZERO_ADDR(addr) \
-    ((LOAD_ZERO((addr) + 1) << 8) | LOAD_ZERO(addr))
+    (LOAD_ZERO(addr) | (LOAD_ZERO((addr) + 1) << 8))
 
-inline static BYTE *mem_read_base(int addr)
-{
-    BYTE *p = _mem_read_base_tab_ptr[addr >> 8];
+#ifndef STORE_DUMMY
+#define STORE_DUMMY(addr, value) \
+    (*_mem_write_tab_ptr_dummy[(addr) >> 8])((uint16_t)(addr), (uint8_t)(value))
+#endif
 
-    if (p == NULL)
-        return p;
+#ifndef LOAD_DUMMY
+#define LOAD_DUMMY(addr) \
+    (*_mem_read_tab_ptr_dummy[(addr) >> 8])((uint16_t)(addr))
+#endif
 
-    return p - (addr & 0xff00);
-}
+#ifndef STORE_ZERO_DUMMY
+#define STORE_ZERO_DUMMY(addr, value) \
+    (*_mem_write_tab_ptr_dummy[0])((uint16_t)(addr), (uint8_t)(value))
+#endif
 
-inline static int mem_read_limit(int addr)
-{
-    return mem_read_limit_tab_ptr[addr >> 8];
-}
+#ifndef LOAD_ZERO_DUMMY
+#define LOAD_ZERO_DUMMY(addr) \
+    (*_mem_read_tab_ptr_dummy[0])((uint16_t)(addr))
+#endif
+
+#define LOAD_ADDR_DUMMY(addr) \
+    (LOAD_DUMMY(addr) | (LOAD_DUMMY((addr) + 1) << 8))
+
+#define LOAD_ZERO_ADDR_DUMMY(addr) \
+    (LOAD_ZERO_DUMMY(addr) | (LOAD_ZERO_DUMMY((addr) + 1) << 8))
 
 /* Those may be overridden by the machine stuff.  Probably we want them in
    the .def files, but if most of the machines do not use, we might keep it
@@ -186,7 +206,7 @@ inline static int mem_read_limit(int addr)
 #endif
 
 #ifndef STORE_IND
-#define STORE_IND(addr, value) STORE((addr),(value))
+#define STORE_IND(addr, value) STORE((addr), (value))
 #endif
 
 #ifndef LOAD_IND
@@ -220,11 +240,12 @@ struct interrupt_cpu_status_s *maincpu_int_status = NULL;
 #ifndef CYCLE_EXACT_ALARM
 alarm_context_t *maincpu_alarm_context = NULL;
 #endif
-clk_guard_t *maincpu_clk_guard = NULL;
 monitor_interface_t *maincpu_monitor_interface = NULL;
 
 /* Global clock counter.  */
 CLOCK maincpu_clk = 0L;
+/* if != 0, exit when this many cycles have been executed */
+CLOCK maincpu_clk_limit = 0L;
 
 /* This is flag is set to 1 each time a Read-Modify-Write instructions that
    accesses memory is executed.  We can emulate the RMW behaviour of the 6510
@@ -272,6 +293,60 @@ mos6510dtv_regs_t maincpu_regs;
 mos6510_regs_t maincpu_regs;
 #endif
 
+static int maincpu_jammed = 0;
+
+/* ------------------------------------------------------------------------- */
+
+static int ane_log_level = 0; /* 0: none, 1: unstable only 2: all */
+static int lxa_log_level = 0; /* 0: none, 1: unstable only 2: all */
+
+static int set_ane_log_level(int val, void *param)
+{
+    if ((val < 0) || (val > 2)) {
+        return -1;
+    }
+    ane_log_level = val;
+    return 0;
+}
+
+static int set_lxa_log_level(int val, void *param)
+{
+    if ((val < 0) || (val > 2)) {
+        return -1;
+    }
+    lxa_log_level = val;
+    return 0;
+}
+
+static const resource_int_t maincpu_resources_int[] = {
+    { "LogLevelANE", 0, RES_EVENT_NO, NULL,
+      &ane_log_level, set_ane_log_level, NULL },
+    { "LogLevelLXA", 0, RES_EVENT_NO, NULL,
+      &lxa_log_level, set_lxa_log_level, NULL },
+    RESOURCE_INT_LIST_END
+};
+
+int maincpu_resources_init(void)
+{
+    return resources_register_int(maincpu_resources_int);
+}
+
+static const cmdline_option_t cmdline_options_maincpu[] =
+{
+    { "-aneloglevel", SET_RESOURCE, CMDLINE_ATTRIB_NEED_ARGS,
+      NULL, NULL, "LogLevelANE", NULL,
+      "<Type>", "Set ANE log level: (0: None, 1: Unstable, 2: All)" },
+    { "-lxaloglevel", SET_RESOURCE, CMDLINE_ATTRIB_NEED_ARGS,
+      NULL, NULL, "LogLevelLXA", NULL,
+      "<Type>", "Set LXA log level: (0: None, 1: Unstable, 2: All)" },
+    CMDLINE_LIST_END
+};
+
+int maincpu_cmdline_options_init(void)
+{
+    return cmdline_register_options(cmdline_options_maincpu);
+}
+
 /* ------------------------------------------------------------------------- */
 
 monitor_interface_t *maincpu_monitor_interface_get(void)
@@ -301,11 +376,20 @@ monitor_interface_t *maincpu_monitor_interface_get(void)
     maincpu_monitor_interface->clk = &maincpu_clk;
 
     maincpu_monitor_interface->current_bank = 0;
+    maincpu_monitor_interface->current_bank_index = 0;
+
     maincpu_monitor_interface->mem_bank_list = mem_bank_list;
+    maincpu_monitor_interface->mem_bank_list_nos = mem_bank_list_nos;
+
     maincpu_monitor_interface->mem_bank_from_name = mem_bank_from_name;
+    maincpu_monitor_interface->mem_bank_index_from_bank = mem_bank_index_from_bank;
+    maincpu_monitor_interface->mem_bank_flags_from_bank = mem_bank_flags_from_bank;
+
     maincpu_monitor_interface->mem_bank_read = mem_bank_read;
     maincpu_monitor_interface->mem_bank_peek = mem_bank_peek;
+    maincpu_monitor_interface->mem_peek_with_config = mem_peek_with_config;
     maincpu_monitor_interface->mem_bank_write = mem_bank_write;
+    maincpu_monitor_interface->mem_bank_poke = mem_bank_poke;
 
     maincpu_monitor_interface->mem_ioreg_list_get = mem_ioreg_list_get;
 
@@ -322,6 +406,8 @@ monitor_interface_t *maincpu_monitor_interface_get(void)
 void maincpu_early_init(void)
 {
     maincpu_int_status = interrupt_cpu_status_new();
+
+    maincpu_log = log_open("Main CPU");
 }
 
 void maincpu_init(void)
@@ -345,8 +431,9 @@ static void cpu_reset(void)
 
     interrupt_cpu_status_reset(maincpu_int_status);
 
-    if (preserve_monitor)
+    if (preserve_monitor) {
         interrupt_monitor_trap_on(maincpu_int_status);
+    }
 
     maincpu_clk = 6; /* # of clock cycles needed for RESET.  */
 
@@ -373,13 +460,21 @@ inline static int interrupt_check_nmi_delay(interrupt_cpu_status_t *cs,
 {
     CLOCK nmi_clk = cs->nmi_clk + INTERRUPT_DELAY;
 
+    /* BRK (0x00) delays the NMI by one opcode.  */
+    /* TODO DO_INTERRUPT sets last opcode to 0: can NMI occur right after IRQ? */
+    if (OPINFO_NUMBER(*cs->last_opcode_info_ptr) == 0x00) {
+        return 0;
+    }
+
     /* Branch instructions delay IRQs and NMI by one cycle if branch
        is taken with no page boundary crossing.  */
-    if (OPINFO_DELAYS_INTERRUPT(*cs->last_opcode_info_ptr))
+    if (OPINFO_DELAYS_INTERRUPT(*cs->last_opcode_info_ptr)) {
         nmi_clk++;
+    }
 
-    if (cpu_clk >= nmi_clk)
+    if (cpu_clk >= nmi_clk) {
         return 1;
+    }
 
     return 0;
 }
@@ -394,8 +489,9 @@ inline static int interrupt_check_irq_delay(interrupt_cpu_status_t *cs,
 
     /* Branch instructions delay IRQs and NMI by one cycle if branch
        is taken with no page boundary crossing.  */
-    if (OPINFO_DELAYS_INTERRUPT(*cs->last_opcode_info_ptr))
+    if (OPINFO_DELAYS_INTERRUPT(*cs->last_opcode_info_ptr)) {
         irq_clk++;
+    }
 
     /* If an opcode changes the I flag from 1 to 0, the 6510 needs
        one more opcode before it triggers the IRQ routine.  */
@@ -412,44 +508,86 @@ inline static int interrupt_check_irq_delay(interrupt_cpu_status_t *cs,
 /* ------------------------------------------------------------------------- */
 
 #ifdef NEED_REG_PC
+/* FIXME: this should really be uint16_t, but it breaks things (eg trap17.prg) */
 unsigned int reg_pc;
 #endif
 
+static bool bank_base_ready = false;
+static uint8_t *bank_base = NULL;
+static int bank_start = 0;
+static int bank_limit = 0;
+
+void maincpu_resync_limits(void)
+{
+    if (bank_base_ready) {
+        mem_mmu_translate(reg_pc, &bank_base, &bank_start, &bank_limit);
+    }
+}
+
+/* This doesn't return. The thread will directly exit when requested. */
 void maincpu_mainloop(void)
 {
+#define ORIGIN_MEMSPACE (e_comp_space)
 #ifndef C64DTV
     /* Notice that using a struct for these would make it a lot slower (at
        least, on gcc 2.7.2.x).  */
-    BYTE reg_a = 0;
-    BYTE reg_x = 0;
-    BYTE reg_y = 0;
+    uint8_t reg_a = 0;
+    uint8_t reg_x = 0;
+    uint8_t reg_y = 0;
 #else
     int reg_a_read_idx = 0;
     int reg_a_write_idx = 0;
     int reg_x_idx = 2;
     int reg_y_idx = 1;
-#define reg_a_write dtv_registers[reg_a_write_idx]
+
+#define reg_a_write(c)                      \
+    do {                                    \
+        dtv_registers[reg_a_write_idx] = c; \
+        if (reg_a_write_idx >= 3) {         \
+            maincpu_resync_limits();        \
+        }                                   \
+    } while (0);
 #define reg_a_read dtv_registers[reg_a_read_idx]
-#define reg_x dtv_registers[reg_x_idx]
-#define reg_y dtv_registers[reg_y_idx]
+#define reg_x_write(c)                \
+    do {                              \
+        dtv_registers[reg_x_idx] = c; \
+        if (reg_x_idx >= 3) {         \
+            maincpu_resync_limits();  \
+        }                             \
+    } while (0);
+
+#define reg_x_read dtv_registers[reg_x_idx]
+#define reg_y_write(c)                \
+    do {                              \
+        dtv_registers[reg_y_idx] = c; \
+        if (reg_y_idx >= 3) {         \
+            maincpu_resync_limits();  \
+        }                             \
+    } while (0);
+#define reg_y_read dtv_registers[reg_y_idx]
 #endif
-    BYTE reg_p = 0;
-    BYTE reg_sp = 0;
-    BYTE flag_n = 0;
-    BYTE flag_z = 0;
+    uint8_t reg_p = 0;
+    uint8_t reg_sp = 0;
+    uint8_t flag_n = 0;
+    uint8_t flag_z = 0;
 #ifndef NEED_REG_PC
     unsigned int reg_pc;
 #endif
 
-    BYTE *bank_base;
-    int bank_limit;
+    /*
+     * Enable maincpu_resync_limits functionality .. in the old code
+     * this is where the local stack var had its address copied to
+     * the global.
+     */
+    bank_base_ready = true;
 
-    mem_set_bank_pointer(&bank_base, &bank_limit);
-
-    machine_trigger_reset(MACHINE_RESET_MODE_SOFT);
+    machine_trigger_reset(MACHINE_RESET_MODE_RESET_CPU);
 
     while (1) {
-
+#define CPU_LOG_ID maincpu_log
+#define ANE_LOG_LEVEL ane_log_level
+#define LXA_LOG_LEVEL lxa_log_level
+#define CPU_IS_JAMMED maincpu_jammed
 #define CLK maincpu_clk
 #define RMW_FLAG maincpu_rmw_flag
 #define LAST_OPCODE_INFO last_opcode_info
@@ -460,17 +598,13 @@ void maincpu_mainloop(void)
 
 #define ALARM_CONTEXT maincpu_alarm_context
 
-#define CHECK_PENDING_ALARM() \
-   (clk >= next_alarm_clk(maincpu_int_status))
+#define CHECK_PENDING_ALARM() (clk >= next_alarm_clk(maincpu_int_status))
 
-#define CHECK_PENDING_INTERRUPT() \
-   check_pending_interrupt(maincpu_int_status)
+#define CHECK_PENDING_INTERRUPT() check_pending_interrupt(maincpu_int_status)
 
-#define TRAP(addr) \
-   maincpu_int_status->trap_func(addr);
+#define TRAP(addr) maincpu_int_status->trap_func(addr);
 
-#define ROM_TRAP_HANDLER() \
-   traps_handler()
+#define ROM_TRAP_HANDLER() traps_handler()
 
 #define JAM()                                                         \
     do {                                                              \
@@ -479,158 +613,325 @@ void maincpu_mainloop(void)
         EXPORT_REGISTERS();                                           \
         tmp = machine_jam("   " CPU_STR ": JAM at $%04X   ", reg_pc); \
         switch (tmp) {                                                \
-          case JAM_RESET:                                             \
-            DO_INTERRUPT(IK_RESET);                                   \
-            break;                                                    \
-          case JAM_HARD_RESET:                                        \
-            mem_powerup();                                            \
-            DO_INTERRUPT(IK_RESET);                                   \
-            break;                                                    \
-          case JAM_MONITOR:                                           \
-            monitor_startup(e_comp_space);                            \
-            IMPORT_REGISTERS();                                       \
-            break;                                                    \
-          default:                                                    \
-            CLK++;                                                    \
+            case JAM_RESET_CPU:                                       \
+                DO_INTERRUPT(IK_RESET);                               \
+                break;                                                \
+            case JAM_POWER_CYCLE:                                     \
+                machine_powerup();                                    \
+                DO_INTERRUPT(IK_RESET);                               \
+                break;                                                \
+            case JAM_MONITOR:                                         \
+                monitor_startup(e_comp_space);                        \
+                IMPORT_REGISTERS();                                   \
+                break;                                                \
+            default:                                                  \
+                CLK++;                                                \
         }                                                             \
     } while (0)
 
 #define CALLER e_comp_space
 
-#define ROM_TRAP_ALLOWED() mem_rom_trap_allowed((WORD)reg_pc)
+#define ROM_TRAP_ALLOWED() mem_rom_trap_allowed((uint16_t)reg_pc)
 
 #define GLOBAL_REGS maincpu_regs
 
 #include "6510core.c"
 
         maincpu_int_status->num_dma_per_opcode = 0;
+
+        drive_cycle_hook();
+
+        if (maincpu_clk_limit && (maincpu_clk > maincpu_clk_limit)) {
+            log_error(LOG_DEFAULT, "cycle limit reached.");
+            archdep_vice_exit(1);
+        }
+
+        autostart_advance();
 #if 0
-        if (CLK > 246171754)
+        if (CLK > 246171754) {
             debug.maincpu_traceflg = 1;
+        }
 #endif
     }
 }
 
 /* ------------------------------------------------------------------------- */
 
+void maincpu_set_pc(int pc) {
+#ifdef C64DTV
+    MOS6510DTV_REGS_SET_PC(&maincpu_regs, pc);
+#else
+    MOS6510_REGS_SET_PC(&maincpu_regs, pc);
+#endif
+}
+
+void maincpu_set_a(int a) {
+#ifdef C64DTV
+    MOS6510DTV_REGS_SET_A(&maincpu_regs, a);
+#else
+    MOS6510_REGS_SET_A(&maincpu_regs, a);
+#endif
+}
+
+void maincpu_set_x(int x) {
+#ifdef C64DTV
+    MOS6510DTV_REGS_SET_X(&maincpu_regs, x);
+#else
+    MOS6510_REGS_SET_X(&maincpu_regs, x);
+#endif
+}
+
+void maincpu_set_y(int y) {
+#ifdef C64DTV
+    MOS6510DTV_REGS_SET_Y(&maincpu_regs, y);
+#else
+    MOS6510_REGS_SET_Y(&maincpu_regs, y);
+#endif
+}
+
+void maincpu_set_sign(int n) {
+#ifdef C64DTV
+    MOS6510DTV_REGS_SET_SIGN(&maincpu_regs, n);
+#else
+    MOS6510_REGS_SET_SIGN(&maincpu_regs, n);
+#endif
+}
+
+void maincpu_set_zero(int z) {
+#ifdef C64DTV
+    MOS6510DTV_REGS_SET_ZERO(&maincpu_regs, z);
+#else
+    MOS6510_REGS_SET_ZERO(&maincpu_regs, z);
+#endif
+}
+
+void maincpu_set_carry(int c) {
+#ifdef C64DTV
+    MOS6510DTV_REGS_SET_CARRY(&maincpu_regs, c);
+#else
+    MOS6510_REGS_SET_CARRY(&maincpu_regs, c);
+#endif
+}
+
+void maincpu_set_interrupt(int i) {
+#ifdef C64DTV
+    MOS6510DTV_REGS_SET_INTERRUPT(&maincpu_regs, i);
+#else
+    MOS6510_REGS_SET_INTERRUPT(&maincpu_regs, i);
+#endif
+}
+
+unsigned int maincpu_get_pc(void) {
+#ifdef C64DTV
+    return MOS6510DTV_REGS_GET_PC(&maincpu_regs);
+#else
+    return MOS6510_REGS_GET_PC(&maincpu_regs);
+#endif
+}
+
+unsigned int maincpu_get_a(void) {
+#ifdef C64DTV
+    return MOS6510DTV_REGS_GET_A(&maincpu_regs);
+#else
+    return MOS6510_REGS_GET_A(&maincpu_regs);
+#endif
+}
+
+unsigned int maincpu_get_x(void) {
+#ifdef C64DTV
+    return MOS6510DTV_REGS_GET_X(&maincpu_regs);
+#else
+    return MOS6510_REGS_GET_X(&maincpu_regs);
+#endif
+}
+
+unsigned int maincpu_get_y(void) {
+#ifdef C64DTV
+    return MOS6510DTV_REGS_GET_Y(&maincpu_regs);
+#else
+    return MOS6510_REGS_GET_Y(&maincpu_regs);
+#endif
+}
+
+unsigned int maincpu_get_sp(void) {
+#ifdef C64DTV
+    return MOS6510DTV_REGS_GET_SP(&maincpu_regs);
+#else
+    return MOS6510_REGS_GET_SP(&maincpu_regs);
+#endif
+}
+
+/* ------------------------------------------------------------------------- */
+
+/* MAINCPU 1.3 snapshot module format:
+
+   type  | name                 | description
+   ------------------------------------------
+   CLOCK | main clock           |
+   UBYTE | a                    |
+   UBYTE | x                    |
+   UBYTE | y                    |
+   UBYTE | sp                   |
+   WORD  | pc                   |
+   UBYTE | status               |
+
+   BYTE  | r3                   |
+   BYTE  | r4                   |
+   BYTE  | r5                   |
+   BYTE  | r6                   |
+   BYTE  | r7                   |
+   BYTE  | r8                   |
+   BYTE  | r9                   |
+   BYTE  | r10                  |
+   BYTE  | r11                  |
+   BYTE  | r12                  |
+   BYTE  | r13                  |
+   BYTE  | r14                  |
+   BYTE  | r15                  |
+   BYTE  | ACM                  |
+   BYTE  | YXM                  |
+   4*BYTE| burst_cache          |
+   WORD  | burst_addr           |
+   DWORD | dtvclockneg          |
+
+   DWORD | last_opcode_info     |
+   DWORD | ane_log_level        |
+   DWORD | lxa_log_level        |
+
+   FIXME: DTV version should get different module name
+*/
+
 static char snap_module_name[] = "MAINCPU";
 #define SNAP_MAJOR 1
-#define SNAP_MINOR 1
+#define SNAP_MINOR 3
 
 int maincpu_snapshot_write_module(snapshot_t *s)
 {
     snapshot_module_t *m;
 
-    m = snapshot_module_create(s, snap_module_name, ((BYTE)SNAP_MAJOR),
-                               ((BYTE)SNAP_MINOR));
-    if (m == NULL)
+    m = snapshot_module_create(s, snap_module_name, ((uint8_t)SNAP_MAJOR),
+                               ((uint8_t)SNAP_MINOR));
+    if (m == NULL) {
         return -1;
+    }
 
 #ifdef C64DTV
-    if (0
-        || SMW_DW(m, maincpu_clk) < 0
-        || SMW_B(m, MOS6510DTV_REGS_GET_A(&maincpu_regs)) < 0
-        || SMW_B(m, MOS6510DTV_REGS_GET_X(&maincpu_regs)) < 0
-        || SMW_B(m, MOS6510DTV_REGS_GET_Y(&maincpu_regs)) < 0
-        || SMW_B(m, MOS6510DTV_REGS_GET_SP(&maincpu_regs)) < 0
-        || SMW_W(m, (WORD)MOS6510DTV_REGS_GET_PC(&maincpu_regs)) < 0
-        || SMW_B(m, (BYTE)MOS6510DTV_REGS_GET_STATUS(&maincpu_regs)) < 0
-        || SMW_B(m, MOS6510DTV_REGS_GET_R3(&maincpu_regs)) < 0
-        || SMW_B(m, MOS6510DTV_REGS_GET_R4(&maincpu_regs)) < 0
-        || SMW_B(m, MOS6510DTV_REGS_GET_R5(&maincpu_regs)) < 0
-        || SMW_B(m, MOS6510DTV_REGS_GET_R6(&maincpu_regs)) < 0
-        || SMW_B(m, MOS6510DTV_REGS_GET_R7(&maincpu_regs)) < 0
-        || SMW_B(m, MOS6510DTV_REGS_GET_R8(&maincpu_regs)) < 0
-        || SMW_B(m, MOS6510DTV_REGS_GET_R9(&maincpu_regs)) < 0
-        || SMW_B(m, MOS6510DTV_REGS_GET_R10(&maincpu_regs)) < 0
-        || SMW_B(m, MOS6510DTV_REGS_GET_R11(&maincpu_regs)) < 0
-        || SMW_B(m, MOS6510DTV_REGS_GET_R12(&maincpu_regs)) < 0
-        || SMW_B(m, MOS6510DTV_REGS_GET_R13(&maincpu_regs)) < 0
-        || SMW_B(m, MOS6510DTV_REGS_GET_R14(&maincpu_regs)) < 0
-        || SMW_B(m, MOS6510DTV_REGS_GET_R15(&maincpu_regs)) < 0
-        || SMW_B(m, MOS6510DTV_REGS_GET_ACM(&maincpu_regs)) < 0
-        || SMW_B(m, MOS6510DTV_REGS_GET_YXM(&maincpu_regs)) < 0
-        || SMW_BA(m, burst_cache, 4) < 0
-        || SMW_W(m, burst_addr) < 0
-        || SMW_DW(m, dtvclockneg) < 0
-        || SMW_DW(m, (DWORD)last_opcode_info) < 0)
+    if (SMW_CLOCK(m, maincpu_clk) < 0
+            || SMW_B(m, MOS6510DTV_REGS_GET_A(&maincpu_regs)) < 0
+            || SMW_B(m, MOS6510DTV_REGS_GET_X(&maincpu_regs)) < 0
+            || SMW_B(m, MOS6510DTV_REGS_GET_Y(&maincpu_regs)) < 0
+            || SMW_B(m, MOS6510DTV_REGS_GET_SP(&maincpu_regs)) < 0
+            || SMW_W(m, (uint16_t)MOS6510DTV_REGS_GET_PC(&maincpu_regs)) < 0
+            || SMW_B(m, (uint8_t)MOS6510DTV_REGS_GET_STATUS(&maincpu_regs)) < 0
+            || SMW_B(m, MOS6510DTV_REGS_GET_R3(&maincpu_regs)) < 0
+            || SMW_B(m, MOS6510DTV_REGS_GET_R4(&maincpu_regs)) < 0
+            || SMW_B(m, MOS6510DTV_REGS_GET_R5(&maincpu_regs)) < 0
+            || SMW_B(m, MOS6510DTV_REGS_GET_R6(&maincpu_regs)) < 0
+            || SMW_B(m, MOS6510DTV_REGS_GET_R7(&maincpu_regs)) < 0
+            || SMW_B(m, MOS6510DTV_REGS_GET_R8(&maincpu_regs)) < 0
+            || SMW_B(m, MOS6510DTV_REGS_GET_R9(&maincpu_regs)) < 0
+            || SMW_B(m, MOS6510DTV_REGS_GET_R10(&maincpu_regs)) < 0
+            || SMW_B(m, MOS6510DTV_REGS_GET_R11(&maincpu_regs)) < 0
+            || SMW_B(m, MOS6510DTV_REGS_GET_R12(&maincpu_regs)) < 0
+            || SMW_B(m, MOS6510DTV_REGS_GET_R13(&maincpu_regs)) < 0
+            || SMW_B(m, MOS6510DTV_REGS_GET_R14(&maincpu_regs)) < 0
+            || SMW_B(m, MOS6510DTV_REGS_GET_R15(&maincpu_regs)) < 0
+            || SMW_B(m, MOS6510DTV_REGS_GET_ACM(&maincpu_regs)) < 0
+            || SMW_B(m, MOS6510DTV_REGS_GET_YXM(&maincpu_regs)) < 0
+            || SMW_BA(m, burst_cache, 4) < 0
+            || SMW_W(m, burst_addr) < 0
+            || SMW_DW(m, dtvclockneg) < 0
+            || SMW_DW(m, (uint32_t)last_opcode_info) < 0
+            || SMW_DW(m, (uint32_t)ane_log_level) < 0
+            || SMW_DW(m, (uint32_t)lxa_log_level) < 0
+        ) {
         goto fail;
+    }
 #else
-    if (0
-        || SMW_DW(m, maincpu_clk) < 0
-        || SMW_B(m, MOS6510_REGS_GET_A(&maincpu_regs)) < 0
-        || SMW_B(m, MOS6510_REGS_GET_X(&maincpu_regs)) < 0
-        || SMW_B(m, MOS6510_REGS_GET_Y(&maincpu_regs)) < 0
-        || SMW_B(m, MOS6510_REGS_GET_SP(&maincpu_regs)) < 0
-        || SMW_W(m, (WORD)MOS6510_REGS_GET_PC(&maincpu_regs)) < 0
-        || SMW_B(m, (BYTE)MOS6510_REGS_GET_STATUS(&maincpu_regs)) < 0
-        || SMW_DW(m, (DWORD)last_opcode_info) < 0)
+    if (SMW_CLOCK(m, maincpu_clk) < 0
+            || SMW_B(m, MOS6510_REGS_GET_A(&maincpu_regs)) < 0
+            || SMW_B(m, MOS6510_REGS_GET_X(&maincpu_regs)) < 0
+            || SMW_B(m, MOS6510_REGS_GET_Y(&maincpu_regs)) < 0
+            || SMW_B(m, MOS6510_REGS_GET_SP(&maincpu_regs)) < 0
+            || SMW_W(m, (uint16_t)MOS6510_REGS_GET_PC(&maincpu_regs)) < 0
+            || SMW_B(m, (uint8_t)MOS6510_REGS_GET_STATUS(&maincpu_regs)) < 0
+            || SMW_DW(m, (uint32_t)last_opcode_info) < 0
+            || SMW_DW(m, (uint32_t)ane_log_level) < 0
+            || SMW_DW(m, (uint32_t)lxa_log_level) < 0
+        ) {
         goto fail;
+    }
 #endif
 
-    if (interrupt_write_snapshot(maincpu_int_status, m) < 0)
+    if (interrupt_write_snapshot(maincpu_int_status, m) < 0) {
         goto fail;
+    }
 
-    if (interrupt_write_new_snapshot(maincpu_int_status, m) < 0)
+    if (interrupt_write_new_snapshot(maincpu_int_status, m) < 0) {
         goto fail;
+    }
 
     return snapshot_module_close(m);
 
 fail:
-    if (m != NULL)
+    if (m != NULL) {
         snapshot_module_close(m);
+    }
     return -1;
 }
 
 int maincpu_snapshot_read_module(snapshot_t *s)
 {
-    BYTE a, x, y, sp, status;
+    uint8_t a, x, y, sp, status;
 #ifdef C64DTV
-    BYTE r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13, r14, r15, acm, yxm;
+    uint8_t r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13, r14, r15, acm, yxm;
 #endif
-    WORD pc;
-    BYTE major, minor;
+    uint16_t pc;
+    uint8_t major, minor;
     snapshot_module_t *m;
 
     m = snapshot_module_open(s, snap_module_name, &major, &minor);
-    if (m == NULL)
+    if (m == NULL) {
         return -1;
+    }
 
     /* FIXME: This is a mighty kludge to prevent VIC-II from stealing the
        wrong number of cycles.  */
     maincpu_rmw_flag = 0;
 
-    /* XXX: Assumes `CLOCK' is the same size as a `DWORD'.  */
-    if (0
-        || SMR_DW(m, &maincpu_clk) < 0
-        || SMR_B(m, &a) < 0
-        || SMR_B(m, &x) < 0
-        || SMR_B(m, &y) < 0
-        || SMR_B(m, &sp) < 0
-        || SMR_W(m, &pc) < 0
-        || SMR_B(m, &status) < 0
+    if (SMR_CLOCK(m, &maincpu_clk) < 0
+            || SMR_B(m, &a) < 0
+            || SMR_B(m, &x) < 0
+            || SMR_B(m, &y) < 0
+            || SMR_B(m, &sp) < 0
+            || SMR_W(m, &pc) < 0
+            || SMR_B(m, &status) < 0
 #ifdef C64DTV
-        || SMR_B(m, &r3) < 0
-        || SMR_B(m, &r4) < 0
-        || SMR_B(m, &r5) < 0
-        || SMR_B(m, &r6) < 0
-        || SMR_B(m, &r7) < 0
-        || SMR_B(m, &r8) < 0
-        || SMR_B(m, &r9) < 0
-        || SMR_B(m, &r10) < 0
-        || SMR_B(m, &r11) < 0
-        || SMR_B(m, &r12) < 0
-        || SMR_B(m, &r13) < 0
-        || SMR_B(m, &r14) < 0
-        || SMR_B(m, &r15) < 0
-        || SMR_B(m, &acm) < 0
-        || SMR_B(m, &yxm) < 0
-        || SMR_BA(m, burst_cache, 4) < 0
-        || SMR_W(m, &burst_addr) < 0
-        || SMR_DW_INT(m, &dtvclockneg) < 0
+            || SMR_B(m, &r3) < 0
+            || SMR_B(m, &r4) < 0
+            || SMR_B(m, &r5) < 0
+            || SMR_B(m, &r6) < 0
+            || SMR_B(m, &r7) < 0
+            || SMR_B(m, &r8) < 0
+            || SMR_B(m, &r9) < 0
+            || SMR_B(m, &r10) < 0
+            || SMR_B(m, &r11) < 0
+            || SMR_B(m, &r12) < 0
+            || SMR_B(m, &r13) < 0
+            || SMR_B(m, &r14) < 0
+            || SMR_B(m, &r15) < 0
+            || SMR_B(m, &acm) < 0
+            || SMR_B(m, &yxm) < 0
+            || SMR_BA(m, burst_cache, 4) < 0
+            || SMR_W(m, &burst_addr) < 0
+            || SMR_DW_INT(m, &dtvclockneg) < 0
 #endif
-        || SMR_DW_UINT(m, &last_opcode_info) < 0)
+            || SMR_DW_UINT(m, &last_opcode_info) < 0
+            || SMR_DW_INT(m, &ane_log_level) < 0
+            || SMR_DW_INT(m, &lxa_log_level) < 0
+        ) {
         goto fail;
+    }
 
 #ifdef C64DTV
     MOS6510DTV_REGS_SET_A(&maincpu_regs, a);
@@ -674,8 +975,8 @@ int maincpu_snapshot_read_module(snapshot_t *s)
     return snapshot_module_close(m);
 
 fail:
-    if (m != NULL)
+    if (m != NULL) {
         snapshot_module_close(m);
+    }
     return -1;
 }
-

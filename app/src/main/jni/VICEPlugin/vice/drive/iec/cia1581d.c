@@ -33,7 +33,6 @@
 #include "ciad.h"
 #include "debug.h"
 #include "drive.h"
-#include "drivecpu.h"
 #include "drivetypes.h"
 #include "iecbus.h"
 #include "iecdrive.h"
@@ -51,39 +50,45 @@ typedef struct drivecia1581_context_s {
 } drivecia1581_context_t;
 
 
-void cia1581_store(drive_context_t *ctxptr, WORD addr, BYTE data)
+void cia1581_store(diskunit_context_t *ctxptr, uint16_t addr, uint8_t data)
 {
+    ctxptr->cpu->cpu_last_data = data;
     ciacore_store(ctxptr->cia1581, addr, data);
 }
 
-BYTE cia1581_read(drive_context_t *ctxptr, WORD addr)
+uint8_t cia1581_read(diskunit_context_t *ctxptr, uint16_t addr)
 {
-    return ciacore_read(ctxptr->cia1581, addr);
+    return ctxptr->cpu->cpu_last_data = ciacore_read(ctxptr->cia1581, addr);
 }
 
-BYTE cia1581_peek(drive_context_t *ctxptr, WORD addr)
+uint8_t cia1581_peek(diskunit_context_t *ctxptr, uint16_t addr)
 {
     return ciacore_peek(ctxptr->cia1581, addr);
 }
 
+int cia1581_dump(diskunit_context_t *ctxptr, uint16_t addr)
+{
+    ciacore_dump(ctxptr->cia1581);
+    return 0;
+}
+
 static void cia_set_int_clk(cia_context_t *cia_context, int value, CLOCK clk)
 {
-    drive_context_t *drive_context;
+    diskunit_context_t *dc;
 
-    drive_context = (drive_context_t *)(cia_context->context);
+    dc = (diskunit_context_t *)(cia_context->context);
 
-    interrupt_set_irq(drive_context->cpu->int_status, cia_context->int_num,
+    interrupt_set_irq(dc->cpu->int_status, cia_context->int_num,
                       value, clk);
 }
 
 static void cia_restore_int(cia_context_t *cia_context, int value)
 {
-    drive_context_t *drive_context;
+    diskunit_context_t *dc;
 
-    drive_context = (drive_context_t *)(cia_context->context);
+    dc = (diskunit_context_t *)(cia_context->context);
 
-    interrupt_restore_irq(drive_context->cpu->int_status,
-                            cia_context->int_num, value);
+    interrupt_restore_irq(dc->cpu->int_status, (int)(cia_context->int_num), value);
 }
 
 /*************************************************************************
@@ -107,7 +112,7 @@ static void pulse_ciapc(cia_context_t *cia_context, CLOCK rclk)
 #define PRE_READ_CIA
 #define PRE_PEEK_CIA
 
-static void undump_ciapa(cia_context_t *cia_context, CLOCK rclk, BYTE b)
+static void undump_ciapa(cia_context_t *cia_context, CLOCK rclk, uint8_t b)
 {
     drivecia1581_context_t *cia1581p;
 
@@ -116,29 +121,30 @@ static void undump_ciapa(cia_context_t *cia_context, CLOCK rclk, BYTE b)
     cia1581p->drive->led_status = (b & 0x40) ? 1 : 0;
 }
 
-static void undump_ciapb(cia_context_t *cia_context, CLOCK rclk, BYTE b)
+static void undump_ciapb(cia_context_t *cia_context, CLOCK rclk, uint8_t b)
 {
 }
 
-static void store_ciapa(cia_context_t *cia_context, CLOCK rclk, BYTE byte)
+static void store_ciapa(cia_context_t *cia_context, CLOCK rclk, uint8_t byte)
 {
     drivecia1581_context_t *cia1581p;
-    drive_context_t *drive;
+    diskunit_context_t *drive;
 
     cia1581p = (drivecia1581_context_t *)(cia_context->prv);
-    drive = (drive_context_t *)(cia_context->context);
+    drive = (diskunit_context_t *)(cia_context->context);
 
     wd1770_set_side(drive->wd1770, (byte & 0x01) ? 0 : 1);
     wd1770_set_motor(drive->wd1770, (byte & 0x04) ? 0 : 1);
 
     cia1581p->drive->led_status = (byte & 0x40) ? 1 : 0;
-    if (cia1581p->drive->led_status)
+    if (cia1581p->drive->led_status) {
         cia1581p->drive->led_active_ticks += *(cia_context->clk_ptr)
-            - cia1581p->drive->led_last_change_clk;
+                                             - cia1581p->drive->led_last_change_clk;
+    }
     cia1581p->drive->led_last_change_clk = *(cia_context->clk_ptr);
 }
 
-static void store_ciapb(cia_context_t *cia_context, CLOCK rclk, BYTE byte)
+static void store_ciapb(cia_context_t *cia_context, CLOCK rclk, uint8_t byte)
 {
     drivecia1581_context_t *cia1581p;
 
@@ -146,69 +152,73 @@ static void store_ciapb(cia_context_t *cia_context, CLOCK rclk, BYTE byte)
 
     if (byte != cia_context->old_pb) {
         if (cia1581p->iecbus != NULL) {
-            BYTE *drive_bus, *drive_data;
+            uint8_t *drive_bus, *drive_data;
             unsigned int unit;
 
             drive_bus = &(cia1581p->iecbus->drv_bus[cia1581p->number + 8]);
             drive_data = &(cia1581p->iecbus->drv_data[cia1581p->number + 8]);
 
-            *drive_data = ~byte;
-            *drive_bus = ((((*drive_data) << 3) & 0x40)
-                | (((*drive_data) << 6)
-                & (((*drive_data) | cia1581p->iecbus->cpu_bus) << 3) & 0x80));
+            *drive_data = (uint8_t)~byte;
+            *drive_bus = (uint8_t)(((((*drive_data) << 3) & 0x40)
+                        | (((*drive_data) << 6)
+                            & (((*drive_data)
+                                    | cia1581p->iecbus->cpu_bus) << 3) & 0x80)));
 
             cia1581p->iecbus->cpu_port = cia1581p->iecbus->cpu_bus;
-            for (unit = 4; unit < 8+DRIVE_NUM; unit++)
+            for (unit = 4; unit < 8 + NUM_DISK_UNITS; unit++) {
                 cia1581p->iecbus->cpu_port
                     &= cia1581p->iecbus->drv_bus[unit];
+            }
 
-            cia1581p->iecbus->drv_port
-                = (((cia1581p->iecbus->cpu_port >> 4) & 0x4)
-                | (cia1581p->iecbus->cpu_port >> 7)
-                | ((cia1581p->iecbus->cpu_bus << 3) & 0x80));
+            cia1581p->iecbus->drv_port =
+                (uint8_t)((((cia1581p->iecbus->cpu_port >> 4) & 0x4)
+                            | (cia1581p->iecbus->cpu_port >> 7)
+                            | ((cia1581p->iecbus->cpu_bus << 3) & 0x80)));
         } else {
-            iec_drive_write((BYTE)(~byte), cia1581p->number);
+            iec_drive_write((uint8_t)(~byte), cia1581p->number);
         }
 
         iec_fast_drive_direction(byte & 0x20, cia1581p->number);
     }
 }
 
-static BYTE read_ciapa(cia_context_t *cia_context)
+static uint8_t read_ciapa(cia_context_t *cia_context)
 {
-    drive_context_t *drive_context;
+    diskunit_context_t *dc;
     drivecia1581_context_t *cia1581p;
-    BYTE tmp;
+    uint8_t tmp;
 
     cia1581p = (drivecia1581_context_t *)(cia_context->prv);
-    drive_context = (drive_context_t *)(cia_context->context);
+    dc = (diskunit_context_t *)(cia_context->context);
 
-    tmp = 8 * (cia1581p->number);
+    tmp = (uint8_t)(8 * (cia1581p->number));
 
-    if (!wd1770_disk_change(drive_context->wd1770))
+    if (!wd1770_disk_change(dc->wd1770)) {
         tmp |= 0x80;
+    }
 
-    return (tmp & ~(cia_context->c_cia[CIA_DDRA]))
-           | (cia_context->c_cia[CIA_PRA] & cia_context->c_cia[CIA_DDRA]);
+    return (uint8_t)((tmp & ~(cia_context->c_cia[CIA_DDRA]))
+            | (cia_context->c_cia[CIA_PRA] & cia_context->c_cia[CIA_DDRA]));
 }
 
-static BYTE read_ciapb(cia_context_t *cia_context)
+static uint8_t read_ciapb(cia_context_t *cia_context)
 {
     drivecia1581_context_t *cia1581p;
 
     cia1581p = (drivecia1581_context_t *)(cia_context->prv);
 
     if (cia1581p->iecbus != NULL) {
-        BYTE *drive_port;
+        uint8_t *drive_port;
 
         drive_port = &(cia1581p->iecbus->drv_port);
 
-        return (((cia_context->c_cia[CIA_PRB] & 0x1a) | (*drive_port)) ^ 0x85)
-            | (cia1581p->drive->read_only ? 0 : 0x40);
+        return (uint8_t)((((cia_context->c_cia[CIA_PRB] & 0x1a)
+                        | (*drive_port)) ^ 0x85)
+                | (cia1581p->drive->read_only ? 0 : 0x40));
     } else {
-        return (((cia_context->c_cia[CIA_PRB] & 0x1a)
-            | iec_drive_read(cia1581p->number)) ^ 0x85)
-            | (cia1581p->drive->read_only ? 0 : 0x40);
+        return (uint8_t)((((cia_context->c_cia[CIA_PRB] & 0x1a)
+                        | iec_drive_read(cia1581p->number)) ^ 0x85)
+                | (cia1581p->drive->read_only ? 0 : 0x40));
     }
 }
 
@@ -220,7 +230,7 @@ static void read_sdr(cia_context_t *cia_context)
 {
 }
 
-static void store_sdr(cia_context_t *cia_context, BYTE byte)
+static void store_sdr(cia_context_t *cia_context, uint8_t byte)
 {
     drivecia1581_context_t *cia1581p;
 
@@ -229,18 +239,18 @@ static void store_sdr(cia_context_t *cia_context, BYTE byte)
     iec_fast_drive_write(byte, cia1581p->number);
 }
 
-void cia1581_init(drive_context_t *ctxptr)
+void cia1581_init(diskunit_context_t *ctxptr)
 {
     ciacore_init(ctxptr->cia1581, ctxptr->cpu->alarm_context,
-                 ctxptr->cpu->int_status, ctxptr->cpu->clk_guard);
+                 ctxptr->cpu->int_status);
 }
 
-void cia1581_setup_context(drive_context_t *ctxptr)
+void cia1581_setup_context(diskunit_context_t *ctxptr)
 {
     drivecia1581_context_t *cia1581p;
     cia_context_t *cia;
 
-    ctxptr->cia1581 = lib_calloc(1,sizeof(cia_context_t));
+    ctxptr->cia1581 = lib_calloc(1, sizeof(cia_context_t));
     cia = ctxptr->cia1581;
 
     cia->prv = lib_malloc(sizeof(drivecia1581_context_t));
@@ -252,15 +262,16 @@ void cia1581_setup_context(drive_context_t *ctxptr)
     cia->rmw_flag = &(ctxptr->cpu->rmw_flag);
     cia->clk_ptr = ctxptr->clk_ptr;
 
-    cia->todticks = 100000; /* incorrect, J1 closed = 1, J1 open, no ticks at all */
+    /* FIXME: incorrect, J1 closed = 1, J1 open, no ticks at all */
+    cia1581_set_timing(cia, 1000000, 50);
 
     ciacore_setup_context(cia);
 
     cia->debugFlag = 0;
     cia->irq_line = IK_IRQ;
-    cia->myname = lib_msprintf("CIA1581D%d", ctxptr->mynumber);
+    cia->myname = lib_msprintf("CIA1581D%u", ctxptr->mynumber);
 
-    cia1581p->drive = ctxptr->drive;
+    cia1581p->drive = ctxptr->drives[0];
     cia1581p->iecbus = iecbus_drive_port();
 
     cia->undump_ciapa = undump_ciapa;
@@ -281,3 +292,11 @@ void cia1581_setup_context(drive_context_t *ctxptr)
     cia->pre_peek = NULL;
 }
 
+void cia1581_set_timing(cia_context_t *cia_context, int tickspersec, int powerfreq)
+{
+    cia_context->power_freq = powerfreq;
+    cia_context->ticks_per_sec = (CLOCK)tickspersec;
+    cia_context->todticks = tickspersec / powerfreq;
+    cia_context->power_tickcounter = 0;
+    cia_context->power_ticks = 0;
+}

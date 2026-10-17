@@ -3,8 +3,9 @@
  *
  * Written by
  *  Ettore Perazzoli <ettore@comm2000.it>
- *  André Fachat <fachat@physik.tu-chemnitz.de>
+ *  Andre Fachat <fachat@physik.tu-chemnitz.de>
  *  Andreas Boose <viceteam@t-online.de>
+ *  Marco van den Heuvel <blackystardust68@yahoo.com>
  *
  * This file is part of VICE, the Versatile Commodore Emulator.
  * See README for copyright notice.
@@ -38,42 +39,34 @@
 #define PET_ROM_SIZE            0x8000
 #define PET_CHARGEN_ROM_SIZE    0x4000
 
-#define PET_KERNAL1_CHECKSUM    3236
-#define PET_KERNAL2_CHECKSUM    31896
-#define PET_KERNAL4_CHECKSUM    53017
-
-#define PET_EDIT1G_CHECKSUM     51858
-#define PET_EDIT2G_CHECKSUM     64959
-#define PET_EDIT2B_CHECKSUM     1514
-#define PET_EDIT4G40_CHECKSUM   14162
-#define PET_EDIT4B40_CHECKSUM   27250
-#define PET_EDIT4B80_CHECKSUM   21166
-
-extern BYTE mem_chargen_rom[PET_CHARGEN_ROM_SIZE];
-extern BYTE mem_rom[PET_ROM_SIZE];
-extern BYTE mem_6809rom[];
+extern uint8_t mem_chargen_rom[PET_CHARGEN_ROM_SIZE];
+extern uint8_t mem_rom[PET_ROM_SIZE];
+extern uint8_t mem_6809rom[];
 
 struct petres_s;
 struct petinfo_s;
 
-extern int pet_mem_init_resources(void);
-extern int pet_mem_init_cmdline_options(void);
+int pet_mem_init_resources(void);
+int pet_mem_init_cmdline_options(void);
 
-extern void mem_initialize_memory(void);
-extern void get_mem_access_tables(read_func_ptr_t **read, store_func_ptr_t **write, BYTE ***base, int **limit);
-extern void invalidate_mem_limit(int lower, int upper);
-extern void petmem_check_info(struct petres_s *pi);
+void mem_initialize_memory(void);
+void get_mem_access_tables(read_func_ptr_t **read, store_func_ptr_t **write, uint8_t ***base, int **limit);
+int petmem_get_screen_columns(void);
+int petmem_get_rom_columns(void);
+void petmem_check_info(struct petres_s *pi);
 
-extern void petmem_reset(void);
-extern int petmem_superpet_diag(void);
+void petmem_reset(void);
+int petmem_superpet_diag(void);
+void petmem_set_vidmem(void);
 
-extern int petmem_dump(FILE *fp);
-extern int petmem_undump(FILE *fp);
+int petmem_dump(FILE *fp);
+int petmem_undump(FILE *fp);
 
-extern int petmem_set_conf_info(struct petinfo_s *pi);
+int petmem_set_conf_info(const struct petinfo_s *pi);
 
 extern int spet_ramen;
 extern int spet_bank;
+extern void set_spet_bank(int bank);
 extern int spet_ctrlwp;
 extern int spet_diag;
 extern int spet_ramwp;
@@ -89,19 +82,26 @@ struct dongle6702_s {
 
 extern struct dongle6702_s dongle6702;
 
-extern BYTE petmem_map_reg;
-extern BYTE petmem_2001_buf_ef[];
+extern uint8_t petmem_map_reg;
+extern uint8_t petmem_ramON;
+extern uint8_t petmem_2001_buf_ef[];
 
 extern read_func_t mem6809_read;
 extern store_func_t mem6809_store;
-extern void mem6809_store16(WORD addr, WORD value);
-extern WORD mem6809_read16(WORD addr);
-#ifdef H6309
-extern void mem6809_store32(WORD addr, DWORD value);
-extern DWORD mem6809_read32(WORD addr);
-#endif
-extern void mem_initialize_memory_6809(void);
 
-extern int superpet_sync(void);
+void mem6809_store16(uint16_t addr, uint16_t value);
+uint16_t mem6809_read16(uint16_t addr);
+
+#ifdef H6309
+void mem6809_store32(uint16_t addr, uint32_t value);
+uint32_t mem6809_read32(uint16_t addr);
+#endif
+
+void mem_initialize_memory_6809(void);
+void ramsel_changed(void);
+
+int superpet_sync(void);
+
+uint8_t read_unused(uint16_t addr);
 
 #endif

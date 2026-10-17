@@ -3,7 +3,7 @@
  *
  * Written by
  *  Ettore Perazzoli <ettore@comm2000.it>
- *  André Fachat <fachat@physik.tu-chemnitz.de>
+ *  Andre Fachat <fachat@physik.tu-chemnitz.de>
  *
  * 16/24bpp support added by
  *  Steven Tieu <stieu@physics.ubc.ca>
@@ -35,13 +35,15 @@
 
 #include "types.h"
 
-extern void crtc_store(WORD addr, BYTE value);
-extern BYTE crtc_read(WORD addr);
-extern BYTE crtc_peek(WORD addr);
+void crtc_store(uint16_t addr, uint8_t value);
+uint8_t crtc_read(uint16_t addr);
+uint8_t crtc_peek(uint16_t addr);
+int crtc_dump(void);
 
-extern void crtc_set_char(int crom);
+uint8_t crtc_peek_register(uint8_t regno);
 
-extern void crtc_update_memory_ptrs(void);
+void crtc_set_char(int crom);
+
+void crtc_update_memory_ptrs(void);
 
 #endif
-

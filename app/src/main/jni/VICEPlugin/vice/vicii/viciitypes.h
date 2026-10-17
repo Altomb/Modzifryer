@@ -55,7 +55,7 @@
 
 /* Available video modes.  The number is given by
    ((vicii.regs[0x11] & 0x60) | (vicii.regs[0x16] & 0x10)) >> 4.  */
-/* Also for DTV: 
+/* Also for DTV:
    | (vicii.regs[0x3c] & 0x04)<<1 | (vicii.regs[0x3c] & 0x01)<<3
    + FRED/FRED2, CHUNKY/PIXEL/ILLEGAL_LINEAR separation */
 enum vicii_video_mode_s {
@@ -85,13 +85,13 @@ enum vicii_video_mode_s {
 typedef enum vicii_video_mode_s vicii_video_mode_t;
 
 #define VICII_IS_ILLEGAL_MODE(x) ((x) >= VICII_ILLEGAL_TEXT_MODE \
-                                 && (x) <= VICII_ILLEGAL_BITMAP_MODE_2)
+                                  && (x) <= VICII_ILLEGAL_BITMAP_MODE_2)
 
 #define VICII_IS_BITMAP_MODE(x)  ((x) & 0x02)
 
 #define VICII_IS_TEXT_MODE(x)    ((x) == VICII_NORMAL_TEXT_MODE \
-                                 || (x) == VICII_MULTICOLOR_TEXT_MODE \
-                                 || (x) == VICII_EXTENDED_TEXT_MODE)
+                                  || (x) == VICII_MULTICOLOR_TEXT_MODE \
+                                  || (x) == VICII_EXTENDED_TEXT_MODE)
 
 /* The actual modes with modulo bug (possibly incomplete) */
 /*
@@ -130,24 +130,21 @@ typedef enum vicii_video_mode_s vicii_video_mode_t;
 /* Current vertical position of the raster.  Unlike `rasterline', which is
    only accurate if a pending drawing event has been served, this is
    guarranteed to be always correct.  It is a bit slow, though.  */
-#define VICII_RASTER_Y(clk)        ((unsigned int)((clk) \
-                                   / vicii.cycles_per_line) \
-                                   % vicii.screen_height)
+#define VICII_RASTER_Y(clk)        ((unsigned int)(((clk) / vicii.cycles_per_line) % vicii.screen_height))
 
 /* Cycle # within the current line.  */
-#define VICII_RASTER_CYCLE(clk)    ((unsigned int)((clk) \
-                                   % vicii.cycles_per_line))
+#define VICII_RASTER_CYCLE(clk)    ((unsigned int)((clk) % vicii.cycles_per_line))
 /* DTV Cycle # within the current line.
    Handles the "hole" on PAL systems at cycles 54-55 and the 1 cycle shift */
-#define VICIIDTV_RASTER_CYCLE(clk) ((unsigned int)( (((clk)-1) % vicii.cycles_per_line) + ((vicii.cycles_per_line == 63 && (((clk)-1) % vicii.cycles_per_line) > 53)?2:0)) )
+#define VICIIDTV_RASTER_CYCLE(clk) ((unsigned int)((((clk) - 1) % vicii.cycles_per_line) + ((vicii.cycles_per_line == 63 && (((clk) - 1) % vicii.cycles_per_line) > 53) ? 2 : 0)))
 
 /* `clk' value for the beginning of the current line.  */
 #define VICII_LINE_START_CLK(clk)  (((clk) / vicii.cycles_per_line) \
-                                   * vicii.cycles_per_line)
+                                    * vicii.cycles_per_line)
 
 /* # of the previous and next raster line.  Handles wrap over.  */
 #define VICII_PREVIOUS_LINE(line)  (((line) > 0) \
-                                   ? (line) - 1 : vicii.screen_height - 1)
+                                    ? (line) - 1 : vicii.screen_height - 1)
 #define VICII_NEXT_LINE(line)      (((line) + 1) % vicii.screen_height)
 
 /* VIC-II structures.  This is meant to be used by VIC-II modules
@@ -176,7 +173,7 @@ typedef enum vicii_idle_data_location_s vicii_idle_data_location_t;
 
 struct idle_3fff_s {
     CLOCK cycle;
-    BYTE value;
+    uint8_t value;
 };
 typedef struct idle_3fff_s idle_3fff_t;
 
@@ -191,7 +188,7 @@ struct vicii_s {
     raster_t raster;
 
     /* VIC-II registers.  */
-    BYTE regs[0x50];
+    uint8_t regs[0x50];
 
     /* DTV Linear Counters */
     int counta;
@@ -202,7 +199,7 @@ struct vicii_s {
     int countb_step;
 
     /* DTV Palette lookup */
-    BYTE dtvpalette[256];
+    uint8_t dtvpalette[256];
 
     /* DTV raster IRQ */
     int raster_irq_offset;
@@ -217,50 +214,50 @@ struct vicii_s {
     /* Pointer to the base of RAM seen by the VIC-II.  */
     /* address is base of 64k bank. vbank adds 0/16k/32k/48k to get actual
        video address */
-    BYTE *ram_base_phi1;                /* = VIC-II address during Phi1; */
-    BYTE *ram_base_phi2;                /* = VIC-II address during Phi2; */
+    uint8_t *ram_base_phi1;                /* = VIC-II address during Phi1; */
+    uint8_t *ram_base_phi2;                /* = VIC-II address during Phi2; */
 
     /* valid VIC-II address bits for Phi1 and Phi2. After masking
        the address, it is or'd with the offset value to set always-1 bits */
-    WORD vaddr_mask_phi1;            /* mask of valid address bits */
-    WORD vaddr_mask_phi2;            /* mask of valid address bits */
-    WORD vaddr_offset_phi1;          /* mask of address bits always set */
-    WORD vaddr_offset_phi2;          /* mask of address bits always set */
+    uint16_t vaddr_mask_phi1;            /* mask of valid address bits */
+    uint16_t vaddr_mask_phi2;            /* mask of valid address bits */
+    uint16_t vaddr_offset_phi1;          /* mask of address bits always set */
+    uint16_t vaddr_offset_phi2;          /* mask of address bits always set */
 
     /* Those two values determine where in the address space the chargen
        ROM is mapped. Use mask=0x7000, value=0x1000 for the C64. */
-    WORD vaddr_chargen_mask_phi1;    /* address bits to comp. for chargen */
-    WORD vaddr_chargen_mask_phi2;    /* address bits to comp. for chargen */
-    WORD vaddr_chargen_value_phi1;   /* compare value for chargen */
-    WORD vaddr_chargen_value_phi2;   /* compare value for chargen */
+    uint16_t vaddr_chargen_mask_phi1;    /* address bits to comp. for chargen */
+    uint16_t vaddr_chargen_mask_phi2;    /* address bits to comp. for chargen */
+    uint16_t vaddr_chargen_value_phi1;   /* compare value for chargen */
+    uint16_t vaddr_chargen_value_phi2;   /* compare value for chargen */
 
     /* Video memory pointers.  Changed for drawing.  */
-    BYTE *screen_ptr;
-    BYTE *chargen_ptr;
+    uint8_t *screen_ptr;
+    uint8_t *chargen_ptr;
 
     /* Pointer to the bitmap (lower part)  */
-    BYTE *bitmap_low_ptr;
+    uint8_t *bitmap_low_ptr;
 
     /* Pointer to the bitmap (higher part)  */
-    BYTE *bitmap_high_ptr;
+    uint8_t *bitmap_high_ptr;
 
     /* Video memory pointers.  Changed immediately.  */
-    BYTE *screen_base_phi1;
-    BYTE *screen_base_phi2;
+    uint8_t *screen_base_phi1;
+    uint8_t *screen_base_phi2;
 
     /* Offset to the vbuf/cbuf buffer */
     int buf_offset;
 
     /* Screen memory buffers (chars and color).  */
-    BYTE vbuf[VICII_SCREEN_TEXTCOLS];
-    BYTE cbuf[VICII_SCREEN_TEXTCOLS];
+    uint8_t vbuf[VICII_SCREEN_TEXTCOLS];
+    uint8_t cbuf[VICII_SCREEN_TEXTCOLS];
 
     /* If this flag is set, bad lines (DMA's) can happen.  */
     int allow_bad_lines;
 
     /* Sprite-sprite and sprite-background collision registers.  */
-    BYTE sprite_sprite_collisions;
-    BYTE sprite_background_collisions;
+    uint8_t sprite_sprite_collisions;
+    uint8_t sprite_background_collisions;
 
     /* Extended background colors (1, 2 and 3).  */
     int ext_background_color[3];
@@ -384,8 +381,11 @@ struct vicii_s {
 
     /* Value to store before DMA.  */
     CLOCK store_clk;
-    WORD store_addr;
-    BYTE store_value;
+    uint16_t store_addr;
+    uint8_t store_value;
+
+    /* Read-modify-write instruction detection */
+    CLOCK last_write_clk;
 
     /* Stores to 0x3fff idle location (used for idle sprite fetch).  */
     unsigned int num_idle_3fff;
@@ -405,8 +405,11 @@ struct vicii_s {
     /* C128 2mhz cycle counter */
     int half_cycles;
 
+    /* Last value put on the bus by the C128 CPU in 2mhz mode */
+    uint8_t last_cpu_val;
+
     /* Last value read from VICII (used for RMW access).  */
-    BYTE last_read;
+    uint8_t last_read;
 
     /* Video chip capabilities.  */
     struct video_chip_cap_s *video_chip_cap;
@@ -430,24 +433,24 @@ struct vicii_s {
 
     /* Flag: DTV high color */
     unsigned int high_color;
-    
+
     /* Flag: DTV border off */
     unsigned int border_off;
 
     /* Pointer to color ram */
-    BYTE *color_ram_ptr;
+    uint8_t *color_ram_ptr;
 };
 typedef struct vicii_s vicii_t;
 
 extern vicii_t vicii;
 
 /* Private function calls, used by the other VIC-II modules.  */
-extern void vicii_update_memory_ptrs(unsigned int cycle);
-extern void vicii_update_video_mode(unsigned int cycle);
-extern void vicii_raster_draw_alarm_handler(CLOCK offset, void *data);
-extern void vicii_handle_pending_alarms(int num_write_cycles);
-extern void vicii_delay_clk(void);
-extern void vicii_delay_oldclk(CLOCK num);
+void vicii_update_memory_ptrs(unsigned int cycle);
+void vicii_update_video_mode(unsigned int cycle);
+void vicii_raster_draw_alarm_handler(CLOCK offset, void *data);
+void vicii_handle_pending_alarms(CLOCK num_write_cycles);
+void vicii_delay_clk(void);
+void vicii_delay_oldclk(CLOCK num);
 
 /* Debugging options.  */
 
@@ -474,4 +477,3 @@ extern void vicii_delay_oldclk(CLOCK num);
 #endif
 
 #endif
-

@@ -4,6 +4,9 @@
  * Written by
  *  Andreas Boose <viceteam@t-online.de>
  *
+ * Multi-drive and DHD enhancements by
+ *  Roberto Muscedere <rmusced@uwindsor.ca>
+ *
  * This file is part of VICE, the Versatile Commodore Emulator.
  * See README for copyright notice.
  *
@@ -46,10 +49,18 @@
 static log_t vdrive_internal_log = LOG_DEFAULT;
 
 
+/*
+Called by 2 things:
+disk preview tool - read_only mode is 1 (imagecontents/diskcontents.c)
+disk create tool - read_only is 0 (in this file)
+when read_only is 0, the image is expected to be created regardless of
+errors.
+*/
 vdrive_t *vdrive_internal_open_fsimage(const char *name, unsigned int read_only)
 {
     vdrive_t *vdrive;
     disk_image_t *image;
+    int ret;
 
     image = lib_malloc(sizeof(disk_image_t));
 
@@ -62,7 +73,7 @@ vdrive_t *vdrive_internal_open_fsimage(const char *name, unsigned int read_only)
 
     disk_image_media_create(image);
 
-    disk_image_name_set(image, lib_stralloc(name));
+    disk_image_name_set(image, name);
 
     if (disk_image_open(image) < 0) {
         disk_image_media_destroy(image);
@@ -77,7 +88,20 @@ vdrive_t *vdrive_internal_open_fsimage(const char *name, unsigned int read_only)
 
     vdrive_device_setup(vdrive, 100);
     vdrive->image = image;
-    vdrive_attach_image(image, 100, vdrive);
+    ret = vdrive_attach_image(image, 100, 0, vdrive);
+
+    /* if we can't attached to it IN READ MODE, we should return NULL */
+    if (ret && read_only) {
+        vdrive_device_shutdown(vdrive);
+        lib_free(vdrive);
+        disk_image_media_destroy(image);
+        P64ImageDestroy((void*)image->p64);
+        lib_free(image->p64);
+        lib_free(image);
+        return NULL;
+    }
+
+    /* otherwise return the vdrive context, hoping everything will work out */
     return vdrive;
 }
 
@@ -85,18 +109,15 @@ int vdrive_internal_close_disk_image(vdrive_t *vdrive)
 {
     disk_image_t *image = vdrive->image;
 
-    if (vdrive->unit != 8
-      && vdrive->unit != 9
-      && vdrive->unit != 10
-      && vdrive->unit != 11)
-    {
-        vdrive_detach_image(image, 100, vdrive);
+    if (vdrive->unit != 8 && vdrive->unit != 9 && vdrive->unit != 10 && vdrive->unit != 11) {
+        vdrive_detach_image(image, 100, 0, vdrive);
 
-        if (disk_image_close(image) < 0)
-          return -1;
+        if (disk_image_close(image) < 0) {
+            return -1;
+        }
 
         P64ImageDestroy((void*)image->p64);
-        
+
         disk_image_media_destroy(image);
         vdrive_device_shutdown(vdrive);
         lib_free(image->p64);
@@ -120,14 +141,17 @@ static int vdrive_internal_format_disk_image(const char *filename,
     machine_drive_flush();
     vdrive = vdrive_internal_open_fsimage(filename, 0);
 
-    if (vdrive == NULL)
+    if (vdrive == NULL) {
         return -1;
+    }
 
-    if (vdrive_command_format(vdrive, format_name) != CBMDOS_IPE_OK)
+    if (vdrive_command_format(vdrive, format_name) != CBMDOS_IPE_OK) {
         status = -1;
+    }
 
-    if (vdrive_internal_close_disk_image(vdrive) < 0)
+    if (vdrive_internal_close_disk_image(vdrive) < 0) {
         return -1;
+    }
 
     return status;
 }
@@ -136,10 +160,22 @@ int vdrive_internal_create_format_disk_image(const char *filename,
                                              const char *diskname,
                                              unsigned int type)
 {
-    if (cbmimage_create_image(filename, type) < 0)
-        return -1;
-    if (vdrive_internal_format_disk_image(filename, diskname) < 0)
-        return -1;
+    switch (type) {
+        case DISK_IMAGE_TYPE_D1M:
+        case DISK_IMAGE_TYPE_D2M:
+        case DISK_IMAGE_TYPE_D4M:
+            return cbmimage_create_dxm_image(filename, diskname, type);
+            break;
+        case DISK_IMAGE_TYPE_DHD:
+            return cbmimage_create_dhd_image(filename, diskname, type);
+        default:
+            if (cbmimage_create_image(filename, type) < 0) {
+                return -1;
+            }
+            if (vdrive_internal_format_disk_image(filename, diskname) < 0) {
+                return -1;
+            }
+    }
 
     return 0;
 }
@@ -148,4 +184,3 @@ void vdrive_internal_init(void)
 {
     vdrive_internal_log = log_open("VDrive Internal");
 }
-

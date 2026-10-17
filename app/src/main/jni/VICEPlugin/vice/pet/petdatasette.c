@@ -3,6 +3,7 @@
  *
  * Written by
  *  Andreas Boose <viceteam@t-online.de>
+ *  Marco van den Heuvel <blackystardust68@yahoo.com>
  *
  * This file is part of VICE, the Versatile Commodore Emulator.
  * See README for copyright notice.
@@ -27,16 +28,54 @@
 #include "vice.h"
 
 #include "datasette.h"
+#include "pet.h"
 #include "petpia.h"
+#include "petvia.h"
+#include "tapeport.h"
+#include "via.h"
 
-
-void datasette_trigger_flux_change(unsigned int on)
+void machine_trigger_flux_change(int port, unsigned int on)
 {
-    pia1_signal(PIA_SIG_CA1, PIA_SIG_FALL);
+    if (port == TAPEPORT_PORT_1) {
+        pia1_signal(PIA_SIG_CA1, PIA_SIG_FALL, 0);      /* TODO: offset */
+    } else {
+        viacore_signal(machine_context.via, VIA_SIG_CB1, VIA_SIG_FALL);
+    }
 }
 
-void datasette_set_tape_sense(int sense)
+void machine_set_tape_read_in(int port, unsigned int on)
 {
-    pia1_set_tape_sense(sense);
+    if (port == TAPEPORT_PORT_1) {
+        pia1_signal(PIA_SIG_CA1, on ? PIA_SIG_RISE: PIA_SIG_FALL, 0);      /* TODO: offset */
+    } else {
+        viacore_signal(machine_context.via, VIA_SIG_CB1,
+                       on ? VIA_SIG_RISE : VIA_SIG_FALL);
+    }
 }
 
+void machine_set_tape_sense(int port, int sense)
+{
+    if (port == TAPEPORT_PORT_1) {
+        pia1_set_tape1_sense(sense);
+    } else {
+        pia1_set_tape2_sense(sense);
+    }
+}
+
+void machine_set_tape_write_in(int port, int val)
+{
+    if (port == TAPEPORT_PORT_1) {
+        pia1_set_tape1_write_in(val);
+    } else {
+        pia1_set_tape2_write_in(val);
+    }
+}
+
+void machine_set_tape_motor_in(int port, int val)
+{
+    if (port == TAPEPORT_PORT_1) {
+        pia1_set_tape1_motor_in(val);
+    } else {
+        pia1_set_tape2_motor_in(val);
+    }
+}

@@ -2,7 +2,7 @@
  * userport_digimax.h
  *
  * Written by
- *  Marco van den Heuvel <viceteam@t-online.de>
+ *  Marco van den Heuvel <blackystardust68@yahoo.com>
  *
  * This file is part of VICE, the Versatile Commodore Emulator.
  * See README for copyright notice.
@@ -28,7 +28,13 @@
 #define VICE_USERPORT_DIGIMAX_H
 
 #include "types.h"
+#include "sound.h"
 
-extern void digimax_userport_store(WORD addr, BYTE value);
+int userport_digimax_resources_init(void);
+
+void userport_digimax_sound_chip_init(void);
+
+void userport_digimax_sound_store(uint16_t address, uint8_t value);
+uint8_t userport_digimax_sound_read(uint16_t address);
 
 #endif

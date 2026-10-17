@@ -43,47 +43,50 @@
 #include "cbm2cart.h"
 #include "cbm2mem.h"
 #include "cbm2model.h"
+#include "cbm2rom.h"
+#include "cia.h"
 #include "machine.h"
 #include "resources.h"
+#include "sid.h"
 #include "types.h"
 
 struct model_s {
     int video;   /* machine video timing */
     int hasvicii;
     int ramsize;
-    char *basicname;
-    char *chargenname;
-    char *kernalname;
+    const char *basicname;
+    const char *chargenname;
+    const char *kernalname;
     int line; /* 0=7x0 (50 Hz), 1=6x0 60Hz, 2=6x0 50Hz */
 };
 
-/*
-*/
-
-static struct model_s cbm2models[] = {
-    { MACHINE_SYNC_PAL,  1,   64,  CBM2_BASIC500, CBM2_CHARGEN500, CBM2_KERNAL500, 2  }, /* 510 */
-    { MACHINE_SYNC_NTSC, 1,   64,  CBM2_BASIC500, CBM2_CHARGEN500, CBM2_KERNAL500, 1  }, /* 510 */
-    { MACHINE_SYNC_PAL,  0,  128,  CBM2_BASIC128, CBM2_CHARGEN600, CBM2_KERNAL,    2  }, /* 610 */
-    { MACHINE_SYNC_NTSC, 0,  128,  CBM2_BASIC128, CBM2_CHARGEN600, CBM2_KERNAL,    1  }, /* 610 */
-    { MACHINE_SYNC_PAL,  0,  256,  CBM2_BASIC256, CBM2_CHARGEN600, CBM2_KERNAL,    2  }, /* 620 */
-    { MACHINE_SYNC_NTSC, 0,  256,  CBM2_BASIC256, CBM2_CHARGEN600, CBM2_KERNAL,    1  }, /* 620 */
-    { MACHINE_SYNC_PAL,  0, 1024,  CBM2_BASIC256, CBM2_CHARGEN600, CBM2_KERNAL,    2  }, /* 620+ */
-    { MACHINE_SYNC_NTSC, 0, 1024,  CBM2_BASIC256, CBM2_CHARGEN600, CBM2_KERNAL,    1  }, /* 620+ */
-    { MACHINE_SYNC_NTSC, 0,  128,  CBM2_BASIC128, CBM2_CHARGEN700, CBM2_KERNAL,    0  }, /* 710 */
-    { MACHINE_SYNC_NTSC, 0,  256,  CBM2_BASIC256, CBM2_CHARGEN700, CBM2_KERNAL,    0  }, /* 720 */
-    { MACHINE_SYNC_NTSC, 0, 1024,  CBM2_BASIC256, CBM2_CHARGEN700, CBM2_KERNAL,    0  }, /* 720+ */
+static const struct model_s cbm2models[] = {
+    { MACHINE_SYNC_PAL,  HAS_VICII,  64, CBM2_BASIC500_NAME, CBM2_CHARGEN500_NAME, CBM2_KERNAL500_NAME, LINE_6x0_50HZ  }, /* 510 */
+    { MACHINE_SYNC_NTSC, HAS_VICII,  64, CBM2_BASIC500_NAME, CBM2_CHARGEN500_NAME, CBM2_KERNAL500_NAME, LINE_6x0_60HZ  }, /* 510 */
+    { MACHINE_SYNC_PAL,  HAS_CRTC,  128, CBM2_BASIC128_NAME, CBM2_CHARGEN600_NAME, CBM2_KERNAL_NAME,    LINE_6x0_50HZ  }, /* 610 */
+    { MACHINE_SYNC_NTSC, HAS_CRTC,  128, CBM2_BASIC128_NAME, CBM2_CHARGEN600_NAME, CBM2_KERNAL_NAME,    LINE_6x0_60HZ  }, /* 610 */
+    { MACHINE_SYNC_PAL,  HAS_CRTC,  256, CBM2_BASIC256_NAME, CBM2_CHARGEN600_NAME, CBM2_KERNAL_NAME,    LINE_6x0_50HZ  }, /* 620 */
+    { MACHINE_SYNC_NTSC, HAS_CRTC,  256, CBM2_BASIC256_NAME, CBM2_CHARGEN600_NAME, CBM2_KERNAL_NAME,    LINE_6x0_60HZ  }, /* 620 */
+    { MACHINE_SYNC_PAL,  HAS_CRTC, 1024, CBM2_BASIC256_NAME, CBM2_CHARGEN600_NAME, CBM2_KERNAL_NAME,    LINE_6x0_50HZ  }, /* 620+ */
+    { MACHINE_SYNC_NTSC, HAS_CRTC, 1024, CBM2_BASIC256_NAME, CBM2_CHARGEN600_NAME, CBM2_KERNAL_NAME,    LINE_6x0_60HZ  }, /* 620+ */
+    { MACHINE_SYNC_NTSC, HAS_CRTC,  128, CBM2_BASIC128_NAME, CBM2_CHARGEN700_NAME, CBM2_KERNAL_NAME,    LINE_7x0_50HZ  }, /* 710 */
+    { MACHINE_SYNC_NTSC, HAS_CRTC,  256, CBM2_BASIC256_NAME, CBM2_CHARGEN700_NAME, CBM2_KERNAL_NAME,    LINE_7x0_50HZ  }, /* 720 */
+    { MACHINE_SYNC_NTSC, HAS_CRTC, 1024, CBM2_BASIC256_NAME, CBM2_CHARGEN700_NAME, CBM2_KERNAL_NAME,    LINE_7x0_50HZ  }, /* 720+ */
 };
 
 /* ------------------------------------------------------------------------- */
-int cbm2model_get_temp(int video, int ramsize, int hasvicii, int line)
+static int cbm2model_get_temp(int video, int ramsz, int hasvicii, int line,
+                              int sid, int cia)
 {
     int i;
 
     for (i = 0; i < CBM2MODEL_NUM; ++i) {
         if ((cbm2models[i].video == video)
-         && (cbm2models[i].ramsize == ramsize)
-         && (cbm2models[i].hasvicii == hasvicii)
-         && (cbm2models[i].line == line)) {
+            && (cbm2models[i].ramsize == ramsz)
+            && (cbm2models[i].hasvicii == hasvicii)
+            && (cbm2models[i].line == line)
+            && (sid == SID_MODEL_6581)
+            && (cia == CIA_MODEL_6526)) {
             return i;
         }
     }
@@ -93,20 +96,23 @@ int cbm2model_get_temp(int video, int ramsize, int hasvicii, int line)
 
 int cbm2model_get(void)
 {
-    int video, ramsize, hasvicii, line;
+    int video, ramsz, hasvicii, line, sid, cia;
 
     hasvicii = (machine_class == VICE_MACHINE_CBM5x0);
 
     if ((resources_get_int("MachineVideoStandard", &video) < 0)
-     || (resources_get_int("RamSize", &ramsize) < 0)
-     || (resources_get_int("ModelLine", &line) < 0)) {
+        || (resources_get_int("RamSize", &ramsz) < 0)
+        || (resources_get_int("ModelLine", &line) < 0)
+        || (resources_get_int("CIA1Model", &cia) < 0)
+        || (resources_get_int("SidModel", &sid) < 0)) {
         return -1;
     }
 
-    return cbm2model_get_temp(video, ramsize, hasvicii, line);
+    return cbm2model_get_temp(video, ramsz, hasvicii, line, sid, cia);
 }
 
-void cbm2model_set_temp(int model, int *video_sync, int *ramsize, int *hasvicii, int *line)
+#if 0
+static void cbm2model_set_temp(int model, int *video_sync, int *ramsize, int *hasvicii, int *line)
 {
     int old_model;
 
@@ -121,10 +127,12 @@ void cbm2model_set_temp(int model, int *video_sync, int *ramsize, int *hasvicii,
     *line = cbm2models[model].line;
     *hasvicii = cbm2models[model].hasvicii;
 }
+#endif
 
 void cbm2model_set(int model)
 {
     int old_model;
+    int pf;
 
     old_model = cbm2model_get();
 
@@ -136,6 +144,17 @@ void cbm2model_set(int model)
 
     resources_set_int("ModelLine", cbm2models[model].line);
     resources_set_int("MachineVideoStandard", cbm2models[model].video);
+    /* Determine the power net frequency for this model. */
+    switch(cbm2models[model].video) {
+        case MACHINE_SYNC_PAL:
+        case MACHINE_SYNC_PALN:
+            pf = 50;
+            break;
+        default:
+            pf = 60;
+            break;
+    }
+    resources_set_int("MachinePowerFrequency", pf);
     resources_set_int("RamSize", cbm2models[model].ramsize);
 
     resources_set_string("KernalName", cbm2models[model].kernalname);

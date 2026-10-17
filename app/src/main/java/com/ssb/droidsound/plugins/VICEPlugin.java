@@ -68,7 +68,19 @@ public class VICEPlugin extends DroidSoundPlugin {
 	private static boolean isActive = false;
 
 	private static boolean initialized = false;
-	
+
+	private static void deleteRecursive(File f) {
+		if (f.isDirectory()) {
+			File[] children = f.listFiles();
+			if (children != null) {
+				for (File child : children) {
+					deleteRecursive(child);
+				}
+			}
+		}
+		f.delete();
+	}
+
 	public VICEPlugin() {
 		if (! initialized) {
 			/* Store basic, kernal & chargen for C++ code to find. */
@@ -78,7 +90,13 @@ public class VICEPlugin extends DroidSoundPlugin {
 			}
 			
 			File viceDir = new File(dataDir, "VICE");
-			synchronized (lock) {					
+			synchronized (lock) {
+				/* VICE 3.x looks for the canonical ROM names in the C64/
+				 * subdirectory; older installs have plain names. Remove the
+				 * old layout so the asset is extracted again. */
+				if (viceDir.exists() && !new File(viceDir, "C64/kernal-901227-03.bin").exists()) {
+					deleteRecursive(viceDir);
+				}
 				if(!viceDir.exists()) {
 					unzipper = Unzipper.getInstance();
 					unzipper.unzipAssetAsync(getContext(), "vice.zip", dataDir);
@@ -209,6 +227,6 @@ public class VICEPlugin extends DroidSoundPlugin {
 	
 	@Override
 	public String getVersion() {
-		return "VICE 2.3.19-r25866, reSID 1.0-pre1";
+		return "VICE 3.10.0, reSID 3.10";
 	}
 }

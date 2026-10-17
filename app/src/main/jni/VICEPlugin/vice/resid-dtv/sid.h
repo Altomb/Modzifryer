@@ -32,7 +32,7 @@
 #include "filter.h"
 #include "extfilt.h"
 
-namespace reSID
+namespace reSID_dtv
 {
 
 class SID
@@ -40,7 +40,7 @@ class SID
 public:
   SID();
   ~SID();
-  
+
   /* Some hacks to keep DTV looking like regular ReSID engine -- hopefully
    * removed at some point. */
   void set_chip_model(chip_model ignored);
@@ -51,15 +51,15 @@ public:
   void enable_external_filter(bool enable);
   void adjust_filter_bias(double bias);
   bool set_sampling_parameters(double clock_freq, sampling_method method,
-			       double sample_freq, double pass_freq = 20000,
-			       double filter_scale = 0.97);
+  double sample_freq, double pass_freq = 20000,
+  double filter_scale = 0.97);
   void adjust_sampling_frequency(double sample_freq);
 
   void clock();
   void clock(cycle_count delta_t);
   int clock(cycle_count& delta_t, short* buf, int n, int interleave = 1);
   void reset();
-  
+
   // Read/write registers.
   reg8 read(reg8 offset);
   void write(reg8 offset, reg8 value);
@@ -84,7 +84,7 @@ public:
     EnvelopeGenerator::State envelope_state[3];
     bool hold_zero[3];
   };
-    
+
   State read_state();
   void write_state(const State& state);
 
@@ -94,11 +94,11 @@ public:
 protected:
   static double I0(double x);
   RESID_INLINE int clock_interpolate(cycle_count& delta_t, short* buf, int n,
-				     int interleave);
+                                        int interleave);
   RESID_INLINE int clock_resample_interpolate(cycle_count& delta_t, short* buf,
-					      int n, int interleave);
+                                                int n, int interleave);
   RESID_INLINE int clock_resample_fast(cycle_count& delta_t, short* buf,
-				       int n, int interleave);
+                                        int n, int interleave);
 
   Voice voice[3];
   Filter filter;
@@ -142,6 +142,6 @@ protected:
   short* fir;
 };
 
-} // namespace reSID
+} // namespace reSID_dtv
 
 #endif // not __SID_H__

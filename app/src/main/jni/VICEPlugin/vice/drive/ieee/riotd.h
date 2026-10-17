@@ -2,7 +2,7 @@
  * riotd.h - Drive VIA definitions.
  *
  * Written by
- *  Andre' Fachat <fachat@physik.tu-chemnitz.de>
+ *  Andre Fachat <fachat@physik.tu-chemnitz.de>
  *  Andreas Boose <viceteam@t-online.de>
  *
  * This file is part of VICE, the Versatile Commodore Emulator.
@@ -30,26 +30,25 @@
 
 #include "types.h"
 
-struct drive_context_s;
+struct diskunit_context_s;
 struct riot_context_s;
 
-extern void riot1_setup_context(struct drive_context_s *ctxptr);
-extern void riot2_setup_context(struct drive_context_s *ctxptr);
+void riot1_setup_context(struct diskunit_context_s *ctxptr);
+void riot2_setup_context(struct diskunit_context_s *ctxptr);
 
-extern void riot2_set_atn(struct riot_context_s *riot_context, int state);
-extern void riot1_set_atn(struct riot_context_s *riot_context, BYTE state);
+void riot2_set_atn(struct riot_context_s *riot_context, int state);
+void riot1_set_atn(struct riot_context_s *riot_context, uint8_t state);
 
-extern void riot1_set_pardata(struct riot_context_s *riot_context);
+void riot1_set_pardata(struct riot_context_s *riot_context);
 
-extern void riot1_init(struct drive_context_s *ctxptr);
-extern void riot1_store(struct drive_context_s *ctxptr,
-                                 WORD addr, BYTE byte);
-extern BYTE riot1_read(struct drive_context_s *ctxptr, WORD addr);
+void riot1_init(struct diskunit_context_s *ctxptr);
+void riot1_store(struct diskunit_context_s *ctxptr, uint16_t addr, uint8_t byte);
+uint8_t riot1_read(struct diskunit_context_s *ctxptr, uint16_t addr);
+uint8_t riot1_peek(struct diskunit_context_s *ctxptr, uint16_t addr);
 
-extern void riot2_init(struct drive_context_s *ctxptr);
-extern void riot2_store(struct drive_context_s *ctxptr,
-                                 WORD addr, BYTE byte);
-extern BYTE riot2_read(struct drive_context_s *ctxptr, WORD addr);
+void riot2_init(struct diskunit_context_s *ctxptr);
+void riot2_store(struct diskunit_context_s *ctxptr, uint16_t addr, uint8_t byte);
+uint8_t riot2_read(struct diskunit_context_s *ctxptr, uint16_t addr);
+uint8_t riot2_peek(struct diskunit_context_s *ctxptr, uint16_t addr);
 
 #endif
-

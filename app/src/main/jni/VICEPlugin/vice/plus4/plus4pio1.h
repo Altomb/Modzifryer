@@ -3,6 +3,7 @@
  *
  * Written by
  *  Andreas Boose <viceteam@t-online.de>
+ *  Marco van den Heuvel <blackystardust68@yahoo.com>
  *
  * This file is part of VICE, the Versatile Commodore Emulator.
  * See README for copyright notice.
@@ -29,10 +30,9 @@
 
 #include "types.h"
 
-extern BYTE pio1_read(WORD addr);
-extern void pio1_store(WORD addr, BYTE value);
+uint8_t pio1_read(uint16_t addr);
+void pio1_store(uint16_t addr, uint8_t value);
 
-extern void pio1_set_tape_sense(int sense);
+void pio1_set_tape_sense(int sense);
 
 #endif
-

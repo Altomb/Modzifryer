@@ -76,9 +76,11 @@ static int circular_check(unsigned int track, unsigned int sector)
 {
     unsigned int i;
 
-    for (i = 0; i < block_list_nelems; i++)
-        if (block_list[i].track == track && block_list[i].sector == sector)
+    for (i = 0; i < block_list_nelems; i++) {
+        if (block_list[i].track == track && block_list[i].sector == sector) {
             return 1;
+        }
+    }
 
     if (block_list_nelems == block_list_size) {
         if (block_list_size == 0) {
@@ -97,22 +99,24 @@ static int circular_check(unsigned int track, unsigned int sector)
     return 0;
 }
 
-image_contents_t *diskcontents_block_read(vdrive_t *vdrive)
+image_contents_t *diskcontents_block_read(vdrive_t *vdrive, int part)
 {
     image_contents_t *contents;
-    BYTE buffer[256];
+    uint8_t buffer[256];
     int retval;
     image_contents_file_list_t *lp;
+    unsigned int curr_track, curr_sector;
 
     machine_drive_flush();
 
-    if (vdrive == NULL)
+    if (vdrive == NULL) {
         return NULL;
+    }
 
     retval = vdrive_bam_read_bam(vdrive);
 
-    if (retval < 0) {
-        vdrive_internal_close_disk_image(vdrive);
+    /* vdrive_bam_read_bam returns CBM error, so not zero is a problem */
+    if (retval != 0 || !vdrive->bam_size) {
         return NULL;
     }
 
@@ -127,8 +131,10 @@ image_contents_t *diskcontents_block_read(vdrive_t *vdrive)
 
     contents->blocks_free = (int)vdrive_bam_free_block_count(vdrive);
 
-    vdrive->Curr_track = vdrive->Dir_Track;
-    vdrive->Curr_sector = vdrive->Dir_Sector;
+    contents->partition = vdrive->selected_part;
+
+    curr_track = vdrive->Dir_Track;
+    curr_sector = vdrive->Dir_Sector;
 
     lp = NULL;
     contents->file_list = NULL;
@@ -136,22 +142,18 @@ image_contents_t *diskcontents_block_read(vdrive_t *vdrive)
     circular_check_init();
 
     while (1) {
-        BYTE *p;
+        uint8_t *p;
         int j;
 
-        retval = disk_image_read_sector(vdrive->image, buffer,
-                                        vdrive->Curr_track,
-                                        vdrive->Curr_sector);
+        retval = vdrive_read_sector(vdrive, buffer, curr_track, curr_sector);
 
         if (retval != 0
-            || circular_check(vdrive->Curr_track, vdrive->Curr_sector)) {
-            /*image_contents_destroy(contents);*/
-            vdrive_internal_close_disk_image(vdrive);
+            || circular_check(curr_track, curr_sector)) {
             circular_check_free();
-            return contents/*NULL*/;
+            return contents;
         }
 
-        for (p = buffer, j = 0; j < 8; j++, p += 32)
+        for (p = buffer, j = 0; j < 8; j++, p += 32) {
             if (p[SLOT_TYPE_OFFSET] != 0) {
                 image_contents_file_list_t *new_list;
                 int i;
@@ -160,8 +162,9 @@ image_contents_t *diskcontents_block_read(vdrive_t *vdrive)
                 new_list->size = ((int)p[SLOT_NR_BLOCKS]
                                   + ((int)p[SLOT_NR_BLOCKS + 1] << 8));
 
-                for (i = 0; i < IMAGE_CONTENTS_FILE_NAME_LEN; i++)
-                        new_list->name[i] = p[SLOT_NAME_OFFSET + i];
+                for (i = 0; i < IMAGE_CONTENTS_FILE_NAME_LEN; i++) {
+                    new_list->name[i] = p[SLOT_NAME_OFFSET + i];
+                }
 
                 new_list->name[IMAGE_CONTENTS_FILE_NAME_LEN] = 0;
 
@@ -184,15 +187,16 @@ image_contents_t *diskcontents_block_read(vdrive_t *vdrive)
                     lp = new_list;
                 }
             }
+        }
 
-        if (buffer[0] == 0)
+        if (buffer[0] == 0) {
             break;
+        }
 
-        vdrive->Curr_track = (int)buffer[0];
-        vdrive->Curr_sector = (int)buffer[1];
+        curr_track = (int)buffer[0];
+        curr_sector = (int)buffer[1];
     }
 
-    vdrive_internal_close_disk_image(vdrive);
     circular_check_free();
     return contents;
 }

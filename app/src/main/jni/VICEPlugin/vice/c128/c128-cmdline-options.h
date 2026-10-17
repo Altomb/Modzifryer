@@ -3,6 +3,7 @@
  *
  * Written by
  *  Andreas Boose <viceteam@t-online.de>
+ *  Marco van den Heuvel <blackystardust68@yahoo.com>
  *
  * This file is part of VICE, the Versatile Commodore Emulator.
  * See README for copyright notice.
@@ -27,6 +28,6 @@
 #ifndef VICE_C128_CMDLINE_OPTIONS_H
 #define VICE_C128_CMDLINE_OPTIONS_H
 
-extern int c128_cmdline_options_init(void);
+int c128_cmdline_options_init(void);
 
 #endif

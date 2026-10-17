@@ -38,13 +38,25 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef HAVE_UNISTD_H
+#include <unistd.h>
+#endif
+
+#ifdef HAVE_IO_H
+#include <io.h>
+#endif
+
 #include "lib.h"
 #include "mon_command.h"
 #include "montypes.h"
 #include "asm.h"
-#include "mon_parse.h" /* FIXME ! */
+#include "mon_parse.h"
 #include "types.h"
 
+
+/* prototype */
+void free_buffer(void);
+void make_buffer(char *str);
 
 #define YY_ALWAYS_INTERACTIVE 1
 #define YY_NO_UNISTD_H
@@ -54,7 +66,11 @@
 
 int new_cmd = 1, quote = 0, opt_asm = 0, cur_len = 0, last_len = 0, dont_match_reg_a = 0;
 int temp, push_back;
+
+#ifndef YY_SKIP_YYWRAP
 static int yywrap(void);
+#endif
+
 YY_BUFFER_STATE my_state;
 
 #define YY_USER_ACTION { last_len = cur_len; cur_len += yyleng; }
@@ -107,10 +123,12 @@ send:
 %}
 
 %option case-insensitive
+%option noinput
+%option nounput
 
 HDIGIT  [0-9a-f]
 
-%x FNAME CMD STR ROL ASM_MODE COND_MODE REG_ASGN LABEL_ASGN BNAME CTYPE RADIX
+%x FNAME CMD STR ROL ROLQ ASM_MODE COND_MODE REG_ASGN LABEL_ASGN BNAME CTYPE RADIX
 
 %%
 
@@ -142,13 +160,14 @@ HDIGIT  [0-9a-f]
         bank            { BEGIN(BNAME);         return CMD_BANK; }
         bload|bl        { BEGIN(FNAME);         return CMD_BLOAD; }
         block_read|br   { BEGIN(INITIAL);       return CMD_BLOCK_READ; }
-        break           { BEGIN(INITIAL);       return CMD_BREAK; }
+        break|bk        { BEGIN(INITIAL);       return CMD_BREAK; }
         bsave|bs        { BEGIN(FNAME);         return CMD_BSAVE; }
         backtrace|bt    { BEGIN(INITIAL);       return CMD_BACKTRACE; }
         block_write|bw  { BEGIN(INITIAL);       return CMD_BLOCK_WRITE; }
+        bverify|bv      { BEGIN(FNAME);         return CMD_BVERIFY; }
         cartfreeze      { BEGIN(INITIAL);       return CMD_CARTFREEZE; }
-        cd              { BEGIN(ROL);           return CMD_CHDIR; }
-        stopwatch|sw    { BEGIN(INITIAL);       return CMD_STOPWATCH; }
+        cd              { BEGIN(ROLQ);          return CMD_CHDIR; }
+        clear_labels|cl { BEGIN(INITIAL);       return CMD_CLEAR_LABELS; }
         command         { BEGIN(INITIAL);       return CMD_COMMAND; }
         compare|c       { BEGIN(INITIAL);       return CMD_COMPARE; }
         condition|cond  { BEGIN(INITIAL);       return CMD_CONDITION; }
@@ -160,9 +179,9 @@ HDIGIT  [0-9a-f]
         delete_label|dl { BEGIN(INITIAL);       return CMD_DEL_LABEL; }
         device|dev      { BEGIN(INITIAL);       return CMD_DEVICE; }
         detach          { BEGIN(INITIAL);       return CMD_DETACH; }
-        disable         { BEGIN(INITIAL);       return CMD_CHECKPT_OFF; }
+        disable|dis     { BEGIN(INITIAL);       return CMD_CHECKPT_OFF; }
         dump            { BEGIN(FNAME);         return CMD_DUMP; }
-        enable          { BEGIN(INITIAL);       return CMD_CHECKPT_ON; }
+        enable|en       { BEGIN(INITIAL);       return CMD_CHECKPT_ON; }
         exit|x          { BEGIN(INITIAL);       return CMD_EXIT; }
         export|exp      { BEGIN(INITIAL);       return CMD_EXPORT; }
         fill|f          { BEGIN(INITIAL);       return CMD_FILL; }
@@ -173,22 +192,28 @@ HDIGIT  [0-9a-f]
         ii              { BEGIN(INITIAL);       return CMD_SCREENCODE_DISPLAY; }
         ignore          { BEGIN(INITIAL);       return CMD_IGNORE; }
         io              { BEGIN(INITIAL);       return CMD_IO; }
-        keybuf          { BEGIN(INITIAL);       return CMD_KEYBUF; }
+        jpdb            { BEGIN(INITIAL);       return CMD_JPDB; }
+        keybuf          { BEGIN(ROL);           return CMD_KEYBUF; }
         list            { BEGIN(INITIAL);       return CMD_LIST; }
         load|l          { BEGIN(FNAME);         return CMD_LOAD; }
+        loadbasic|ldb   { BEGIN(FNAME);         return CMD_BASICLOAD; }
         load_labels|ll  { BEGIN(FNAME);         return CMD_LOAD_LABELS; }
+        log             { BEGIN(INITIAL);       return CMD_LOG; }
+        logname         { BEGIN(FNAME);         return CMD_LOGNAME; }
         mem|m           { BEGIN(INITIAL);       return CMD_MEM_DISPLAY; }
         memchar|mc      { BEGIN(INITIAL);       return CMD_CHAR_DISPLAY; }
         memmapsave|mmsave { BEGIN(FNAME);       return CMD_MEMMAPSAVE; }
         memmapshow|mmsh { BEGIN(INITIAL);       return CMD_MEMMAPSHOW; }
         memmapzap|mmzap { BEGIN(INITIAL);       return CMD_MEMMAPZAP; }
+        mkdir           { BEGIN(ROLQ);           return CMD_MKDIR; }
         move|t          { BEGIN(INITIAL);       return CMD_MOVE; }
         memsprite|ms    { BEGIN(INITIAL);       return CMD_SPRITE_DISPLAY; }
         next|n          { BEGIN(INITIAL);       return CMD_NEXT; }
         playback|pb     { BEGIN(FNAME);         return CMD_PLAYBACK; }
         print|p         { BEGIN(INITIAL);       return CMD_PRINT; }
+        profile|prof    { BEGIN(INITIAL);       return CMD_PROFILE; }
         pwd             { BEGIN(INITIAL);       return CMD_PWD; }
-        quit            { BEGIN(INITIAL);       return CMD_QUIT; }
+        quit|q          { BEGIN(INITIAL);       return CMD_QUIT; }
         radix|rad       { BEGIN(RADIX);         return CMD_RADIX; }
         record|rec      { BEGIN(FNAME);         return CMD_RECORD; }
         registers|r     { BEGIN(REG_ASGN);      return CMD_REGISTERS; }
@@ -198,32 +223,59 @@ HDIGIT  [0-9a-f]
         load_resources|resload  { BEGIN(FNAME); return CMD_LOAD_RESOURCES; }
         save_resources|ressave  { BEGIN(FNAME); return CMD_SAVE_RESOURCES; }
         return|ret      { BEGIN(INITIAL);       return CMD_RETURN; }
+        rmdir           { BEGIN(ROLQ);           return CMD_RMDIR; }
         save|s          { BEGIN(FNAME);         return CMD_SAVE; }
         save_labels|sl  { BEGIN(FNAME);         return CMD_SAVE_LABELS; }
         screen|sc       { BEGIN(INITIAL);       return CMD_SCREEN; }
         screenshot|scrsh { BEGIN(FNAME);        return CMD_SCREENSHOT; }
         show_labels|shl { BEGIN(INITIAL);       return CMD_SHOW_LABELS; }
         sidefx|sfx      { BEGIN(INITIAL);       return CMD_SIDEFX; }
+        dummy           { BEGIN(INITIAL);       return CMD_DUMMY; }
         step|z          { BEGIN(INITIAL);       return CMD_STEP; }
         stop            { BEGIN(INITIAL);       return CMD_MON_STOP; }
+        stopwatch|sw    { BEGIN(INITIAL);       return CMD_STOPWATCH; }
         tapectrl        { BEGIN(INITIAL);       return CMD_TAPECTRL; }
+        tapeoffs        { BEGIN(INITIAL);       return CMD_TAPEOFFS; }
         trace|tr        { BEGIN(INITIAL);       return CMD_TRACE; }
         until|un        { BEGIN(INITIAL);       return CMD_UNTIL; }
-        undump          { BEGIN(FNAME);       return CMD_UNDUMP; }
+        undump          { BEGIN(FNAME);         return CMD_UNDUMP; }
+        updb            { BEGIN(INITIAL);       return CMD_UPDB; }
+        verify|v        { BEGIN(FNAME);         return CMD_VERIFY; }
         watch|w         { BEGIN(INITIAL);       return CMD_WATCH; }
-        yydebug         { BEGIN(INITIAL);       return CMD_YYDEBUG; }
+        warp            { BEGIN(INITIAL);       return CMD_WARP; }
+
+        yydebug         {
+                BEGIN(INITIAL);
+#if YYDEBUG
+                return CMD_YYDEBUG;
+#else
+                return 0;
+#endif
+            }
+        maincpu_trace   { BEGIN(INITIAL);       return CMD_MAINCPU_TRACE; }
 }
  /* this is not a real command, but could be a label name for a label assignment */
-<CMD>[_a-zA-Z][_a-zA-Z0-9]* { BEGIN(LABEL_ASGN); yylval.str = lib_stralloc(yytext); return CMD_LABEL_ASGN; }
+<CMD>[_a-zA-Z][_a-zA-Z0-9]* { BEGIN(LABEL_ASGN); yylval.str = lib_strdup(yytext); return CMD_LABEL_ASGN; }
 
 ;		{ new_cmd = 1; return CMD_SEP; }
+<REG_ASGN>;     { new_cmd = 1; BEGIN(INITIAL); return CMD_SEP; }
 
 on  		{ yylval.i = e_ON; return TOGGLE; }
 off 		{ yylval.i = e_OFF; return TOGGLE; }
 toggle		{ yylval.i = e_TOGGLE; return TOGGLE; }
 
+flat		{ return FLAT; }
+graph		{ return GRAPH; }
+func		{ return FUNC; }
+depth		{ return DEPTH; }
+disass		{ return DISASS; }
+context	{ return PROFILE_CONTEXT; }
+clear		{ return CLEAR; }
+
 load { yylval.i = e_load; return MEM_OP; }
 store { yylval.i = e_store; return MEM_OP; }
+read { yylval.i = e_load; return MEM_OP; }
+write { yylval.i = e_store; return MEM_OP; }
 exec { yylval.i = e_exec; return MEM_OP; }
 
 reset		{ return RESET; }
@@ -243,7 +295,7 @@ if		{ BEGIN (COND_MODE); return IF; }
                                 (yyleng > 2) && (yytext[yyleng - 3] == '\\') &&
                                 (yytext[yyleng - 2] == '"')) {
                          /* special case, \"" at end of string */
-                         yylval.str = lib_stralloc(yytext);
+                         yylval.str = lib_strdup(yytext);
                          yylval.str[yyleng -1] = 0;
                          unescape(yylval.str);
                          quote = 0;
@@ -259,7 +311,7 @@ if		{ BEGIN (COND_MODE); return IF; }
 <STR>[^\"\n]*   { if (yytext[yyleng - 1] == '\\') {
                      yymore(); /* skip escaped quote */
                   } else {
-                     yylval.str = lib_stralloc(yytext);
+                     yylval.str = lib_strdup(yytext);
                      unescape(yylval.str);
                      return STRING;
                   }
@@ -311,7 +363,7 @@ if		{ BEGIN (COND_MODE); return IF; }
 <BNAME,INITIAL,COND_MODE>10:             { return MEM_DISK10; }
 <BNAME,INITIAL,COND_MODE>11:             { return MEM_DISK11; }
 
-<CTYPE>[_a-zA-Z0-9]*      { yylval.str = lib_stralloc(yytext); return CPUTYPE; }
+<CTYPE>[_a-zA-Z0-9]*      { yylval.str = lib_strdup(yytext); return CPUTYPE; }
 
 <*>[ \t]*
 <*>\n          { dont_match_reg_a = 0;
@@ -323,88 +375,214 @@ if		{ BEGIN (COND_MODE); return IF; }
                }
 
 <FNAME>\".+\" { yytext[yyleng-1] = '\0';
-                yylval.str = lib_stralloc(yytext+1);
+                yylval.str = lib_strdup(yytext+1);
                 BEGIN (INITIAL); return FILENAME; }
 
-<BNAME>[_a-zA-Z0-9]*      { yylval.str = lib_stralloc(yytext); return BANKNAME; }
+<BNAME>[_a-zA-Z0-9]*      { yylval.str = lib_strdup(yytext); BEGIN (INITIAL); return BANKNAME; }
 
-<ROL>[^ \t\n][^\n]*          { yylval.str = lib_stralloc(yytext); return R_O_L; }
+<ROL>[^ \t\n][^\n]*          { yylval.str = lib_strdup(yytext); return R_O_L; }
 
-<REG_ASGN>{
-        a   { yylval.i = e_A; return MON_REGISTER; }
-        x   { yylval.i = e_X; return MON_REGISTER; }
-        y   { yylval.i = e_Y; return MON_REGISTER; }
-        pc  { yylval.i = e_PC; return MON_REGISTER; }
-        sp  { yylval.i = e_SP; return MON_REGISTER; }
-        fl  { yylval.i = e_FLAGS; return MON_REGISTER; }
-        r3  { yylval.i = e_R3; return MON_REGISTER; }
-        r4  { yylval.i = e_R4; return MON_REGISTER; }
-        r5  { yylval.i = e_R5; return MON_REGISTER; }
-        r6  { yylval.i = e_R6; return MON_REGISTER; }
-        r7  { yylval.i = e_R7; return MON_REGISTER; }
-        r8  { yylval.i = e_R8; return MON_REGISTER; }
-        r9  { yylval.i = e_R9; return MON_REGISTER; }
-        r10 { yylval.i = e_R10; return MON_REGISTER; }
-        r11 { yylval.i = e_R11; return MON_REGISTER; }
-        r12 { yylval.i = e_R12; return MON_REGISTER; }
-        r13 { yylval.i = e_R13; return MON_REGISTER; }
-        r14 { yylval.i = e_R14; return MON_REGISTER; }
-        r15 { yylval.i = e_R15; return MON_REGISTER; }
-        acm { yylval.i = e_ACM; return MON_REGISTER; }
-        yxm { yylval.i = e_YXM; return MON_REGISTER; }
+<ROLQ>{
+     \".+\" { yytext[yyleng-1] = '\0';
+              yylval.str = lib_strdup(yytext+1);
+              BEGIN (INITIAL); return R_O_L_Q; }
+     \'.+\' { yytext[yyleng-1] = '\0';
+              yylval.str = lib_strdup(yytext+1);
+              BEGIN (INITIAL); return R_O_L_Q; }
+     [^ \t\n][^\n]*          { yylval.str = lib_strdup(yytext); return R_O_L_Q; }
 }
 
+ /* see monitor.c and montypes.h for the commented list */
+<REG_ASGN>{
+        a   { yylval.i = e_A; return MON_REGISTER; }		/* 65xx/c64dtv/658xx/6x09/z80 */
+        x   { yylval.i = e_X; return MON_REGISTER; }		/* 65xx/c64dtv/658xx/6x09 */
+        y   { yylval.i = e_Y; return MON_REGISTER; }		/* 65xx/c64dtv/658xx/6x09 */
+        pc  { yylval.i = e_PC; return MON_REGISTER; }		/* 65xx/c64dtv/658xx/6x09/z80 */
+        sp  { yylval.i = e_SP; return MON_REGISTER; }		/* 65xx/c64dtv/658xx/6x09/z80 */
+        fl  { yylval.i = e_FLAGS; return MON_REGISTER; }	/* 65xx/c64dtv/658xx */
+        cc  { yylval.i = e_FLAGS; return MON_REGISTER; }	/* 6x09 */
+
+        b   { yylval.i = e_B; return MON_REGISTER; }		/* 658xx/6x09/z80 */
+        c   { yylval.i = e_C; return MON_REGISTER; }		/* 658xx/z80 */
+        dpr { yylval.i = e_DPR; return MON_REGISTER; }	/* 658xx */
+        pbr { yylval.i = e_PBR; return MON_REGISTER; }	/* 658xx */
+        dbr { yylval.i = e_DBR; return MON_REGISTER; }	/* 658xx */
+        e   { yylval.i = e_E; return MON_REGISTER; }		/* 658xx/6309/z80 */
+
+        r3  { yylval.i = e_R3; return MON_REGISTER; }		/* c64dtv */
+        r4  { yylval.i = e_R4; return MON_REGISTER; }		/* c64dtv */
+        r5  { yylval.i = e_R5; return MON_REGISTER; }		/* c64dtv */
+        r6  { yylval.i = e_R6; return MON_REGISTER; }		/* c64dtv */
+        r7  { yylval.i = e_R7; return MON_REGISTER; }		/* c64dtv */
+        r8  { yylval.i = e_R8; return MON_REGISTER; }		/* c64dtv */
+        r9  { yylval.i = e_R9; return MON_REGISTER; }		/* c64dtv */
+        r10 { yylval.i = e_R10; return MON_REGISTER; }	/* c64dtv */
+        r11 { yylval.i = e_R11; return MON_REGISTER; }	/* c64dtv */
+        r12 { yylval.i = e_R12; return MON_REGISTER; }	/* c64dtv */
+        r13 { yylval.i = e_R13; return MON_REGISTER; }	/* c64dtv */
+        r14 { yylval.i = e_R14; return MON_REGISTER; }	/* c64dtv */
+        r15 { yylval.i = e_R15; return MON_REGISTER; }	/* c64dtv */
+        acm { yylval.i = e_ACM; return MON_REGISTER; }	/* c64dtv */
+        yxm { yylval.i = e_YXM; return MON_REGISTER; }	/* c64dtv */
+
+        d   { yylval.i = e_D; return MON_REGISTER; }		/* 6x09/z80 */
+        dp  { yylval.i = e_DP; return MON_REGISTER; }		/* 6x09 */
+        u   { yylval.i = e_U; return MON_REGISTER; }		/* 6x09 */
+
+        af  { yylval.i = e_AF; return MON_REGISTER; }		/* z80 */
+        bc  { yylval.i = e_BC; return MON_REGISTER; }		/* z80 */
+        de  { yylval.i = e_DE; return MON_REGISTER; }		/* z80 */
+        hl  { yylval.i = e_HL; return MON_REGISTER; }		/* z80 */
+        ix  { yylval.i = e_IX; return MON_REGISTER; }		/* z80 */
+        iy  { yylval.i = e_IY; return MON_REGISTER; }		/* z80 */
+        i   { yylval.i = e_I; return MON_REGISTER; }		/* z80 */
+        r   { yylval.i = e_R; return MON_REGISTER; }		/* z80 */
+        af2 { yylval.i = e_AF2; return MON_REGISTER; }	/* z80 */
+        bc2 { yylval.i = e_BC2; return MON_REGISTER; }	/* z80 */
+        de2 { yylval.i = e_DE2; return MON_REGISTER; }	/* z80 */
+        hl2 { yylval.i = e_HL2; return MON_REGISTER; }	/* z80 */
+
+        f   { yylval.i = e_F; return MON_REGISTER; }		/* 6309 */
+        w   { yylval.i = e_W; return MON_REGISTER; }		/* 6309 */
+        q   { yylval.i = e_Q; return MON_REGISTER; }		/* 6309 */
+        v   { yylval.i = e_V; return MON_REGISTER; }		/* 6309 */
+        md  { yylval.i = e_MD; return MON_REGISTER; }		/* 6309 */
+
+        h   { yylval.i = e_H; return MON_REGISTER; }		/* z80 */
+        l   { yylval.i = e_L; return MON_REGISTER; }		/* z80 */
+        ixl { yylval.i = e_IXL; return MON_REGISTER; }	/* z80 */
+        ixh { yylval.i = e_IXH; return MON_REGISTER; }	/* z80 */
+        iyl { yylval.i = e_IYL; return MON_REGISTER; }	/* z80 */
+        iyh { yylval.i = e_IYH; return MON_REGISTER; }	/* z80 */
+}
+
+ /* FIXME: currently no operator precedence is implemented (so all operators */
+ /* have the same precedence - ie evaluation is strictly left to right. */
+ /* The table below shows the operator precedence in C, which we probably want */
+ /* to use, should we implement this at some point. */
+
+ /* Category           Operator                             Associativity */
+ /* --------------------------------------------------------------------- */
+ /* Postfix            () [] -> . ++ - -                    Left to right */
+ /* Unary              + - ! ~ ++ - - (type)* & sizeof      Right to left */
+ /* Multiplicative     * / %                                Left to right */
+ /* Additive           + -                                  Left to right */
+ /* Shift              << >>                                Left to right */
+ /* Relational         < <= > >=                            Left to right */
+ /* Equality           == !=                                Left to right */
+ /* Bitwise AND        &                                    Left to right */
+ /* Bitwise XOR        ^                                    Left to right */
+ /* Bitwise OR         |                                    Left to right */
+ /* Logical AND        &&                                   Left to right */
+ /* Logical OR         ||                                   Left to right */
+ /* Conditional        ?:                                   Right to left */
+ /* Assignment         = += -= *= /= %= >>= <<= &= ^= |=    Right to left */
+ /* Comma              ,                                    Left to right */
+
 <COND_MODE>{
-	== 		{ yylval.i = e_EQU; return COMPARE_OP; }
-	!= 		{ yylval.i = e_NEQ; return COMPARE_OP; }
-	\<=		{ yylval.i = e_LTE; return COMPARE_OP; }
-	\<		{ yylval.i = e_LT;  return COMPARE_OP; }
-	\>		{ yylval.i = e_GT;  return COMPARE_OP; }
-	\>=		{ yylval.i = e_GTE; return COMPARE_OP; }
-	&&		{ yylval.i = e_AND; return COMPARE_OP; }
-	\|\|		{ yylval.i = e_OR;  return COMPARE_OP; }
+        \*    { yylval.i = e_MUL; return COND_OP; }             /* Multiplicative */
+        \/    { yylval.i = e_DIV; return COND_OP; }             /* Multiplicative */
+        \+    { yylval.i = e_ADD; return COND_OP; }             /* Additive */
+        -     { yylval.i = e_SUB; return COND_OP; }             /* Additive */
+        \<=   { yylval.i = e_LTE; return COND_OP; }             /* Relational */
+        \<    { yylval.i = e_LT;  return COND_OP; }             /* Relational */
+        \>    { yylval.i = e_GT;  return COND_OP; }             /* Relational */
+        \>=   { yylval.i = e_GTE; return COND_OP; }             /* Relational */
+        ==    { yylval.i = e_EQU; return COND_OP; }             /* Equality */
+        !=    { yylval.i = e_NEQ; return COND_OP; }             /* Equality */
+        &     { yylval.i = e_BINARY_AND; return COND_OP; }      /* Bitwise AND */
+        \|    { yylval.i = e_BINARY_OR; return COND_OP; }       /* Bitwise OR */
+        &&    { yylval.i = e_LOGICAL_AND; return COND_OP; }     /* Logical AND */
+        \|\|  { yylval.i = e_LOGICAL_OR;  return COND_OP; }     /* Logical OR */
 
-	\.A 		{ yylval.i = e_A; return MON_REGISTER; }
-	\.X 		{ yylval.i = e_X; return MON_REGISTER; }
-	\.Y 		{ yylval.i = e_Y; return MON_REGISTER; }
-	\.PC 		{ yylval.i = e_PC; return MON_REGISTER; }
-	\.SP		{ yylval.i = e_SP; return MON_REGISTER; }
-        \.R3            { yylval.i = e_R3; return MON_REGISTER; }
-        \.R4            { yylval.i = e_R4; return MON_REGISTER; }
-        \.R5            { yylval.i = e_R5; return MON_REGISTER; }
-        \.R6            { yylval.i = e_R6; return MON_REGISTER; }
-        \.R7            { yylval.i = e_R7; return MON_REGISTER; }
-        \.R8            { yylval.i = e_R8; return MON_REGISTER; }
-        \.R9            { yylval.i = e_R9; return MON_REGISTER; }
-        \.R10           { yylval.i = e_R10; return MON_REGISTER; }
-        \.R11           { yylval.i = e_R11; return MON_REGISTER; }
-        \.R12           { yylval.i = e_R12; return MON_REGISTER; }
-        \.R13           { yylval.i = e_R13; return MON_REGISTER; }
-        \.R14           { yylval.i = e_R14; return MON_REGISTER; }
-        \.R15           { yylval.i = e_R15; return MON_REGISTER; }
-        \.ACM           { yylval.i = e_ACM; return MON_REGISTER; }
-        \.YXM           { yylval.i = e_YXM; return MON_REGISTER; }
+	A 		{ yylval.i = e_A; return MON_REGISTER; }		/* 65xx/c64dtv/658xx/6x09/z80 */
+	X 		{ yylval.i = e_X; return MON_REGISTER; }		/* 65xx/c64dtv/658xx/6x09 */
+	Y 		{ yylval.i = e_Y; return MON_REGISTER; }		/* 65xx/c64dtv/658xx/6x09 */
+	PC 		{ yylval.i = e_PC; return MON_REGISTER; }		/* 65xx/c64dtv/658xx/6x09/z80 */
+	SP		{ yylval.i = e_SP; return MON_REGISTER; }		/* 65xx/c64dtv/658xx/6x09/z80 */
+	FL		{ yylval.i = e_FLAGS; return MON_REGISTER; }	/* 65xx/c64dtv/658xx */
+	CC		{ yylval.i = e_FLAGS; return MON_REGISTER; }	/* 6x09 */
 
+	B		{ yylval.i = e_B; return MON_REGISTER; }		/* 658xx/6x09/z80 */
+	C		{ yylval.i = e_C; return MON_REGISTER; }		/* 658xx/z80 */
+	DPR		{ yylval.i = e_DPR; return MON_REGISTER; }		/* 658xx */
+	PBR		{ yylval.i = e_PBR; return MON_REGISTER; }		/* 658xx */
+	DBR		{ yylval.i = e_DBR; return MON_REGISTER; }		/* 658xx */
+	E		{ yylval.i = e_E; return MON_REGISTER; }		/* 658xx/6309/z80 */
+
+	R3		{ yylval.i = e_R3; return MON_REGISTER; }		/* c64dtv */
+	R4		{ yylval.i = e_R4; return MON_REGISTER; }		/* c64dtv */
+	R5		{ yylval.i = e_R5; return MON_REGISTER; }		/* c64dtv */
+	R6		{ yylval.i = e_R6; return MON_REGISTER; }		/* c64dtv */
+	R7		{ yylval.i = e_R7; return MON_REGISTER; }		/* c64dtv */
+	R8		{ yylval.i = e_R8; return MON_REGISTER; }		/* c64dtv */
+	R9		{ yylval.i = e_R9; return MON_REGISTER; }		/* c64dtv */
+	R10		{ yylval.i = e_R10; return MON_REGISTER; }		/* c64dtv */
+	R11		{ yylval.i = e_R11; return MON_REGISTER; }		/* c64dtv */
+	R12		{ yylval.i = e_R12; return MON_REGISTER; }		/* c64dtv */
+	R13		{ yylval.i = e_R13; return MON_REGISTER; }		/* c64dtv */
+	R14		{ yylval.i = e_R14; return MON_REGISTER; }		/* c64dtv */
+	R15		{ yylval.i = e_R15; return MON_REGISTER; }		/* c64dtv */
+	ACM		{ yylval.i = e_ACM; return MON_REGISTER; }		/* c64dtv */
+	YXM		{ yylval.i = e_YXM; return MON_REGISTER; }		/* c64dtv */
+
+	D		{ yylval.i = e_D; return MON_REGISTER; }		/* 6x09/z80 */
+	DP		{ yylval.i = e_DP; return MON_REGISTER; }		/* 6x09 */
+	U		{ yylval.i = e_U; return MON_REGISTER; }		/* 6x09 */
+
+	AF		{ yylval.i = e_AF; return MON_REGISTER; }		/* z80 */
+	BC		{ yylval.i = e_BC; return MON_REGISTER; }		/* z80 */
+	DE		{ yylval.i = e_DE; return MON_REGISTER; }		/* z80 */
+	HL		{ yylval.i = e_HL; return MON_REGISTER; }		/* z80 */
+	IX		{ yylval.i = e_IX; return MON_REGISTER; }		/* z80 */
+	IY		{ yylval.i = e_IY; return MON_REGISTER; }		/* z80 */
+	I		{ yylval.i = e_I; return MON_REGISTER; }		/* z80 */
+	R		{ yylval.i = e_R; return MON_REGISTER; }		/* z80 */
+	AF2		{ yylval.i = e_AF2; return MON_REGISTER; }		/* z80 */
+	BC2		{ yylval.i = e_BC2; return MON_REGISTER; }		/* z80 */
+ 	DE2		{ yylval.i = e_DE2; return MON_REGISTER; }		/* z80 */
+	HL2		{ yylval.i = e_HL2; return MON_REGISTER; }		/* z80 */
+
+	F		{ yylval.i = e_F; return MON_REGISTER; }		/* 6309 */
+	W		{ yylval.i = e_W; return MON_REGISTER; }		/* 6309 */
+	Q		{ yylval.i = e_Q; return MON_REGISTER; }		/* 6309 */
+	V		{ yylval.i = e_V; return MON_REGISTER; }		/* 6309 */
+	MD		{ yylval.i = e_MD; return MON_REGISTER; }		/* 6309 */
+
+	H		{ yylval.i = e_H; return MON_REGISTER; }		/* z80 */
+	L		{ yylval.i = e_L; return MON_REGISTER; }		/* z80 */
+	IXH		{ yylval.i = e_IXH; return MON_REGISTER; }		/* z80 */
+	IXL		{ yylval.i = e_IXL; return MON_REGISTER; }		/* z80 */
+	IYH		{ yylval.i = e_IYH; return MON_REGISTER; }		/* z80 */
+	IYL		{ yylval.i = e_IYL; return MON_REGISTER; }		/* z80 */
+
+	RL		{ yylval.i = e_Rasterline; return MON_REGISTER; }		/* rasterline */
+	CY		{ yylval.i = e_Cycle; return MON_REGISTER; }		/* cycle in line */
+	
 	\(		{ return L_PAREN; }
 	\)		{ return R_PAREN; }
+        \[              { return L_BRACKET; }
+        \]              { return R_BRACKET; }
+
+	[_a-zA-Z0-0]*	{yylval.str= lib_strdup(yytext); return BANKNAME; }
 }
 
 <ASM_MODE>[a-zA-Z][a-zA-Z]\ [a-zA-Z]\,[a-zA-Z] {
-    yylval.str = lib_stralloc(yytext); return OPCODE; }
+    yylval.str = lib_strdup(yytext); return OPCODE; }
 <ASM_MODE>[a-zA-Z][a-zA-Z]\ [a-zA-Z]\,\([a-zA-Z][a-zA-Z]\) {
-    yylval.str = lib_stralloc(yytext); return OPCODE; }
+    yylval.str = lib_strdup(yytext); return OPCODE; }
 <ASM_MODE>[a-zA-Z][a-zA-Z]\ \([a-zA-Z][a-zA-Z]\)\,[a-zA-Z] {
-    yylval.str = lib_stralloc(yytext); return OPCODE; }
+    yylval.str = lib_strdup(yytext); return OPCODE; }
 <ASM_MODE>[a-zA-Z][a-zA-Z]\ \([a-zA-Z][a-zA-Z]\)\, {
-    yylval.str = lib_stralloc(yytext); return OPCODE; }
+    yylval.str = lib_strdup(yytext); return OPCODE; }
 <ASM_MODE>[a-zA-Z][a-zA-Z]\ [a-zA-Z]\, {
-    yylval.str = lib_stralloc(yytext); return OPCODE; }
+    yylval.str = lib_strdup(yytext); return OPCODE; }
 <ASM_MODE>[a-zA-Z][a-zA-Z][a-zA-Z]\ [0-7]\, {
-    yylval.str = lib_stralloc(yytext); return OPCODE; }
+    yylval.str = lib_strdup(yytext); return OPCODE; }
 <ASM_MODE>[a-zA-Z][a-zA-Z][a-zA-Z][a-zA-Z]\ [a-zA-Z]\, {
-    yylval.str = lib_stralloc(yytext); return OPCODE; }
+    yylval.str = lib_strdup(yytext); return OPCODE; }
 <ASM_MODE>[a-zA-Z][a-zA-Z]\ [a-zA-Z][a-zA-Z]\, {
-    yylval.str = lib_stralloc(yytext); return OPCODE; }
+    yylval.str = lib_strdup(yytext); return OPCODE; }
 <ASM_MODE>af|AF         { return REG_AF; }
 <ASM_MODE>bc|BC         { return REG_BC; }
 <ASM_MODE>de|DE         { return REG_DE; }
@@ -415,9 +593,8 @@ if		{ BEGIN (COND_MODE); return IF; }
 <ASM_MODE>iy|IY         { return REG_IY; }
 <ASM_MODE>iyh|IYH       { return REG_IYH; }
 <ASM_MODE>iyl|IYL       { return REG_IYL; }
-<ASM_MODE>[a-zA-Z]{2,4}                           { yylval.str = lib_stralloc(yytext); return OPCODE; }
-<ASM_MODE,INITIAL>\.[_a-zA-Z][_a-zA-Z0-9]*        { yylval.str = lib_stralloc(yytext); return LABEL; }
-<ASM_MODE,INITIAL>\.[_@\?:a-zA-Z][_@\?:a-zA-Z0-9]*        { yylval.str = lib_stralloc(yytext); return LABEL; }
+<ASM_MODE>[a-zA-Z]{2,4}                           { yylval.str = lib_strdup(yytext); return OPCODE; }
+<ASM_MODE,INITIAL,COND_MODE>\.[_@\?:a-zA-Z][_@\?:.a-zA-Z0-9]*        { yylval.str = lib_strdup(yytext); return LABEL; }
 
 <ASM_MODE>(a|A)/[ \t]*[:\n]           { if (!dont_match_reg_a) return REG_A;
                                         yylval.i = 0x0a; return H_NUMBER; }
@@ -434,25 +611,25 @@ if		{ BEGIN (COND_MODE); return IF; }
 
 <ASM_MODE>\(            { dont_match_reg_a = 1; return L_PAREN; }
 <ASM_MODE>\)            { dont_match_reg_a = 0; return R_PAREN; }
-<ASM_MODE>#             { dont_match_reg_a = 1; return ARG_IMMEDIATE; }
-<ASM_MODE>:             { dont_match_reg_a = 0; return INST_SEP; }
 <ASM_MODE>\[            { dont_match_reg_a = 1; return L_BRACKET; }
 <ASM_MODE>\]            { dont_match_reg_a = 0; return R_BRACKET; }
+<ASM_MODE>#             { dont_match_reg_a = 1; return ARG_IMMEDIATE; }
+<ASM_MODE>:             { dont_match_reg_a = 0; return INST_SEP; }
 <ASM_MODE>\<            { dont_match_reg_a = 1; return LESS_THAN; }
 <ASM_MODE>\+            { return PLUS; }
 <ASM_MODE>-             { return MINUS; }
 
 <ASM_MODE,INITIAL,COND_MODE,REG_ASGN,LABEL_ASGN>{
-    {HDIGIT}{8}             { yylval.str = lib_stralloc(yytext); return H_RANGE_GUESS; }
-    1[01]*                  { yylval.str = lib_stralloc(yytext); return B_NUMBER_GUESS; }
-    %[01]+                  { yylval.i = strtol(yytext+1, NULL, 2); return B_NUMBER; }
-    &[0-7]+                 { yylval.i = strtol(yytext+1, NULL, 8); return O_NUMBER; }
-    [0-7]*                  { yylval.str = lib_stralloc(yytext); return O_NUMBER_GUESS; }
-    \+[0-9]+                { yylval.i = strtol(yytext+1, NULL, 10); return D_NUMBER; }
-    [0-9]+                  { yylval.str = lib_stralloc(yytext); return D_NUMBER_GUESS; }
+    {HDIGIT}{8}             { yylval.str = lib_strdup(yytext); return H_RANGE_GUESS; }
+    1[01]*                  { yylval.str = lib_strdup(yytext); return B_NUMBER_GUESS; }
+    %[01]+                  { yylval.i = (int)strtol(yytext+1, NULL, 2); return B_NUMBER; }
+    &[0-7]+                 { yylval.i = (int)strtol(yytext+1, NULL, 8); return O_NUMBER; }
+    [0-7]*                  { yylval.str = lib_strdup(yytext); return O_NUMBER_GUESS; }
+    \+[0-9]+                { yylval.i = (int)strtol(yytext+1, NULL, 10); return D_NUMBER; }
+    [0-9]+                  { yylval.str = lib_strdup(yytext); return D_NUMBER_GUESS; }
     xx                      { yylval.i = 0x00; return MASK; }
-    \${HDIGIT}+             { yylval.i = strtol(yytext+1, NULL, 16); return H_NUMBER; }
-    {HDIGIT}+               { yylval.i = strtol(yytext, NULL, 16); return H_NUMBER; }
+    \${HDIGIT}+             { yylval.i = (int)strtol(yytext+1, NULL, 16); return H_NUMBER; }
+    {HDIGIT}+               { yylval.i = (int)strtol(yytext, NULL, 16); return H_NUMBER; }
 }
 
 <*>=	{ return EQUALS; }
@@ -476,8 +653,9 @@ void make_buffer(char *str)
     assert(my_state);
 }
 
+#ifndef YY_SKIP_YYWRAP
 static int yywrap(void)
 {
     return 1;
 }
-
+#endif

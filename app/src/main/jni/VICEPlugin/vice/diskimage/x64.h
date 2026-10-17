@@ -27,6 +27,10 @@
 #ifndef VICE_X64_H
 #define VICE_X64_H
 
+#include "vice.h"
+
+#ifdef HAVE_X64_IMAGE
+
 #define X64_HEADER_MAGIC_OFFSET     0       /* Length 4 bytes */
 #define X64_HEADER_MAGIC_1          'C'
 #define X64_HEADER_MAGIC_2          (0x15)
@@ -43,3 +47,4 @@
 
 #endif
 
+#endif

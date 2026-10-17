@@ -1,8 +1,11 @@
 /*
- * sounddummy.c - Implementation of the dummy sound device
+ * sounddummy.c - Implementation of the "dummy" sound device used by the
+ *                Modzifryer (Droidsound) plugin.
  *
- * Written by
- *  Teemu Rantanen <tvr@cs.hut.fi>
+ * This override replaces VICE's arch/shared/sounddrv/sounddummy.c.  Instead
+ * of throwing away the samples, it hands them to the PSID player buffer
+ * declared in overrides/maincpu.c, so that the JNI wrapper can copy them out
+ * via N_getSoundData().
  *
  * This file is part of VICE, the Versatile Commodore Emulator.
  * See README for copyright notice.
@@ -43,27 +46,27 @@ static int overflow_max = 0;
 static int channels;
 
 static int dummy_init(const char *param, int *speed, int *fragsize, int *fragnr, int *channels_arg) {
-	channels = *channels_arg;
-	return 0;
+    channels = *channels_arg;
+    return 0;
 }
 
-static int dummy_write(SWORD *pbuf, size_t nr)
+static int dummy_write(int16_t *pbuf, size_t nr)
 {
     /* Move data left over from previous overflow to start of new buffer. */
     int overflow_idx = 0;
     while (overflow_idx != overflow_max &&
-		psid_sound_idx != psid_sound_max) {
-	if (channels == 1) {
-		psid_sound_buf[psid_sound_idx ++] = overflow[overflow_idx];
-	}
-	psid_sound_buf[psid_sound_idx ++] = overflow[overflow_idx ++];
+            psid_sound_idx != psid_sound_max) {
+        if (channels == 1) {
+            psid_sound_buf[psid_sound_idx ++] = overflow[overflow_idx];
+        }
+        psid_sound_buf[psid_sound_idx ++] = overflow[overflow_idx ++];
     }
     /* This would happen if VICE generates larger buffer at once than
      * caller is requesting at any time. Therefore, every attempt to
      * enter the mainloop results in overflow. We let sound fail in
      * that case. */
     if (overflow_idx != overflow_max) {
-	return overflow_max - overflow_idx + nr;
+        return overflow_max - overflow_idx + nr;
     }
     /* All copied (or none). */
     overflow_max = 0;
@@ -71,23 +74,23 @@ static int dummy_write(SWORD *pbuf, size_t nr)
     /* Copy nr buffers to our buffer, or overflow if all doesn't fit */
     int pbuf_idx = 0;
     while (nr != 0 && psid_sound_idx != psid_sound_max) {
-	if (channels == 1) {
-		psid_sound_buf[psid_sound_idx ++] = pbuf[pbuf_idx];
-	}
-	psid_sound_buf[psid_sound_idx ++] = pbuf[pbuf_idx ++];
-	nr --;
+        if (channels == 1) {
+            psid_sound_buf[psid_sound_idx ++] = pbuf[pbuf_idx];
+        }
+        psid_sound_buf[psid_sound_idx ++] = pbuf[pbuf_idx ++];
+        nr --;
     }
     /* Copy to overflow. */
     while (nr != 0 && overflow_max != OVERFLOW_SIZE) {
-	overflow[overflow_max ++] = pbuf[pbuf_idx ++];
-	nr --;
+        overflow[overflow_max ++] = pbuf[pbuf_idx ++];
+        nr --;
     }
 
     /* Should be 0, or fail. */
     return nr;
 }
 
-static sound_device_t dummy_device =
+static const sound_device_t dummy_device =
 {
     "dummy",
     dummy_init,
@@ -98,7 +101,9 @@ static sound_device_t dummy_device =
     NULL,
     NULL,
     NULL,
-    0
+    0,
+    2,
+    false
 };
 
 int sound_init_dummy_device(void)

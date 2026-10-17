@@ -2,7 +2,7 @@
  * cbm2tpi.h - IEEE488 and keyboard interface for the CBM-II
  *
  * Written by
- *  Andre' Fachat <a.fachat@physik.tu-chemnitz.de>
+ *  Andre Fachat <a.fachat@physik.tu-chemnitz.de>
  *  Andreas Boose <viceteam@t-online.de>
  *
  * This file is part of VICE, the Versatile Commodore Emulator.
@@ -33,21 +33,22 @@
 struct machine_context_s;
 struct tpi_context_s;
 
-extern void tpi1_setup_context(struct machine_context_s *machine_context);
-extern void tpi1_init(struct tpi_context_s *tpi_context);
-extern void tpi1_store(WORD addr, BYTE byte);
-extern BYTE tpi1_read(WORD addr);
-extern BYTE tpi1_peek(WORD addr);
+void tpi1_setup_context(struct machine_context_s *machine_context);
+void tpi1_init(struct tpi_context_s *tpi_context);
+void tpi1_store(uint16_t addr, uint8_t byte);
+uint8_t tpi1_read(uint16_t addr);
+uint8_t tpi1_peek(uint16_t addr);
 
-extern void tpi1_set_tape_sense(int v);
+void tpi1_set_tape_sense(int v);
+void tpi1_set_tape_write_in(int v);
+void tpi1_set_tape_motor_in(int v);
 
-extern void tpi2_setup_context(struct machine_context_s *machine_context);
-extern void tpi2_init(struct tpi_context_s *tpi_context);
-extern void tpi2_store(WORD addr, BYTE byte);
-extern BYTE tpi2_read(WORD addr);
-extern BYTE tpi2_peek(WORD addr);
+void tpi2_setup_context(struct machine_context_s *machine_context);
+void tpi2_init(struct tpi_context_s *tpi_context);
+void tpi2_store(uint16_t addr, uint8_t byte);
+uint8_t tpi2_read(uint16_t addr);
+uint8_t tpi2_peek(uint16_t addr);
 
-extern void set_cbm2_model_port_mask(BYTE);
+void set_cbm2_model_port_mask(uint8_t);
 
 #endif
-

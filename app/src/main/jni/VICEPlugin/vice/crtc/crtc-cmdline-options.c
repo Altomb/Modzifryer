@@ -3,7 +3,7 @@
  *
  * Written by
  *  Ettore Perazzoli <ettore@comm2000.it>
- *  André Fachat <fachat@physik.tu-chemnitz.de>
+ *  Andre Fachat <fachat@physik.tu-chemnitz.de>
  *  Andreas Boose <viceteam@t-online.de>
  *
  * This file is part of VICE, the Versatile Commodore Emulator.
@@ -35,30 +35,24 @@
 #include "cmdline.h"
 #include "raster-cmdline-options.h"
 #include "resources.h"
-#include "translate.h"
 
 /* CRTC command-line options.  */
 static const cmdline_option_t cmdline_options[] =
 {
-    { "-CRTCstretchvertical", SET_RESOURCE, 0,
+    { "-CRTCstretchvertical", SET_RESOURCE, CMDLINE_ATTRIB_NONE,
       NULL, NULL, "CrtcStretchVertical", (resource_value_t)1,
-      USE_PARAM_STRING, USE_DESCRIPTION_ID,
-      IDCLS_UNUSED, IDCLS_ENABLE_STRETCH_VERTICAL,
-      NULL, NULL },
-    { "+CRTCstretchvertical", SET_RESOURCE, 0,
+      NULL, "Enable additional vertical stretching." },
+    { "+CRTCstretchvertical", SET_RESOURCE, CMDLINE_ATTRIB_NONE,
       NULL, NULL, "CrtcStretchVertical", (resource_value_t)0,
-      USE_PARAM_STRING, USE_DESCRIPTION_ID,
-      IDCLS_UNUSED, IDCLS_DISABLE_STRETCH_VERTICAL,
-      NULL, NULL },
+      NULL, "Disable additional vertical stretching." },
     CMDLINE_LIST_END
 };
 
 int crtc_cmdline_options_init(void)
 {
-    if (raster_cmdline_options_chip_init("Crtc", crtc.video_chip_cap) < 0) {
+    if (raster_cmdline_options_chip_init("CRTC", crtc.video_chip_cap) < 0) {
         return -1;
     }
 
     return cmdline_register_options(cmdline_options);
 }
-

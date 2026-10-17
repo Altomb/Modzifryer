@@ -2,7 +2,7 @@
  * vic20sound.c - Implementation of VIC20 sound code.
  *
  * Written by
- *  Rami Räsänen <raipsu@users.sf.net>
+ *  Rami Rasanen <raipsu@users.sf.net>
  *  Ville-Matias Heikkila <viznut@iki.fi>
  *
  * This file is part of VICE, the Versatile Commodore Emulator.
@@ -33,6 +33,7 @@
 
 #include "fastsid.h"
 #include "lib.h"
+#include "machine.h"
 #include "maincpu.h"
 #include "sid.h"
 #include "sidcart.h"
@@ -46,34 +47,52 @@
 
 /* Some prototypes are needed */
 static int vic_sound_machine_init(sound_t *psid, int speed, int cycles_per_sec);
-static int vic_sound_machine_calculate_samples(sound_t **psid, SWORD *pbuf, int nr, int sound_output_channels, int sound_chip_channels, int *delta_t);
-static void vic_sound_machine_store(sound_t *psid, WORD addr, BYTE value);
-static BYTE vic_sound_machine_read(sound_t *psid, WORD addr);
+static void vic_sound_machine_store(sound_t *psid, uint16_t addr, uint8_t value);
+
+#ifdef SOUND_SYSTEM_FLOAT
+static int vic_sound_machine_calculate_samples(sound_t **psid, float *pbuf, int nr, int sound_chip_channels, CLOCK *delta_t);
+#else
+static int vic_sound_machine_calculate_samples(sound_t **psid, int16_t *pbuf, int nr, int sound_output_channels, int sound_chip_channels, CLOCK *delta_t);
+#endif
 
 static int vic_sound_machine_cycle_based(void)
 {
-	return 1;
+    return 1;
 }
 
 static int vic_sound_machine_channels(void)
 {
-	return 1;
+    return 1;
 }
 
+#ifdef SOUND_SYSTEM_FLOAT
+/* stereo mixing placement of the VIC20 VIC sound */
+static sound_chip_mixing_spec_t vic_sound_mixing_spec[SOUND_CHIP_CHANNELS_MAX] = {
+    {
+        100, /* left channel volume % in case of stereo output, default output to both */
+        100  /* right channel volume % in case of stereo output, default output to both */
+    }
+};
+#endif
+
+/* VIC20 VIC sound device */
 static sound_chip_t vic_sound_chip = {
-    NULL, /* no open */
-    vic_sound_machine_init,
-    NULL, /* no close */
-    vic_sound_machine_calculate_samples,
-    vic_sound_machine_store,
-    vic_sound_machine_read,
-    vic_sound_reset,
-    vic_sound_machine_cycle_based,
-    vic_sound_machine_channels,
-    1 /* chip enabled */
+    NULL,                                /* NO sound chip open function */
+    vic_sound_machine_init,              /* sound chip init function */
+    NULL,                                /* NO sound chip close function */
+    vic_sound_machine_calculate_samples, /* sound chip calculate samples function */
+    vic_sound_machine_store,             /* sound chip store function */
+    NULL,                                /* NO sound chip read function */
+    vic_sound_reset,                     /* sound chip reset function */
+    vic_sound_machine_cycle_based,       /* sound chip 'is_cycle_based()' function, chip is NOT cycle based */
+    vic_sound_machine_channels,          /* sound chip 'get_amount_of_channels()' function, sound chip has 1 channel */
+#ifdef SOUND_SYSTEM_FLOAT
+    vic_sound_mixing_spec,               /* stereo mixing placement specs */
+#endif
+    1                                    /* sound chip enabled flag, chip is always enabled */
 };
 
-static WORD vic_sound_chip_offset = 0;
+static uint16_t vic_sound_chip_offset = 0;
 
 void vic_sound_chip_init(void)
 {
@@ -82,7 +101,9 @@ void vic_sound_chip_init(void)
 
 /* ---------------------------------------------------------------------*/
 
-static BYTE noisepattern[1024] = {
+/* TODO: remove when new vic_sound_clock is confirmed to work right */
+#if 0
+static uint8_t noisepattern[1024] = {
       7, 30, 30, 28, 28, 62, 60, 56,120,248,124, 30, 31,143,  7,  7,193,192,224,
     241,224,240,227,225,192,224,120,126, 60, 56,224,225,195,195,135,199,  7, 30,
      28, 31, 14, 14, 30, 14, 15, 15,195,195,241,225,227,193,227,195,195,252, 60,
@@ -138,6 +159,7 @@ static BYTE noisepattern[1024] = {
      15, 14, 28,112,225,224,113,193,131,131,135, 15, 30, 24,120,120,124, 62, 28,
      56,240,225,224,120,112, 56, 60, 62, 30, 60, 30, 28,112, 60, 56, 63
 };
+#endif
 
 static float voltagefunction[] = {
         0.00f,   148.28f,   296.55f,   735.97f,   914.88f,  1126.89f,  1321.86f,  1503.07f,  1603.50f,
@@ -191,16 +213,58 @@ static float voltagefunction[] = {
     29465.88f, 29474.32f, 29482.76f, 29491.20f
 };
 
-static BYTE vic20_sound_data[16];
+static uint8_t vic20_sound_data[16];
 
 /* dummy function for now */
-int machine_sid2_check_range(unsigned int sid2_adr)
+int machine_sid2_check_range(unsigned int sid_adr)
 {
     return 0;
 }
 
 /* dummy function for now */
-int machine_sid3_check_range(unsigned int sid3_adr)
+int machine_sid3_check_range(unsigned int sid_adr)
+{
+    return 0;
+}
+
+/* dummy function for now */
+int machine_sid4_check_range(unsigned int sid_adr)
+{
+    return 0;
+}
+
+/* dummy function for now */
+int machine_sid5_check_range(unsigned int sid_adr)
+{
+    return 0;
+}
+
+/* dummy function for now */
+int machine_sid6_check_range(unsigned int sid_adr)
+{
+    return 0;
+}
+
+/* dummy function for now */
+int machine_sid7_check_range(unsigned int sid_adr)
+{
+    return 0;
+}
+
+/* dummy function for now */
+int machine_sid8_check_range(unsigned int sid_adr)
+{
+    return 0;
+}
+
+/* dummy function for now */
+int machine_sid9_check_range(unsigned int sid_adr)
+{
+    return 0;
+}
+
+/* dummy function for now */
+int machine_sid10_check_range(unsigned int sid_adr)
 {
     return 0;
 }
@@ -209,8 +273,7 @@ void machine_sid2_enable(int val)
 {
 }
 
-struct sound_vic20_s
-{
+struct sound_vic20_s {
     unsigned char div;
     struct {
         unsigned char out;
@@ -238,14 +301,14 @@ typedef struct sound_vic20_s sound_vic20_t;
 
 static struct sound_vic20_s snd;
 
-void vic_sound_clock(int cycles);
+void vic_sound_clock(CLOCK cycles);
 
-static int vic_sound_machine_calculate_samples(sound_t **psid, SWORD *pbuf, int nr, int soc, int scc, int *delta_t)
+#ifdef SOUND_SYSTEM_FLOAT
+/* FIXME */
+static int vic_sound_machine_calculate_samples(sound_t **psid, float *pbuf, int nr, int scc, CLOCK *delta_t)
 {
     int s = 0;
-    int i;
     float o;
-    SWORD vicbuf;
     int samples_to_do;
 
     while (s < nr && *delta_t >= snd.cycles_per_sample - snd.leftover_cycles) {
@@ -253,18 +316,48 @@ static int vic_sound_machine_calculate_samples(sound_t **psid, SWORD *pbuf, int 
         snd.leftover_cycles += samples_to_do - snd.cycles_per_sample;
         vic_sound_clock(samples_to_do);
 
-        o = voltagefunction[(((snd.accum * 7) / snd.accum_cycles) + 1) * snd.volume];
-        o = snd.lowpassbuf * snd.lowpassbeta + o * (1.0f - snd.lowpassbeta); /* 0.75f + o*0.25f; */
-        snd.lowpassbuf = o;
-        o -= snd.highpassbuf;
-        snd.highpassbuf += o * snd.highpassbeta;
+        o = (snd.lowpassbuf - snd.highpassbuf) / 32767.0;
+        snd.highpassbuf += snd.highpassbeta * (snd.lowpassbuf - snd.highpassbuf);
+        snd.lowpassbuf += snd.lowpassbeta * (voltagefunction[(((snd.accum * 7) / snd.accum_cycles) + 1) * snd.volume] - snd.lowpassbuf);
+
+        pbuf[s] = o;
+
+        s++;
+        snd.accum = 0;
+        snd.accum_cycles = 0;
+        *delta_t -= samples_to_do;
+    }
+    if (*delta_t > 0) {
+        snd.leftover_cycles += *delta_t;
+        vic_sound_clock(*delta_t);
+        *delta_t = 0;
+    }
+    return s;
+}
+#else
+static int vic_sound_machine_calculate_samples(sound_t **psid, int16_t *pbuf, int nr, int soc, int scc, CLOCK *delta_t)
+{
+    int s = 0;
+    int i;
+    float o;
+    int16_t vicbuf;
+    int samples_to_do;
+
+    while (s < nr && *delta_t >= snd.cycles_per_sample - snd.leftover_cycles) {
+        samples_to_do = (int)(snd.cycles_per_sample - snd.leftover_cycles);
+        snd.leftover_cycles += samples_to_do - snd.cycles_per_sample;
+        vic_sound_clock(samples_to_do);
+
+        o = snd.lowpassbuf - snd.highpassbuf;
+        snd.highpassbuf += snd.highpassbeta * (snd.lowpassbuf - snd.highpassbuf);
+        snd.lowpassbuf += snd.lowpassbeta * (voltagefunction[(((snd.accum * 7) / snd.accum_cycles) + 1) * snd.volume] - snd.lowpassbuf);
 
         if (o < -32768) {
             vicbuf = -32768;
         } else if (o > 32767) {
             vicbuf = 32767;
         } else {
-            vicbuf = (SWORD)o;
+            vicbuf = (int16_t)o;
         }
 
         for (i = 0; i < soc; i++) {
@@ -282,35 +375,39 @@ static int vic_sound_machine_calculate_samples(sound_t **psid, SWORD *pbuf, int 
     }
     return s;
 }
+#endif
 
 void vic_sound_reset(sound_t *psid, CLOCK cpu_clk)
 {
-    WORD i;
+    uint16_t i;
 
     for (i = 10; i < 15; i++) {
         vic_sound_store(i, 0);
     }
 }
 
-void vic_sound_store(WORD addr, BYTE value)
+void vic_sound_store(uint16_t addr, uint8_t value)
 {
     addr &= 0x0f;
     vic20_sound_data[addr] = value;
 
-    sound_store((WORD)(vic_sound_chip_offset | addr), value, 0);
+    sound_store((uint16_t)(vic_sound_chip_offset | addr), value, 0);
 }
 
+static uint16_t noise_LFSR = 0x0000;
+static uint8_t noise_LFSR0_old = 0;
 
-void vic_sound_clock(int cycles)
+void vic_sound_clock(CLOCK cycles)
 {
-    int i,j;
+    CLOCK i;
+    int j, enabled;
 
     if (cycles <= 0) {
         return;
     }
 
-    for (j = 0; j < 3; j++) {
-        int chspeed="\4\3\2"[j];
+    for (j = 0; j < 4; j++) {
+        int chspeed = "\4\3\2\1"[j];
 
         if (snd.ch[j].ctr > cycles) {
             snd.accum += snd.ch[j].out * cycles;
@@ -319,14 +416,68 @@ void vic_sound_clock(int cycles)
             for (i = cycles; i; i--) {
                 snd.ch[j].ctr--;
                 if (snd.ch[j].ctr <= 0) {
-                    int a = (~snd.ch[j].reg)&127;
-                    a = a?a:128;
+                    int a = (~snd.ch[j].reg) & 127;
+                    int edge_trigger;
+                    a = a ? a : 128;
                     snd.ch[j].ctr += a << chspeed;
-                    if (snd.ch[j].reg&128) {
-                        unsigned char shift = snd.ch[j].shift;
-                        shift = ((shift<<1) | ((shift&128)>>7))^1;
+                    enabled = (snd.ch[j].reg & 128) >> 7;
+                    edge_trigger = (noise_LFSR & 1) & !noise_LFSR0_old;
+
+                    if((j != 3) || ((j == 3) && edge_trigger)) {
+                        uint8_t shift = snd.ch[j].shift;
+                        shift = ((shift << 1) | (((((shift & 128) >> 7)) ^ 1) & enabled));
                         snd.ch[j].shift = shift;
-                        snd.ch[j].out = shift&1;
+                    }
+                    if(j == 3) {
+                        int bit3  = (noise_LFSR >> 3) & 1;
+                        int bit12 = (noise_LFSR >> 12) & 1;
+                        int bit14 = (noise_LFSR >> 14) & 1;
+                        int bit15 = (noise_LFSR >> 15) & 1;
+                        int gate1 = bit3 ^ bit12;
+                        int gate2 = bit14 ^ bit15;
+                        int gate3 = (gate1 ^ gate2) ^ 1;
+                        int gate4 = (gate3 & enabled) ^ 1;
+                        noise_LFSR0_old = noise_LFSR & 1;
+                        noise_LFSR = (noise_LFSR << 1) | gate4;
+                    }
+                    snd.ch[j].out = snd.ch[j].shift & (j == 3 ? enabled : 1);
+                }
+                snd.accum += snd.ch[j].out; /* FIXME: doesn't take DC offset into account */
+            }
+        }
+    }
+
+    snd.accum_cycles += cycles;
+}
+
+/* TODO: remove when the code above is confirmed to work right */
+#if 0
+void vic_sound_clock(int cycles)
+{
+    int i, j;
+
+    if (cycles <= 0) {
+        return;
+    }
+
+    for (j = 0; j < 3; j++) {
+        int chspeed = "\4\3\2"[j];
+
+        if (snd.ch[j].ctr > cycles) {
+            snd.accum += snd.ch[j].out * cycles;
+            snd.ch[j].ctr -= cycles;
+        } else {
+            for (i = cycles; i; i--) {
+                snd.ch[j].ctr--;
+                if (snd.ch[j].ctr <= 0) {
+                    int a = (~snd.ch[j].reg) & 127;
+                    a = a ? a : 128;
+                    snd.ch[j].ctr += a << chspeed;
+                    if (snd.ch[j].reg & 128) {
+                        unsigned char shift = snd.ch[j].shift;
+                        shift = ((shift << 1) | ((shift & 128) >> 7)) ^ 1;
+                        snd.ch[j].shift = shift;
+                        snd.ch[j].out = shift & 1;
                     } else {
                         snd.ch[j].shift <<= 1;
                         snd.ch[j].out = 0;
@@ -344,12 +495,11 @@ void vic_sound_clock(int cycles)
         for (i = cycles; i; i--) {
             snd.ch[3].ctr--;
             if (snd.ch[3].ctr <= 0) {
-                int a = (~snd.ch[3].reg)&127;
-                a = a?a:128;
+                int a = (~snd.ch[3].reg) & 127;
+                a = a ? a : 128;
                 snd.ch[3].ctr += a << 4;
-                if (snd.ch[3].reg&128) {
-                    snd.ch[3].out =
-                        (noisepattern[(snd.noisectr>>3)&1023]>>(snd.noisectr&7))&1;
+                if (snd.ch[3].reg & 128) {
+                    snd.ch[3].out = (noisepattern[(snd.noisectr >> 3) & 1023] >> (snd.noisectr & 7)) & 1;
                 } else {
                     snd.ch[3].out = 0;
                 }
@@ -361,57 +511,74 @@ void vic_sound_clock(int cycles)
 
     snd.accum_cycles += cycles;
 }
+#endif
 
-static void vic_sound_machine_store(sound_t *psid, WORD addr, BYTE value)
+static void vic_sound_machine_store(sound_t *psid, uint16_t addr, uint8_t value)
 {
     switch (addr) {
-      case 0xA:
-        snd.ch[0].reg = value;
-        break;
-      case 0xB:
-        snd.ch[1].reg = value;
-        break;
-      case 0xC:
-        snd.ch[2].reg = value;
-        break;
-      case 0xD:
-        snd.ch[3].reg = value;
-        break;
-      case 0xE:
-        snd.volume = value & 0x0f;
-        break;
+        case 0xA:
+            snd.ch[0].reg = value;
+            break;
+        case 0xB:
+            snd.ch[1].reg = value;
+            break;
+        case 0xC:
+            snd.ch[2].reg = value;
+            break;
+        case 0xD:
+            snd.ch[3].reg = value;
+            break;
+        case 0xE:
+            snd.volume = value & 0x0f;
+            break;
     }
 }
 
 static int vic_sound_machine_init(sound_t *psid, int speed, int cycles_per_sec)
 {
-    DWORD i;
+    uint32_t i;
+    float dt;
 
     memset((unsigned char*)&snd, 0, sizeof(snd));
 
     snd.cycles_per_sample = (float)cycles_per_sec / speed;
     snd.leftover_cycles = 0.0f;
 
+    snd.lowpassbuf = 0.0f;
+    snd.highpassbuf = 0.0f;
+
     snd.speed = speed;
 
-    snd.lowpassbeta =  1.0f - snd.cycles_per_sample / ( snd.cycles_per_sample + 62.0f );
-    snd.highpassbeta = 1.0f - snd.cycles_per_sample / ( snd.cycles_per_sample + 0.04f );
+    dt = 1.f / speed;
+
+    /*
+     Audio output stage
+
+                                5V
+     -----+
+     audio|      1k             |
+          +---+---R---+--------(K)          +-----
+      out |   |       |         |           |audio
+     -----+   C .01   C .1      |    1 uF   |
+              | uF    |  uF     +-----C-----+ 1K
+                                |           |
+             GND     GND        R 470       | amp
+                                |           +-----
+
+                               GND
+
+    */
+
+    /* Low-pass:  R = 1 kOhm, C = 100 nF; RC = 1e3*1e-7 = 1e-4 (1591 Hz) */
+    snd.lowpassbeta  = dt / ( dt + 1e-4f );
+    /* High-pass: R = 1 kOhm, C =   1 uF; RC = 1e3*1e-6 = 1e-3 ( 159 Hz) */
+    snd.highpassbeta = dt / ( dt + 1e-3f );
 
     for (i = 0; i < 16; i++) {
-        vic_sound_machine_store(psid, (WORD)i, vic20_sound_data[i]);
+        vic_sound_machine_store(psid, (uint16_t)i, vic20_sound_data[i]);
     }
 
     return 1;
-}
-
-static BYTE vic_sound_machine_read(sound_t *psid, WORD addr)
-{
-    return 0;
-}
-
-void sound_machine_prevent_clk_overflow(sound_t *psid, CLOCK sub)
-{
-    sid_sound_machine_prevent_clk_overflow(psid, sub);
 }
 
 char *sound_machine_dump_state(sound_t *psid)
