@@ -110,6 +110,16 @@ public class SongDatabase implements Runnable {
 	public boolean isReady() {
 		return  (mHandler != null);
 	}
+
+	/**
+	 * True once the SQLite handle has been opened, i.e. queries can actually
+	 * run. {@link #isReady()} only reports that the database thread is up, so
+	 * callers that must query immediately (the Android Auto browser service)
+	 * wait for this too.
+	 */
+	public boolean isOpen() {
+		return isReady;
+	}
 	
 	public SongDatabase(Context ctx) {		
 		context = ctx;

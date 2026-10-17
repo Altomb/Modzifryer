@@ -179,6 +179,7 @@ dependencies {
     implementation 'androidx.viewpager:viewpager:1.0.0'
     implementation 'androidx.appcompat:appcompat:1.7.0'
     implementation 'androidx.preference:preference:1.2.1'
+    implementation 'androidx.media:media:1.7.1'
 
     implementation files('libs/htmlcleaner-2.2.jar')
     implementation files('libs/jmte-2.2.jar')

@@ -67,6 +67,7 @@ import com.ssb.droidsound.ThemeManager.Property;
 import com.ssb.droidsound.database.CSDBParser;
 import com.ssb.droidsound.database.FileSystemSource;
 import com.ssb.droidsound.database.MediaSource;
+import com.ssb.droidsound.database.SongDatabaseProvider;
 import com.ssb.droidsound.database.SongDatabase;
 import com.ssb.droidsound.playlistview.FileInfo;
 import com.ssb.droidsound.playlistview.PlayListView;
@@ -122,7 +123,6 @@ public class PlayerActivity extends Activity  {
 	public static final int SAME_VIEW = 5;
 
 	static SongDatabase songDatabase = null;
-	private static Thread dbThread = null;
 
 	private PlayerServiceConnection player;
 
@@ -1018,32 +1018,9 @@ public class PlayerActivity extends Activity  {
 	
 	private void setupSongDatabase() {
 		Log.d(TAG, "############ CREATING static SongDatabase object ##############");
-
-		songDatabase = new SongDatabase(getApplicationContext());
-
-		CSDBParser csdb = new CSDBParser();
-		songDatabase.registerDataSource(CSDBParser.DUMP_NAME, csdb);
-		songDatabase.registerDataSource(CSDBParser.DUMP_NAME + ".ZIP", csdb);
-
-		MediaSource ms = new MediaSource(this);
-		songDatabase.registerDataSource(MediaSource.NAME, ms);
-		
-		FileSystemSource.BasePath = Environment.getExternalStorageDirectory().getPath();
-		
-		FileSystemSource fss = new FileSystemSource();
-		songDatabase.registerDataSource(FileSystemSource.NAME, fss);
-
-		dbThread = new Thread(songDatabase);
-		dbThread.start();
-
-		while(!songDatabase.isReady()) {
-			try {
-				Thread.sleep(100);
-			} catch (InterruptedException e1) {
-				e1.printStackTrace();
-			}
-		}
-
+		// Shared with the Android Auto MediaBrowserService so both browse the
+		// same SQLite database and only one scan ever runs.
+		songDatabase = SongDatabaseProvider.get(this);
 		Log.d(TAG, "CREATED");
 	}
 	
@@ -1384,7 +1361,7 @@ public class PlayerActivity extends Activity  {
 		// break;
 		case KeyEvent.KEYCODE_Q:
 			player.stop();
-			songDatabase.quit();
+			SongDatabaseProvider.quit();
 			songDatabase = null;
 			finish();
 			break;
@@ -1773,7 +1750,7 @@ public class PlayerActivity extends Activity  {
 		} else if(choice == R.id.quit) {
 			player.stop();
 			NativeZipFile.closeCached();
-			songDatabase.quit();
+			SongDatabaseProvider.quit();
 			songDatabase = null;
 			finish();
 		} else if(choice == R.id.new_) {

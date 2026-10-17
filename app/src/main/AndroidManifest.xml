@@ -137,6 +137,13 @@
 		</receiver>
 		
 		<service
+			android:name="com.ssb.droidsound.service.MediaBrowserService"
+			android:exported="true">
+			<intent-filter>
+				<action android:name="android.media.browse.MediaBrowserService" />
+			</intent-filter>
+		</service>
+		<service
 			android:name="com.ssb.droidsound.service.PlayerService"
 			android:exported="false"
 			android:foregroundServiceType="mediaPlayback" />
@@ -153,6 +160,10 @@
 		<!-- provider android:name="com.ssb.droidsound.provider.SongProvider" android:authorities="com.ssb.droidsound.provider" / -->
 
 		<meta-data
+			android:name="com.google.android.gms.car.application"
+			android:resource="@xml/automotive_app_desc" />
+
+	<meta-data
 			android:name="android.app.default_searchable"
 			android:value="com.ssb.droidsound.PlayerActivity" />
 	</application>

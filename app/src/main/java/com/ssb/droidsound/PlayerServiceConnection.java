@@ -84,6 +84,7 @@ public class PlayerServiceConnection implements ServiceConnection {
 		}*/
 	};
 	private boolean bound;
+	private boolean bindRegistered;
 	private Handler handler;
 	
 	@Override
@@ -123,12 +124,43 @@ public class PlayerServiceConnection implements ServiceConnection {
 	}
 
 	public void bindService(Context ctx, Handler h) {
+		bindService(ctx, h, true);
+	}
+
+	/**
+	 * Binds to the player service.
+	 *
+	 * @param startService also {@code startService()} it first. Pass {@code false}
+	 *        when binding from a background component (e.g. the Android Auto
+	 *        {@code MediaBrowserService}), where starting a service from the
+	 *        background is restricted on API 26+; the service is still created
+	 *        because of {@link Context#BIND_AUTO_CREATE}.
+	 */
+	public void bindService(Context ctx, Handler h, boolean startService) {
 		handler = h;
 		Log.d(TAG, "binding");
 		Intent i = new Intent(ctx, PlayerService.class);
 		bound = true;
-		ctx.startService(i);
-		ctx.bindService(i, this, Context.BIND_AUTO_CREATE);        		
+		if (startService) {
+			try {
+				ctx.startService(i);
+			} catch (RuntimeException e) {
+				// Background start restrictions (API 26+). The bind below still
+				// creates the service.
+				Log.d(TAG, "startService refused: %s", e.toString());
+			}
+		}
+		try {
+			bindRegistered = ctx.bindService(i, this, Context.BIND_AUTO_CREATE);
+		} catch (RuntimeException e) {
+			bindRegistered = false;
+			Log.d(TAG, "bindService refused: %s", e.toString());
+		}
+	}
+
+	/** True once the remote player service is connected. */
+	public boolean isConnected() {
+		return mService != null;
 	}
 
 	public void unbindService(Context ctx) {
@@ -142,7 +174,14 @@ public class PlayerServiceConnection implements ServiceConnection {
 				//throw new RuntimeException(e);
 			}
 		}
-		ctx.unbindService(this);
+		if(bindRegistered) {
+			bindRegistered = false;
+			try {
+				ctx.unbindService(this);
+			} catch (IllegalArgumentException e) {
+				Log.d(TAG, "unbindService: not registered");
+			}
+		}
 	}
 	/*
 	public int getInt(int what) {
