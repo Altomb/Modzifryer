@@ -6,6 +6,10 @@
 		<item android:id="@+id/del_file" android:title="@string/del_file" />
 		<item android:id="@+id/make_wav" android:title="@string/make_wav" />
 	</group>
+	<!-- Only shown for web radio entries (.m3u/.pls) in the Network directory -->
+	<group android:id="@+id/on_webradio">
+		<item android:id="@+id/edit_radio" android:title="@string/edit_radio" />
+	</group>
 	<group android:id="@+id/on_dir">
 		<item android:id="@+id/del_dir" android:title="@string/del_dir" />
 		<item android:id="@+id/scan_dir" android:title="@string/scan_dir" />

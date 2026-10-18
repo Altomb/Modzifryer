@@ -1,8 +1,10 @@
 package com.ssb.droidsound;
 
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.io.InputStream;
@@ -35,10 +37,12 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Message;
+import android.provider.DocumentsContract;
 import android.provider.Settings;
 import androidx.preference.PreferenceManager;
 import android.speech.tts.TextToSpeech;
 import androidx.core.content.ContextCompat;
+import androidx.core.content.FileProvider;
 import androidx.viewpager.widget.ViewPager;
 import android.text.InputType;
 import android.util.SparseArray;
@@ -59,6 +63,7 @@ import android.widget.AdapterView.OnItemClickListener;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.ImageButton;
+import android.widget.LinearLayout;
 import android.widget.ListView;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -2049,10 +2054,13 @@ public class PlayerActivity extends Activity  {
 			type = cursor.getInt(t);
 		}
 
-		//File file = currentPlaylistView.getFile(info.position);
+		File file = currentPlaylistView.getFile(info.position);
 
 		MenuInflater inflater = getMenuInflater();
 		inflater.inflate(R.menu.songmenu, menu);
+
+		// Only shown for web radio entries in the Network directory
+		menu.setGroupVisible(R.id.on_webradio, false);
 
 		MenuItem aitem = menu.findItem(R.id.add_to_plist);
 		Playlist pl = songDatabase.getActivePlaylist();
@@ -2079,6 +2087,7 @@ public class PlayerActivity extends Activity  {
 			menu.setGroupVisible(R.id.on_file, true);
 			menu.setGroupVisible(R.id.on_dir, false);
 			menu.setGroupVisible(R.id.on_plist, false);
+			menu.setGroupVisible(R.id.on_webradio, isWebRadioFile(file));
 			break;
 
 		case SongDatabase.TYPE_DIR:
@@ -2124,12 +2133,19 @@ public class PlayerActivity extends Activity  {
 
 
 		if(item.getItemId() == R.id.go_dir) {
-			setDirectory(state.operationSong.getParent(), playListView);
-			currentPlaylistView.setScrollPosition(file.getPath());
-			// flipper.setDisplayedChild(0);
-			updateFileView();
-			if(flipper != null)
-				flipper.flipTo(FILE_VIEW);
+			// Hand the item's location to the system file browser. Falls back
+			// to in-app navigation when that is not possible (e.g. the item
+			// lives on an http source or no file browser accepts the folder).
+			if(!openInFileBrowser(new File(state.operationSong.getParent()))) {
+				setDirectory(state.operationSong.getParent(), playListView);
+				currentPlaylistView.setScrollPosition(file.getPath());
+				// flipper.setDisplayedChild(0);
+				updateFileView();
+				if(flipper != null)
+					flipper.flipTo(FILE_VIEW);
+			}
+		} else if(item.getItemId() == R.id.edit_radio) {
+			showEditWebRadioDialog(file);
 		} else if(item.getItemId() == R.id.set_plist) {
 			songDatabase.setActivePlaylist(file);
 		} else if(item.getItemId() == R.id.add_to_plist) {
@@ -2220,6 +2236,194 @@ public class PlayerActivity extends Activity  {
 			return super.onContextItemSelected(item);
 		}
 		return true;
+	}
+
+	/**
+	 * Opens the given directory in the system's default file browser, using
+	 * the app's FileProvider so the other app may read the folder. Returns
+	 * false when the folder cannot be exposed or no app understands the
+	 * intent, so the caller can fall back to in-app navigation.
+	 */
+	private boolean openInFileBrowser(File dir) {
+		if(dir == null || !dir.isDirectory()) {
+			return false;
+		}
+		try {
+			Uri uri = FileProvider.getUriForFile(this, getPackageName() + ".fileprovider", dir);
+			Intent intent = new Intent(Intent.ACTION_VIEW);
+			intent.setDataAndType(uri, DocumentsContract.Document.MIME_TYPE_DIR);
+			// API 26+ file browsers open directly at the folder with this extra.
+			intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, uri);
+			intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+			startActivity(intent);
+			return true;
+		} catch(Exception e) {
+			// No file browser handles content directories, or the path is
+			// not covered by the FileProvider.
+			Log.d(TAG, "Could not open '%s' in file browser: %s",
+					dir.getPath(), e.toString());
+			return false;
+		}
+	}
+
+	/** True for a web radio entry (.m3u/.pls) inside the Network directory. */
+	private boolean isWebRadioFile(File f) {
+		if(f == null || modsDir == null || !f.isFile()) {
+			return false;
+		}
+		File networkDir = new File(modsDir, "Network");
+		File parent = f.getParentFile();
+		if(parent == null || !parent.getAbsolutePath().equals(networkDir.getAbsolutePath())) {
+			return false;
+		}
+		String name = f.getName().toLowerCase(Locale.ENGLISH);
+		return name.endsWith(".m3u") || name.endsWith(".pls");
+	}
+
+	/**
+	 * Dialog for a web radio entry: change the station name (the file name)
+	 * and the stream url kept inside the .m3u/.pls file.
+	 */
+	private void showEditWebRadioDialog(final File file) {
+		final String ext = file.getName().substring(file.getName().lastIndexOf('.'));
+		String name = file.getName().substring(0, file.getName().length() - ext.length());
+		String url = readRadioUrl(file);
+
+		int pad = (int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 8,
+				getResources().getDisplayMetrics());
+
+		LinearLayout layout = new LinearLayout(this);
+		layout.setOrientation(LinearLayout.VERTICAL);
+		layout.setPadding(pad, pad / 2, pad, 0);
+
+		final EditText nameInput = new EditText(this);
+		nameInput.setInputType(InputType.TYPE_CLASS_TEXT);
+		nameInput.setHint(R.string.radio_name);
+		nameInput.setText(name);
+		layout.addView(nameInput, new LinearLayout.LayoutParams(
+				ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+		final EditText urlInput = new EditText(this);
+		urlInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+		urlInput.setHint(R.string.radio_url);
+		urlInput.setText(url);
+		urlInput.setSelection(url.length());
+		layout.addView(urlInput, new LinearLayout.LayoutParams(
+				ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+		new AlertDialog.Builder(this)
+			.setTitle(R.string.edit_radio_title)
+			.setView(layout)
+			.setPositiveButton(android.R.string.ok, new DialogInterface.OnClickListener() {
+				@Override
+				public void onClick(DialogInterface dialog, int which) {
+					saveWebRadio(file, ext, nameInput.getText().toString(), urlInput.getText().toString());
+				}
+			})
+			.setNegativeButton(android.R.string.cancel, new DialogInterface.OnClickListener() {
+				@Override
+				public void onClick(DialogInterface dialog, int which) {
+					dialog.cancel();
+				}
+			})
+			.show();
+	}
+
+	/** Pulls the first stream url out of a .m3u or .pls file. */
+	private String readRadioUrl(File file) {
+		BufferedReader reader = null;
+		try {
+			reader = new BufferedReader(new FileReader(file));
+			String line;
+			while((line = reader.readLine()) != null) {
+				line = line.trim();
+				if(line.length() == 0 || line.charAt(0) == '#' || line.charAt(0) == '[') {
+					continue;
+				}
+				// Plain url line, as in an .m3u
+				if(line.toLowerCase(Locale.ENGLISH).startsWith("http")) {
+					return line;
+				}
+				// File1=url, as in a .pls
+				int eq = line.indexOf('=');
+				if(eq > 0) {
+					if(line.substring(0, eq).toLowerCase(Locale.ENGLISH).startsWith("file")) {
+						return line.substring(eq + 1).trim();
+					}
+					continue;
+				}
+				return line;
+			}
+		} catch(IOException e) {
+			e.printStackTrace();
+		} finally {
+			if(reader != null) {
+				try {
+					reader.close();
+				} catch(IOException e) {
+				}
+			}
+		}
+		return "";
+	}
+
+	private void saveWebRadio(File file, String ext, String name, String url) {
+		name = name.trim().replaceAll("[/\\\\:*?\"<>|]", "_");
+		url = url.trim();
+
+		if(name.length() == 0) {
+			Toast.makeText(this, R.string.radio_name_empty, Toast.LENGTH_LONG).show();
+			return;
+		}
+		if(url.length() == 0) {
+			Toast.makeText(this, R.string.radio_url_empty, Toast.LENGTH_LONG).show();
+			return;
+		}
+		if(!url.contains("://")) {
+			url = "http://" + url;
+		}
+
+		File dir = file.getParentFile();
+		File newFile = new File(dir, name + ext);
+
+		if(!newFile.equals(file) && newFile.exists()) {
+			Toast.makeText(this, R.string.radio_exists, Toast.LENGTH_LONG).show();
+			return;
+		}
+
+		String content;
+		if(ext.equalsIgnoreCase(".pls")) {
+			content = "[playlist]\n"
+					+ "NumberOfEntries=1\n"
+					+ "File1=" + url + "\n"
+					+ "Title1=" + name + "\n"
+					+ "Length1=-1\n"
+					+ "Version=2\n";
+		} else {
+			content = "#EXTM3U\n"
+					+ "#EXTINF:-1," + name + "\n"
+					+ url + "\n";
+		}
+
+		if(!newFile.equals(file) && !file.renameTo(newFile)) {
+			Toast.makeText(this, R.string.radio_save_failed, Toast.LENGTH_LONG).show();
+			return;
+		}
+
+		try {
+			FileWriter fw = new FileWriter(newFile);
+			fw.write(content);
+			fw.close();
+		} catch(IOException e) {
+			Log.d(TAG, "Could not write %s: %s", newFile.getPath(), e.toString());
+			Toast.makeText(this, R.string.radio_save_failed, Toast.LENGTH_LONG).show();
+			return;
+		}
+
+		// Drop the old database row (if the entry was renamed) and rescan the
+		// directory; the resulting SCAN_DONE broadcast refreshes the list.
+		songDatabase.deleteFile(file);
+		songDatabase.scanDir(dir.getPath());
 	}
 
 	private void runConfirmable(int textid, Runnable runnable) {

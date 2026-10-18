@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Roots exposed through the FileProvider so "Go to directory" can hand a
+    folder to the system file browser. Covers every location Storage may put
+    the MODS tree: shared external root (pre-scoped storage), app-specific
+    external files and internal files.
+-->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+	<external-path name="external_root" path="." />
+	<external-files-path name="app_external_files" path="." />
+	<files-path name="app_internal_files" path="." />
+</paths>

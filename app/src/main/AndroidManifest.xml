@@ -159,6 +159,20 @@
 
 		<!-- provider android:name="com.ssb.droidsound.provider.SongProvider" android:authorities="com.ssb.droidsound.provider" / -->
 
+	<!--
+	    Exposes the music folders to the system file browser when the user
+	    picks "Go to directory" on an item. See res/xml/file_provider_paths.xml.
+	-->
+	<provider
+		android:name="androidx.core.content.FileProvider"
+		android:authorities="com.ssb.droidsound.fileprovider"
+		android:exported="false"
+		android:grantUriPermissions="true" >
+		<meta-data
+			android:name="android.support.FILE_PROVIDER_PATHS"
+			android:resource="@xml/file_provider_paths" />
+	</provider>
+
 		<meta-data
 			android:name="com.google.android.gms.car.application"
 			android:resource="@xml/automotive_app_desc" />

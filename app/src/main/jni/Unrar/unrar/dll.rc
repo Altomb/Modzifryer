@@ -2,8 +2,8 @@
 #include <commctrl.h>
 
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION 3, 92, 100, 40
-PRODUCTVERSION 3, 92, 100, 40
+FILEVERSION 7, 30, 1, 2082
+PRODUCTVERSION 7, 30, 1, 2082
 FILEOS VOS__WINDOWS32
 FILETYPE VFT_APP
 {
@@ -14,13 +14,15 @@ FILETYPE VFT_APP
       VALUE "CompanyName", "Alexander Roshal\0"
       VALUE "ProductName", "RAR decompression library\0"
       VALUE "FileDescription", "RAR decompression library\0"
-      VALUE "FileVersion", "3.92.0\0"
+      VALUE "FileVersion", "7.30.1\0"
+      VALUE "ProductVersion", "7.30.1\0"
+      VALUE "LegalCopyright", "Copyright © Alexander Roshal 1993-2026\0"
       VALUE "OriginalFilename", "Unrar.dll\0"
     }
   }
   BLOCK "VarFileInfo"
   {
-    VALUE "Translation"
+    VALUE "Translation", 0x0409, 0x04E4
   }
 }
 
